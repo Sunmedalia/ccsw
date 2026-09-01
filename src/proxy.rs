@@ -315,7 +315,7 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
         if !status.success() {
             bail!("systemctl could not install {}", path.display());
         }
-        return Ok(path);
+        Ok(path)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     bail!("proxy service installation is supported on macOS and Linux");
@@ -355,6 +355,7 @@ pub fn uninstall() -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+#[cfg(target_os = "macos")]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
