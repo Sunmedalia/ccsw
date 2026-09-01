@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     fs::OpenOptions,
     io::Write,
@@ -10,7 +11,11 @@ use fs2::FileExt;
 use serde_json::{Map, Value, json};
 use tempfile::NamedTempFile;
 
-use crate::config::{Credential, ModelEntry, Profile, set_private};
+use crate::{
+    config::{AppPaths, Config, Credential, ModelEntry, Profile, set_private},
+    discovery::{self, ModelCache},
+    proxy,
+};
 
 const MANAGED_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
@@ -145,6 +150,33 @@ pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<Ap
         backup,
         model_count: models.len(),
     })
+}
+
+pub fn apply_all(
+    path: &Path,
+    paths: &AppPaths,
+    config: &Config,
+    cache: &ModelCache,
+    default_profile_id: &str,
+) -> Result<ApplyResult> {
+    let models_by_profile = config
+        .profiles
+        .iter()
+        .map(|(profile_id, profile)| {
+            let discovered = cache
+                .profiles
+                .get(profile_id)
+                .map(|cached| cached.models.as_slice())
+                .unwrap_or_default();
+            (
+                profile_id.clone(),
+                discovery::active_models(profile, discovered),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let (profile, models) =
+        proxy::aggregate_profile(paths, config, &models_by_profile, default_profile_id)?;
+    apply(path, &profile, &models)
 }
 
 fn model_picker_row(model: &ModelEntry) -> Value {

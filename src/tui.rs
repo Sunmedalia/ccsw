@@ -77,6 +77,7 @@ enum FooterControl {
     Launch,
     Resume,
     New,
+    Sync,
     Test,
     Help,
     Quit,
@@ -84,6 +85,8 @@ enum FooterControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DetailControl {
+    EnableAll,
+    SyncAll,
     Manage,
     Edit,
 }
@@ -287,6 +290,8 @@ impl App {
                         }
                         KeyCode::Char('r') => self.refresh_models(),
                         KeyCode::Char('t') => self.refresh_models(),
+                        KeyCode::Char('A') => self.enable_all_models(),
+                        KeyCode::Char('p') => self.sync_all_to_claude(),
                         KeyCode::Char('N') => self.launch_selected(terminal, true)?,
                         KeyCode::Enter if self.focus == Focus::Details => self.manage_models(false),
                         KeyCode::Enter if self.focus == Focus::Profiles => {
@@ -355,6 +360,22 @@ impl App {
             .map(|cached| cached.models.as_slice())
             .unwrap_or_default();
         discovery::merged_models(profile, discovered)
+    }
+
+    fn all_enabled_model_count(&self) -> usize {
+        self.config
+            .profiles
+            .iter()
+            .map(|(profile_id, profile)| {
+                let discovered = self
+                    .cache
+                    .profiles
+                    .get(profile_id)
+                    .map(|cached| cached.models.as_slice())
+                    .unwrap_or_default();
+                discovery::active_models(profile, discovered).len()
+            })
+            .sum()
     }
 
     fn selected_model(&self) -> Option<ModelEntry> {
@@ -489,6 +510,10 @@ impl App {
                             self.launch_mode = LaunchMode::New;
                             MouseAction::None
                         }
+                        FooterControl::Sync => {
+                            self.sync_all_to_claude();
+                            MouseAction::None
+                        }
                         FooterControl::Test => {
                             self.refresh_models();
                             MouseAction::None
@@ -531,6 +556,8 @@ impl App {
                         .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                     {
                         match control {
+                            DetailControl::EnableAll => self.enable_all_models(),
+                            DetailControl::SyncAll => self.sync_all_to_claude(),
                             DetailControl::Manage => self.manage_models(false),
                             DetailControl::Edit => self.edit_profile(),
                         }
@@ -837,6 +864,79 @@ impl App {
         }
     }
 
+    fn enable_all_models(&mut self) {
+        let Some(profile_id) = self.selected_profile_id() else {
+            self.set_error("Create a profile before enabling models");
+            return;
+        };
+        let catalog = self.catalog_models();
+        if catalog.is_empty() {
+            self.set_error("No models are available; fetch or add a model first");
+            return;
+        }
+        let update = config::update(&self.paths.config, |latest| {
+            let profile = latest
+                .profiles
+                .get_mut(&profile_id)
+                .context("profile was removed in another CCSW instance")?;
+            let required = profile
+                .required_model_ids()
+                .iter()
+                .map(|id| canonical_model_id(id))
+                .collect::<BTreeSet<_>>();
+            let existing = profile
+                .enabled_models
+                .iter()
+                .chain(profile.required_model_ids().iter())
+                .map(|id| (canonical_model_id(id), id.clone()))
+                .collect::<BTreeMap<_, _>>();
+            profile.enabled_models = catalog
+                .iter()
+                .filter_map(|model| {
+                    let canonical = canonical_model_id(&model.id);
+                    (!required.contains(&canonical)).then(|| {
+                        existing
+                            .get(&canonical)
+                            .cloned()
+                            .unwrap_or_else(|| model.id.clone())
+                    })
+                })
+                .collect();
+            Ok(())
+        });
+        match update {
+            Ok(config) => {
+                self.config = config;
+                self.model_idx = self.model_idx.min(self.models().len().saturating_sub(1));
+                self.status_error = false;
+                self.status = format!(
+                    "Enabled all {} models in {profile_id} · click Sync all to Claude",
+                    self.models().len()
+                );
+            }
+            Err(error) => self.set_error(format!("Could not enable all models: {error:#}")),
+        }
+    }
+
+    fn sync_all_to_claude(&mut self) {
+        let Some(default_profile_id) = self.selected_profile_id() else {
+            self.set_error("Create a profile before syncing Claude");
+            return;
+        };
+        match self.apply_all_to_claude(&default_profile_id) {
+            Ok(result) => {
+                self.proxy_status = proxy::status(&self.paths).ok();
+                self.status_error = false;
+                self.status = format!(
+                    "Synced {} models from {} profiles to Claude /model",
+                    result.model_count,
+                    self.config.profiles.len()
+                );
+            }
+            Err(error) => self.set_error(format!("Could not sync Claude: {error:#}")),
+        }
+    }
+
     fn launch_selected(&mut self, terminal: &mut TuiTerminal, force_new: bool) -> Result<()> {
         let Some(profile_id) = self.selected_profile_id() else {
             self.set_error("Create or import a profile first");
@@ -959,17 +1059,14 @@ impl App {
         Ok(())
     }
 
-    fn apply_profile_to_claude(&self, profile_id: &str) -> Result<claude_config::ApplyResult> {
-        let profile = &self.config.profiles[profile_id];
-        let discovered = self
-            .cache
-            .profiles
-            .get(profile_id)
-            .map(|cached| cached.models.as_slice())
-            .unwrap_or_default();
-        let models = discovery::active_models(profile, discovered);
-        let routed = proxy::routed_profile(&self.paths, profile_id, profile)?;
-        claude_config::apply(&claude_config::settings_path()?, &routed, &models)
+    fn apply_all_to_claude(&self, default_profile_id: &str) -> Result<claude_config::ApplyResult> {
+        claude_config::apply_all(
+            &claude_config::settings_path()?,
+            &self.paths,
+            &self.config,
+            &self.cache,
+            default_profile_id,
+        )
     }
 
     fn handle_modal(&mut self, key: KeyEvent) -> Result<()> {
@@ -1110,12 +1207,12 @@ impl App {
                         }
                         KeyCode::Char('p') => {
                             self.commit_route_editor(editor)?;
-                            let result = self.apply_profile_to_claude(&editor.profile_id)?;
+                            let result = self.apply_all_to_claude(&editor.profile_id)?;
                             self.proxy_status = proxy::status(&self.paths).ok();
                             self.focus = Focus::Models;
                             self.status_error = false;
                             self.status = format!(
-                                "Applied {} models to {}",
+                                "Synced {} models from all profiles to {}",
                                 result.model_count,
                                 result.path.display()
                             );
@@ -1403,7 +1500,7 @@ impl App {
 
     fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
         let title = if active {
-            " Route details · Enter manage · E edit "
+            " Route details · A enable all · p sync Claude "
         } else {
             " Route details "
         };
@@ -1413,7 +1510,7 @@ impl App {
             inner.x,
             inner.y,
             inner.width,
-            inner.height.saturating_sub(2),
+            inner.height.saturating_sub(3),
         );
         let Some(profile) = self.selected_profile() else {
             frame.render_widget(
@@ -1451,6 +1548,14 @@ impl App {
                     "{} enabled / {} available",
                     self.models().len(),
                     self.catalog_models().len()
+                ),
+            ),
+            detail(
+                "Claude /model",
+                &format!(
+                    "{} models across {} providers",
+                    self.all_enabled_model_count(),
+                    self.config.profiles.len()
                 ),
             ),
             Line::raw(""),
@@ -1530,13 +1635,15 @@ impl App {
             (FooterControl::Resume, false) => format!("{dot} Resume"),
             (FooterControl::New, true) => format!("N{dot}"),
             (FooterControl::New, false) => format!("{dot} New"),
+            (FooterControl::Sync, true) => "⇄ Sync".into(),
+            (FooterControl::Sync, false) => "⇄ Sync all".into(),
             (FooterControl::Test, _) => "Test".into(),
             (FooterControl::Help, true) => "?".into(),
             (FooterControl::Help, false) => "Help".into(),
             (FooterControl::Quit, true) => "×".into(),
             (FooterControl::Quit, false) => "Quit".into(),
         };
-        let style = if control == FooterControl::Launch {
+        let style = if matches!(control, FooterControl::Launch | FooterControl::Sync) {
             Style::default()
                 .fg(Color::Black)
                 .bg(ROUTE)
@@ -1630,7 +1737,7 @@ impl App {
                     ),
                     Line::raw("Enter  route → models → launch; details → manage"),
                     Line::raw("N      start a separate Claude session"),
-                    Line::raw("/model shows only enabled models inside Claude"),
+                    Line::raw("/model shows enabled models from every provider"),
                     Line::raw(""),
                     Line::raw("n/e/d  create, manage, delete route"),
                     Line::raw("E      edit API format, endpoint and credential"),
@@ -1638,7 +1745,8 @@ impl App {
                     Line::raw("a/x    add / delete a manual model"),
                     Line::raw("/      search models; Enter/Space enables"),
                     Line::raw("1/d    toggle [1m] context / set default"),
-                    Line::raw("p      save and apply route to direct Claude"),
+                    Line::raw("A      enable every model in the selected profile"),
+                    Line::raw("p      sync every profile to direct Claude /model"),
                     Line::raw("Tab    switch routes/models/details panel"),
                     Line::raw("m      toggle Resume/New launch mode"),
                     Line::raw("Mouse  click controls; drag scrollbars to navigate"),
@@ -2306,7 +2414,7 @@ fn draw_route_editor(
         Paragraph::new(Line::from(vec![
             Span::raw(editor.status.clone()),
             Span::styled(
-                "  · a add manual · p apply to Claude",
+                "  · a add manual · p sync all to Claude",
                 Style::default().fg(ROUTE),
             ),
         ]))
@@ -2379,6 +2487,7 @@ fn ui_areas(area: Rect, focus: Focus) -> UiAreas {
 fn footer_controls(area: Rect, compact: bool) -> Vec<(FooterControl, Rect)> {
     const WIDE: &[(FooterControl, u16)] = &[
         (FooterControl::Launch, 11),
+        (FooterControl::Sync, 14),
         (FooterControl::Resume, 11),
         (FooterControl::New, 8),
         (FooterControl::Test, 8),
@@ -2386,13 +2495,11 @@ fn footer_controls(area: Rect, compact: bool) -> Vec<(FooterControl, Rect)> {
         (FooterControl::Quit, 8),
     ];
     const COMPACT: &[(FooterControl, u16)] = &[
-        (FooterControl::Profiles, 10),
-        (FooterControl::Models, 10),
-        (FooterControl::Details, 10),
-        (FooterControl::Launch, 8),
-        (FooterControl::Resume, 5),
-        (FooterControl::New, 5),
-        (FooterControl::Test, 7),
+        (FooterControl::Profiles, 8),
+        (FooterControl::Models, 8),
+        (FooterControl::Details, 8),
+        (FooterControl::Launch, 7),
+        (FooterControl::Sync, 8),
         (FooterControl::Help, 5),
         (FooterControl::Quit, 5),
     ];
@@ -2419,20 +2526,40 @@ fn footer_controls(area: Rect, compact: bool) -> Vec<(FooterControl, Rect)> {
 
 fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
     let inner = panel_inner(area);
-    let y = inner.y.saturating_add(inner.height.saturating_sub(1));
-    let manage_width = 17_u16.min(inner.width);
-    let edit_width = 14_u16.min(inner.width.saturating_sub(manage_width.saturating_add(1)));
-    let mut controls = vec![(
-        DetailControl::Manage,
-        Rect::new(inner.x, y, manage_width, 1),
-    )];
-    if edit_width > 0 {
+    let first_y = inner.y.saturating_add(inner.height.saturating_sub(2));
+    let second_y = inner.y.saturating_add(inner.height.saturating_sub(1));
+    let first_width = 14_u16.min(inner.width);
+    let first_rest = inner.width.saturating_sub(first_width.saturating_add(1));
+    let second_width = 22_u16.min(inner.width);
+    let second_rest = inner.width.saturating_sub(second_width.saturating_add(1));
+    let mut controls = vec![
+        (
+            DetailControl::EnableAll,
+            Rect::new(inner.x, first_y, first_width, 1),
+        ),
+        (
+            DetailControl::SyncAll,
+            Rect::new(inner.x, second_y, second_width, 1),
+        ),
+    ];
+    if first_rest > 0 {
+        controls.push((
+            DetailControl::Manage,
+            Rect::new(
+                inner.x.saturating_add(first_width).saturating_add(1),
+                first_y,
+                first_rest,
+                1,
+            ),
+        ));
+    }
+    if second_rest > 0 {
         controls.push((
             DetailControl::Edit,
             Rect::new(
-                inner.x.saturating_add(manage_width).saturating_add(1),
-                y,
-                edit_width,
+                inner.x.saturating_add(second_width).saturating_add(1),
+                second_y,
+                second_rest,
                 1,
             ),
         ));
@@ -2443,13 +2570,18 @@ fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
 fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
     for (control, rect) in detail_controls(area) {
         let (label, style) = match control {
-            DetailControl::Manage => (
-                "[Manage models]",
+            DetailControl::EnableAll => (
+                "[Enable all]",
+                Style::default().fg(CONNECTED).add_modifier(Modifier::BOLD),
+            ),
+            DetailControl::SyncAll => (
+                "[Sync all → Claude]",
                 Style::default()
                     .fg(Color::Black)
                     .bg(ROUTE)
                     .add_modifier(Modifier::BOLD),
             ),
+            DetailControl::Manage => ("[Manage models]", Style::default().fg(ROUTE)),
             DetailControl::Edit => ("[Edit route]", Style::default().fg(WARNING)),
         };
         frame.render_widget(
@@ -2571,7 +2703,7 @@ fn route_controls(area: Rect) -> Vec<(RouteControl, Rect)> {
     ];
     let second = [
         (RouteControl::Save, "Save"),
-        (RouteControl::Apply, "Apply"),
+        (RouteControl::Apply, "Sync all"),
         (RouteControl::Edit, "Edit route"),
         (RouteControl::Cancel, "Cancel"),
     ];
@@ -2633,7 +2765,7 @@ fn draw_route_controls(frame: &mut ratatui::Frame, area: Rect) {
             RouteControl::Fetch => "Fetch",
             RouteControl::Add => "Add",
             RouteControl::Save => "Save",
-            RouteControl::Apply => "Apply",
+            RouteControl::Apply => "Sync all",
             RouteControl::Edit => "Edit route",
             RouteControl::Cancel => "Cancel",
         };
@@ -2927,6 +3059,30 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(app.modal, Some(Modal::Profile(_))));
+    }
+
+    #[test]
+    fn homepage_exposes_enable_all_and_sync_controls() {
+        let mut app = interactive_test_app();
+        app.focus = Focus::Details;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Enable all"));
+        assert!(rendered.contains("Sync all → Claude"));
+        assert!(rendered.contains("Claude /model"));
+        assert!(
+            footer_controls(Rect::new(0, 27, 120, 3), false)
+                .iter()
+                .any(|(control, _)| *control == FooterControl::Sync)
+        );
     }
 
     #[test]

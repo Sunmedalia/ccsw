@@ -13,7 +13,7 @@ CCSW 是一个面向 Claude Code 的多网关、多模型 TUI。它让每个 Cla
 - 一键把当前路由和启用模型同步到 Claude 全局设置，之后直接运行 `claude` 也能使用。
 - 把 Claude Code 的 Anthropic Messages 请求转换到 OpenAI-compatible Chat Completions 或 Responses 端点。
 
-普通的 `ccsw run` 和 TUI Launch 不会修改 `~/.claude/settings.json`，它们通过每个子进程独立的环境、`--model` 和临时 `--settings` 完成路由。只有显式执行 `Apply` 或 `ccsw apply` 才会修改并备份全局设置。
+普通的 `ccsw run` 和 TUI Launch 不会修改 `~/.claude/settings.json`，它们通过每个子进程独立的环境、`--model` 和临时 `--settings` 完成路由。只有显式点击 `Sync all` 或执行 `ccsw apply` 才会修改并备份全局设置。
 
 ## 要求与安装
 
@@ -49,19 +49,23 @@ cargo run
 | `E` | 编辑 API Endpoint、API Key/Token 和角色映射 |
 | `a/x` | 手动添加、删除模型 |
 | `r` 或 `t` | 自动获取提供商模型并测试连接 |
+| `A` | 在首页启用当前 Profile 的全部可用模型 |
+| `p` | 在首页将所有 Profile 的已启用模型同步到 Claude `/model` |
 | `?` | 帮助 |
 | `q` | 退出 |
 | 鼠标左键 | 选择配置/模型，点击底部开关和操作按钮 |
 | 鼠标滚轮/触控板 | 滚动鼠标所在的配置或模型列表 |
 | 滚动条 | 点击轨道跳转；按住左键拖动滚动 |
 
-底部操作栏提供 Launch、Resume/New 开关、Test、Help 和 Quit 按钮；窄窗口还会显示 Routes/Models/Details 面板开关。宽窗口采用 Routes / Enabled models / Route details 三栏布局，模型列表占据最大的工作区域；窄窗口使用页签和上下分区，避免端点、模型名和操作按钮互相挤压。
+底部操作栏提供 Launch、Sync all、Resume/New、Test、Help 和 Quit 按钮；窄窗口还会显示 Routes/Models/Details 面板开关。宽窗口采用 Routes / Enabled models / Route details 三栏布局，模型列表占据最大的工作区域；窄窗口使用页签和上下分区，避免端点、模型名和操作按钮互相挤压。
 
-Route details 底部提供 `[Manage models]` 和 `[Edit route]`。点击 `[Edit route]`，或者在主界面按 `E`，即可修改 API Format、API Endpoint、认证类型及 API Key/Token。API Format 和认证类型使用可循环选择控件，按 `Enter`、`Space` 或左右方向键切换，也可以鼠标点击。
+Route details 底部直接提供 `[Enable all]`、`[Sync all → Claude]`、`[Manage models]` 和 `[Edit route]`。`Enable all` 会打开当前 Profile 的全部已发现和手动模型；`Sync all → Claude` 会把所有 Profile 当前启用的模型同步到 Claude。点击 `[Edit route]`，或者在主界面按 `E`，即可修改 API Format、API Endpoint、认证类型及 API Key/Token。API Format 和认证类型使用可循环选择控件，按 `Enter`、`Space` 或左右方向键切换，也可以鼠标点击。
 
 在 Route details 上按 `Enter`，或者按 `/`、`e`，会打开同页模型管理器。Provider 和 Credential 只读显示；输入 `/` 搜索模型，使用 `↑/↓` 选择，`Enter`/`Space` 打开或关闭模型，`1` 切换 1M 上下文，`d` 设为默认模型，`Ctrl+S` 保存。`◆` 表示默认或角色映射所需模型，不能直接关闭；`●` 表示已启用，`○` 表示未启用。长列表右侧显示滚动条，支持滚轮和触控板。
 
-模型管理器底部将操作分成两行，提供 `Enable`、`1M`、`Default`、`Fetch`（自动获取）、`Add`（手动添加）、`Save`、`Apply`、`Edit route` 和 `Cancel`。`Apply` 会先保存当前勾选，再将活动路由、默认模型和全部已启用模型合并写入 `~/.claude/settings.json`；OpenAI 路由写入的是本地代理地址和本地 Token，而不是上游密钥。其他 Claude 设置会保留，旧文件备份为 `settings.json.ccsw-backup`。同步后可以退出 CCSW，直接运行 `claude`，并在原生 `/model` 中选择这些模型。一次只能将一个提供商路由设为 Claude 的全局活动路由；再次 Apply 另一个路由即可切换。
+模型管理器底部将操作分成两行，提供 `Enable`、`1M`、`Default`、`Fetch`（自动获取）、`Add`（手动添加）、`Save`、`Sync all`、`Edit route` 和 `Cancel`。`Sync all` 会先保存当前勾选，再把所有 Profile 的已启用模型合并写入 `~/.claude/settings.json`。Claude 连接统一的 CCSW 本地聚合代理；代理根据模型名把请求发往对应的 Anthropic、OpenAI Chat 或 OpenAI Responses API。其他 Claude 设置会保留，旧文件备份为 `settings.json.ccsw-backup`。
+
+同步后可以退出 CCSW，直接运行 `claude`。原生 `/model` 会同时显示不同 API 的模型，例如 `ark::deepseek-v4-flash[1m]` 和 `openai::gpt-5`；显示标签包含 Profile 名称。`profile::model` 仅用于 CCSW 本地路由，代理转发时会恢复上游真实模型 ID。当前选中的 Profile 决定首次同步后的默认模型，但不会限制 `/model` 中可选择的其他提供商。
 
 1M 开关通过模型 ID 的 `[1m]` 后缀持久化，例如 `glm-5.3-flash` 会变成 `glm-5.3-flash[1m]`。只有网关支持该上下文规格时才应开启。
 
@@ -156,11 +160,11 @@ ccsw apply --profile local
 ccsw proxy status
 ```
 
-`ccsw apply` 与 TUI 的 `Apply` 按钮效果相同，可用于脚本化切换 Claude 的全局活动路由。
+`ccsw apply` 与 TUI 的 `Sync all` 按钮效果相同，会同步全部 Profile；`--profile` 指定哪个 Profile 的默认模型作为 Claude 初始默认值。
 
-## OpenAI-compatible 转发代理
+## 多提供商转发代理
 
-OpenAI 路由被 Launch 或 Apply 时，CCSW 会自动启动只监听 `127.0.0.1` 的后台代理。Claude 得到的是本地随机 Token；真正的上游凭据只由代理从权限为 `0600` 的 CCSW 配置读取，不会写进 Claude 的临时 settings。
+执行 Sync all 时，CCSW 会自动启动只监听 `127.0.0.1` 的后台代理。Claude 得到的是本地随机 Token；Anthropic 和 OpenAI-compatible 的真正上游凭据只由代理从权限为 `0600` 的 CCSW 配置读取，不会写进 Claude settings。
 
 ```sh
 ccsw proxy start
@@ -168,16 +172,16 @@ ccsw proxy status
 ccsw proxy stop
 ```
 
-默认监听 `127.0.0.1:17321`。若端口冲突，可以先执行 `ccsw proxy start --listen 127.0.0.1:19021`，再重新 Apply。
+默认监听 `127.0.0.1:17321`。若端口冲突，可以先执行 `ccsw proxy start --listen 127.0.0.1:19021`，再重新同步。
 
-Apply 后即使退出 CCSW，后台代理仍会运行，因此可以直接启动 `claude`。如需机器重启后自动恢复，显式安装用户服务：
+同步后即使退出 CCSW，后台代理仍会运行，因此可以直接启动 `claude`。如需机器重启后自动恢复，显式安装用户服务：
 
 ```sh
 ccsw proxy install
 ccsw proxy uninstall
 ```
 
-macOS 使用 launchd，Linux 使用 systemd user service；Apply 不会静默安装开机启动项。`proxy stop` 或 `proxy uninstall` 不会改写 Claude settings，当前应用的 OpenAI 路由在代理停止期间会不可用。
+macOS 使用 launchd，Linux 使用 systemd user service；同步操作不会静默安装开机启动项。`proxy stop` 或 `proxy uninstall` 不会改写 Claude settings，已经同步到 Claude 的模型在代理停止期间会不可用。
 
 协议转换支持流式文本、图片、function tools、并行工具调用、工具结果、usage、停止原因和 reasoning summary。无法无损转换的内容块会返回明确错误。`/v1/messages/count_tokens` 使用 OpenAI tokenizer 进行近似估算，因为 OpenAI-compatible 服务没有统一的等价计数接口。
 

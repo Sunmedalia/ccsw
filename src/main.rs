@@ -176,7 +176,7 @@ fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
         }
         ProxyCommand::Stop => {
             proxy::stop(paths)?;
-            println!("CCSW proxy stopped; applied OpenAI routes require it to run.");
+            println!("CCSW proxy stopped; models synced to Claude require it to run.");
         }
         ProxyCommand::Install => {
             let path = proxy::install(paths)?;
@@ -192,22 +192,15 @@ fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
 
 fn apply_to_claude(paths: &AppPaths, profile_id: &str) -> Result<()> {
     let config = config::load(&paths.config)?;
-    let profile = config
+    config
         .profiles
         .get(profile_id)
         .with_context(|| format!("profile '{profile_id}' does not exist"))?;
     let cache = discovery::load_cache(&paths.cache);
-    let discovered = cache
-        .profiles
-        .get(profile_id)
-        .map(|cached| cached.models.as_slice())
-        .unwrap_or_default();
-    let models = discovery::active_models(profile, discovered);
     let settings = claude_config::settings_path()?;
-    let routed = proxy::routed_profile(paths, profile_id, profile)?;
-    let result = claude_config::apply(&settings, &routed, &models)?;
+    let result = claude_config::apply_all(&settings, paths, &config, &cache, profile_id)?;
     println!(
-        "Applied profile '{profile_id}' with {} models to {}",
+        "Synced {} models from all profiles to {} (default profile: '{profile_id}')",
         result.model_count,
         result.path.display()
     );
@@ -340,10 +333,7 @@ fn doctor(paths: &AppPaths) -> Result<()> {
 
     match config::load(&paths.config) {
         Ok(config) => {
-            let has_openai = config
-                .profiles
-                .values()
-                .any(|profile| profile.api_format.is_openai());
+            let has_profiles = !config.profiles.is_empty();
             println!(
                 "✓ Config: {} ({} profiles)",
                 paths.config.display(),
@@ -371,20 +361,20 @@ fn doctor(paths: &AppPaths) -> Result<()> {
                     }
                 }
             }
-            if has_openai {
+            if has_profiles {
                 match proxy::status(paths) {
                     Ok(status) if status.running => {
-                        println!("✓ OpenAI proxy: {}", status.listen)
+                        println!("✓ CCSW proxy: {}", status.listen)
                     }
                     Ok(status) => {
                         println!(
-                            "! OpenAI proxy is stopped; it will start on Launch/Apply ({})",
+                            "! CCSW proxy is stopped; it will start when profiles are synced ({})",
                             status.listen
                         )
                     }
                     Err(error) => {
                         failed = true;
-                        println!("✗ OpenAI proxy: {error:#}");
+                        println!("✗ CCSW proxy: {error:#}");
                     }
                 }
             }

@@ -120,6 +120,16 @@ default_model = "gpt-test[1m]"
 [profiles.openai.credential]
 kind = "bearer"
 value = "upstream-secret"
+
+[profiles.anthropic]
+name = "Anthropic compatible"
+base_url = "https://anthropic-upstream.invalid"
+api_format = "anthropic"
+default_model = "claude-test"
+
+[profiles.anthropic.credential]
+kind = "x-api-key"
+value = "anthropic-upstream-secret"
 "#,
     )
     .unwrap();
@@ -186,8 +196,10 @@ done
     assert!(apply.status().unwrap().success());
     let applied = fs::read_to_string(claude_config.join("settings.json")).unwrap();
     assert!(applied.contains(&format!("http://{listen}/r/")));
-    assert!(applied.contains("gpt-test[1m]"));
+    assert!(applied.contains("openai::gpt-test[1m]"));
+    assert!(applied.contains("anthropic::claude-test"));
     assert!(!applied.contains("upstream-secret"));
+    assert!(!applied.contains("anthropic-upstream-secret"));
 
     let mut stop = Command::new(binary);
     stop.args(["proxy", "stop"]);

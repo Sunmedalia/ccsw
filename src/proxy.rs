@@ -27,7 +27,9 @@ use tempfile::NamedTempFile;
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::{self, ApiFormat, AppPaths, Credential, Profile, set_private};
+use crate::config::{
+    self, ApiFormat, AppPaths, Config, Credential, ModelEntry, Profile, set_private,
+};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:17321";
 const MAX_ERROR_BODY: usize = 4096;
@@ -35,7 +37,16 @@ const MAX_ERROR_BODY: usize = 4096;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RouteTarget {
     config_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    models: BTreeMap<String, AggregateModelTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AggregateModelTarget {
     profile_id: String,
+    model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +100,9 @@ pub fn ensure_route(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Re
     let proxy_paths = ProxyPaths::from_app(paths)?;
     let route_id = update_registry(&proxy_paths, None, |registry| {
         if let Some((id, _)) = registry.routes.iter().find(|(_, target)| {
-            target.config_path == paths.config && target.profile_id == profile_id
+            target.config_path == paths.config
+                && target.profile_id.as_deref() == Some(profile_id)
+                && target.models.is_empty()
         }) {
             return id.clone();
         }
@@ -98,7 +111,8 @@ pub fn ensure_route(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Re
             id.clone(),
             RouteTarget {
                 config_path: paths.config.clone(),
-                profile_id: profile_id.to_owned(),
+                profile_id: Some(profile_id.to_owned()),
+                models: BTreeMap::new(),
             },
         );
         id
@@ -109,6 +123,117 @@ pub fn ensure_route(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Re
         base_url: format!("http://{}/r/{route_id}", registry.listen),
         token: registry.local_token,
     })
+}
+
+pub fn aggregate_model_id(profile_id: &str, model_id: &str) -> String {
+    let suffix = if model_id.to_ascii_lowercase().ends_with("[1m]") {
+        "[1m]"
+    } else {
+        ""
+    };
+    format!("{profile_id}::{}{suffix}", strip_1m(model_id))
+}
+
+pub fn aggregate_profile(
+    paths: &AppPaths,
+    config: &Config,
+    models_by_profile: &BTreeMap<String, Vec<ModelEntry>>,
+    default_profile_id: &str,
+) -> Result<(Profile, Vec<ModelEntry>)> {
+    let default_profile = config
+        .profiles
+        .get(default_profile_id)
+        .with_context(|| format!("profile '{default_profile_id}' does not exist"))?;
+    let mut targets = BTreeMap::new();
+    let mut models = Vec::new();
+    for (profile_id, profile) in &config.profiles {
+        let active = models_by_profile
+            .get(profile_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for model in active {
+            let exposed = aggregate_model_id(profile_id, &model.id);
+            targets.insert(
+                exposed.clone(),
+                AggregateModelTarget {
+                    profile_id: profile_id.clone(),
+                    model_id: model.id.clone(),
+                },
+            );
+            models.push(ModelEntry {
+                id: exposed,
+                label: Some(format!("{} · {}", profile.name, model.label())),
+                description: Some(format!(
+                    "{} · {} · {}",
+                    profile.api_format.label(),
+                    profile_id,
+                    model.id
+                )),
+            });
+        }
+    }
+    if targets.is_empty() {
+        bail!("enable at least one model before syncing to Claude");
+    }
+    let default_model = aggregate_model_id(default_profile_id, &default_profile.default_model);
+    if !targets.contains_key(&default_model) {
+        bail!(
+            "default model '{}' is not enabled for profile '{default_profile_id}'",
+            default_profile.default_model
+        );
+    }
+
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    let route_id =
+        update_registry(&proxy_paths, None, |registry| {
+            if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
+                target.config_path == paths.config && target.profile_id.is_none()
+            }) {
+                target.models = targets.clone();
+                return id.clone();
+            }
+            let id = Uuid::new_v4().simple().to_string();
+            registry.routes.insert(
+                id.clone(),
+                RouteTarget {
+                    config_path: paths.config.clone(),
+                    profile_id: None,
+                    models: targets,
+                },
+            );
+            id
+        })?;
+    start(paths, None)?;
+    let registry = load_registry(&proxy_paths)?;
+    let expose = |model: &str| aggregate_model_id(default_profile_id, model);
+    let mut routed = default_profile.clone();
+    routed.name = "CCSW · all providers".into();
+    routed.api_format = ApiFormat::Anthropic;
+    routed.base_url = format!("http://{}/r/{route_id}", registry.listen);
+    routed.credential = Credential::Bearer {
+        value: registry.local_token,
+    };
+    routed.default_model = default_model;
+    for model in [
+        &mut routed.aliases.opus,
+        &mut routed.aliases.sonnet,
+        &mut routed.aliases.haiku,
+        &mut routed.aliases.fable,
+        &mut routed.subagent_model,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *model = expose(model);
+    }
+    routed.fallback_models = routed
+        .fallback_models
+        .iter()
+        .map(|model| expose(model))
+        .collect();
+    routed.enabled_models = models.iter().map(|model| model.id.clone()).collect();
+    routed.models = models.clone();
+    Ok((routed, models))
 }
 
 pub fn routed_profile(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Result<Profile> {
@@ -212,6 +337,7 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
         .timeout(Duration::from_millis(350))
         .build()?
         .get(url)
+        .bearer_auth(&registry.local_token)
         .send()
         .and_then(|response| response.json::<Value>())
         .is_ok_and(|value| value.get("name").and_then(Value::as_str) == Some("ccsw-proxy"));
@@ -480,8 +606,22 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.ok();
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({"name":"ccsw-proxy","status":"ok"}))
+async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Response {
+    let registry = match registry_from_path(&state.registry) {
+        Ok(registry) => registry,
+        Err(error) => return anthropic_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let expected = format!("Bearer {}", registry.local_token);
+    let actual = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    if actual != Some(expected.as_str()) {
+        return anthropic_error(
+            StatusCode::UNAUTHORIZED,
+            anyhow::anyhow!("invalid local proxy credential"),
+        );
+    }
+    Json(json!({"name":"ccsw-proxy","status":"ok"})).into_response()
 }
 
 fn registry_from_path(path: &Path) -> Result<Registry> {
@@ -489,11 +629,11 @@ fn registry_from_path(path: &Path) -> Result<Registry> {
         .with_context(|| format!("failed to load proxy registry {}", path.display()))
 }
 
-fn resolve_profile(
+fn authenticated_target(
     state: &ServerState,
     route: &str,
     headers: &HeaderMap,
-) -> Result<(Profile, Registry)> {
+) -> Result<(RouteTarget, Registry)> {
     let registry = registry_from_path(&state.registry)?;
     let expected = format!("Bearer {}", registry.local_token);
     let actual = headers
@@ -505,17 +645,43 @@ fn resolve_profile(
     let target = registry
         .routes
         .get(route)
+        .cloned()
         .with_context(|| format!("unknown CCSW route {route}"))?;
+    Ok((target, registry))
+}
+
+fn resolve_profile(
+    target: &RouteTarget,
+    requested_model: Option<&str>,
+) -> Result<(Profile, String)> {
     let config = config::load(&target.config_path)?;
+    let (profile_id, model_id) = if let Some(profile_id) = &target.profile_id {
+        (profile_id.as_str(), requested_model.unwrap_or_default())
+    } else {
+        let requested = requested_model.context("request is missing model")?;
+        let mapped = target
+            .models
+            .get(requested)
+            .or_else(|| {
+                let canonical = strip_1m(requested);
+                target
+                    .models
+                    .iter()
+                    .find(|(exposed, _)| strip_1m(exposed) == canonical)
+                    .map(|(_, mapped)| mapped)
+            })
+            .with_context(|| format!("model '{requested}' is not synced by CCSW"))?;
+        (mapped.profile_id.as_str(), mapped.model_id.as_str())
+    };
     let profile = config
         .profiles
-        .get(&target.profile_id)
+        .get(profile_id)
         .cloned()
-        .with_context(|| format!("profile '{}' no longer exists", target.profile_id))?;
-    if !profile.api_format.is_openai() {
-        bail!("profile '{}' is not an OpenAI route", target.profile_id);
+        .with_context(|| format!("profile '{profile_id}' no longer exists"))?;
+    if target.profile_id.is_some() && !profile.api_format.is_openai() {
+        bail!("profile '{profile_id}' is not an OpenAI route");
     }
-    Ok((profile, registry))
+    Ok((profile, model_id.to_owned()))
 }
 
 async fn models(
@@ -523,11 +689,25 @@ async fn models(
     AxumPath(route): AxumPath<String>,
     headers: HeaderMap,
 ) -> Response {
-    match resolve_profile(&state, &route, &headers) {
-        Ok((profile, _)) => Json(json!({
-            "data": profile.models.iter().map(|model| json!({"id": strip_1m(&model.id), "object":"model"})).collect::<Vec<_>>()
-        }))
-        .into_response(),
+    match authenticated_target(&state, &route, &headers) {
+        Ok((target, _)) => {
+            let ids = if target.profile_id.is_none() {
+                target.models.keys().cloned().collect::<Vec<_>>()
+            } else {
+                match resolve_profile(&target, None) {
+                    Ok((profile, _)) => profile
+                        .models
+                        .iter()
+                        .map(|model| strip_1m(&model.id).to_owned())
+                        .collect(),
+                    Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
+                }
+            };
+            Json(json!({
+                "data": ids.into_iter().map(|id| json!({"id":id, "object":"model"})).collect::<Vec<_>>()
+            }))
+            .into_response()
+        }
         Err(error) => anthropic_error(StatusCode::UNAUTHORIZED, error),
     }
 }
@@ -538,8 +718,14 @@ async fn count_tokens(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    if let Err(error) = resolve_profile(&state, &route, &headers) {
-        return anthropic_error(StatusCode::UNAUTHORIZED, error);
+    let target = match authenticated_target(&state, &route, &headers) {
+        Ok((target, _)) => target,
+        Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
+    };
+    if target.profile_id.is_none()
+        && let Err(error) = resolve_profile(&target, body.get("model").and_then(Value::as_str))
+    {
+        return anthropic_error(StatusCode::BAD_REQUEST, error);
     }
     match estimate_tokens(&body) {
         Ok(tokens) => Json(json!({"input_tokens": tokens})).into_response(),
@@ -551,22 +737,50 @@ async fn messages(
     State(state): State<ServerState>,
     AxumPath(route): AxumPath<String>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    Json(mut body): Json<Value>,
 ) -> Response {
-    let (profile, _) = match resolve_profile(&state, &route, &headers) {
+    let (target, _) = match authenticated_target(&state, &route, &headers) {
         Ok(value) => value,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
+    let (profile, upstream_model) =
+        match resolve_profile(&target, body.get("model").and_then(Value::as_str)) {
+            Ok(value) => value,
+            Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
+        };
+    if target.profile_id.is_none() {
+        body["model"] = Value::String(strip_1m(&upstream_model).to_owned());
+    }
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let anthropic = profile.api_format == ApiFormat::Anthropic;
     let upstream_body = match translate_request(&body, profile.api_format) {
         Ok(body) => body,
         Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
     };
-    let endpoint = match completion_endpoint(&profile.base_url, profile.api_format) {
+    let endpoint = match if anthropic {
+        api_endpoint(&profile.base_url, "messages")
+    } else {
+        completion_endpoint(&profile.base_url, profile.api_format)
+    } {
         Ok(endpoint) => endpoint,
         Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
     };
     let mut request = state.client.post(endpoint).json(&upstream_body);
+    if anthropic {
+        request = request.header(
+            "anthropic-version",
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("2023-06-01"),
+        );
+        if let Some(beta) = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+        {
+            request = request.header("anthropic-beta", beta);
+        }
+    }
     request = match &profile.credential {
         Credential::Bearer { value } => request.bearer_auth(value),
         Credential::XApiKey { value } => request.header("x-api-key", value),
@@ -582,6 +796,9 @@ async fn messages(
             );
         }
     };
+    if anthropic {
+        return passthrough_response(response);
+    }
     let status = response.status();
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
@@ -608,6 +825,20 @@ async fn messages(
             Err(error) => anthropic_error(StatusCode::BAD_GATEWAY, error),
         }
     }
+}
+
+fn passthrough_response(response: reqwest::Response) -> Response {
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| header::HeaderValue::from_static("application/json"));
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(response.bytes_stream()))
+        .expect("valid upstream response")
 }
 
 fn anthropic_error(status: StatusCode, error: anyhow::Error) -> Response {
@@ -665,6 +896,9 @@ fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
 }
 
 fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
+    if format == ApiFormat::Anthropic {
+        return Ok(input.clone());
+    }
     let object = input
         .as_object()
         .context("request body must be an object")?;
@@ -709,7 +943,7 @@ fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
                 );
             }
         }
-        ApiFormat::Anthropic => bail!("Anthropic request does not need translation"),
+        ApiFormat::Anthropic => unreachable!("handled before translation"),
     }
     for key in ["temperature", "top_p"] {
         if let Some(value) = object.get(key) {
@@ -1652,7 +1886,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_forwards_anthropic_messages_to_chat_completions() {
+    async fn aggregate_proxy_forwards_namespaced_model_to_chat_completions() {
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_address = upstream.local_addr().unwrap();
         let (request_tx, request_rx) = mpsc::channel();
@@ -1708,7 +1942,14 @@ mod tests {
                 "route-test".into(),
                 RouteTarget {
                     config_path: app_paths.config.clone(),
-                    profile_id: "openai".into(),
+                    profile_id: None,
+                    models: BTreeMap::from([(
+                        "openai::gpt-test[1m]".into(),
+                        AggregateModelTarget {
+                            profile_id: "openai".into(),
+                            model_id: "gpt-test[1m]".into(),
+                        },
+                    )]),
                 },
             );
         })
@@ -1724,7 +1965,8 @@ mod tests {
                 .post(&url)
                 .bearer_auth(&registry.local_token)
                 .json(&json!({
-                    "model":"gpt-test[1m]",
+                    // Claude strips its [1m] context hint before sending the request.
+                    "model":"openai::gpt-test",
                     "max_tokens":20,
                     "messages":[{"role":"user","content":"hello"}]
                 }))
@@ -1743,6 +1985,111 @@ mod tests {
         assert!(upstream_request.starts_with("POST /v1/chat/completions "));
         assert!(upstream_request.contains("authorization: Bearer upstream-secret"));
         assert!(upstream_request.contains("\"model\":\"gpt-test\""));
+        assert!(!upstream_request.contains(&registry.local_token));
+        server.abort();
+        upstream_task.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn aggregate_proxy_passes_namespaced_model_to_anthropic_provider() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let upstream_task = thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let mut request = vec![0_u8; 65536];
+            let size = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).into_owned();
+            request_tx.send(request).unwrap();
+            let body = r#"{"id":"msg-upstream","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let app_paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state: temp.path().join("state/state.json"),
+            cache: temp.path().join("cache/models.json"),
+            runtime_dir: temp.path().join("cache/runtime"),
+        };
+        let profile = Profile {
+            name: "Anthropic compatible".into(),
+            base_url: format!("http://{upstream_address}"),
+            api_format: ApiFormat::Anthropic,
+            credential: Credential::XApiKey {
+                value: "anthropic-secret".into(),
+            },
+            default_model: "claude-test[1m]".into(),
+            aliases: RoleModels::default(),
+            subagent_model: None,
+            fallback_models: vec![],
+            enabled_models: vec![],
+            models: vec![],
+        };
+        config::update(&app_paths.config, |config: &mut Config| {
+            config.profiles.insert("anthropic".into(), profile);
+            Ok(())
+        })
+        .unwrap();
+
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_address = proxy_listener.local_addr().unwrap();
+        drop(proxy_listener);
+        let proxy_paths = ProxyPaths::from_app(&app_paths).unwrap();
+        update_registry(&proxy_paths, Some(&proxy_address.to_string()), |registry| {
+            registry.routes.insert(
+                "aggregate-test".into(),
+                RouteTarget {
+                    config_path: app_paths.config.clone(),
+                    profile_id: None,
+                    models: BTreeMap::from([(
+                        "anthropic::claude-test[1m]".into(),
+                        AggregateModelTarget {
+                            profile_id: "anthropic".into(),
+                            model_id: "claude-test[1m]".into(),
+                        },
+                    )]),
+                },
+            );
+        })
+        .unwrap();
+        let registry = load_registry(&proxy_paths).unwrap();
+        let registry_path = proxy_paths.registry.clone();
+        let server = tokio::spawn(async move { serve(registry_path).await });
+        let client = Client::new();
+        let url = format!("http://{proxy_address}/r/aggregate-test/v1/messages");
+        let mut response = None;
+        for _ in 0..30 {
+            if let Ok(result) = client
+                .post(&url)
+                .bearer_auth(&registry.local_token)
+                .json(&json!({
+                    // Claude strips its [1m] context hint before sending the request.
+                    "model":"anthropic::claude-test",
+                    "max_tokens":20,
+                    "messages":[{"role":"user","content":"hello"}]
+                }))
+                .send()
+                .await
+            {
+                response = Some(result);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let value: Value = response.unwrap().json().await.unwrap();
+        assert_eq!(value["type"], "message");
+        assert_eq!(value["content"][0]["text"], "hello");
+        let upstream_request = request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(upstream_request.starts_with("POST /v1/messages "));
+        assert!(upstream_request.contains("x-api-key: anthropic-secret"));
+        assert!(upstream_request.contains("\"model\":\"claude-test\""));
         assert!(!upstream_request.contains(&registry.local_token));
         server.abort();
         upstream_task.join().unwrap();
