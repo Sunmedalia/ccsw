@@ -46,8 +46,6 @@ jobs:
             artifact: ccsw-linux-x86_64
           - os: macos-latest
             artifact: ccsw-macos-arm64
-          - os: macos-15-intel
-            artifact: ccsw-macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
