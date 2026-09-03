@@ -166,6 +166,9 @@ struct ProfileForm {
 struct ModelForm {
     fields: Vec<FormField>,
     selected: usize,
+    api_models: Vec<ModelEntry>,
+    api_query: String,
+    api_status: String,
 }
 
 struct RouteEditor {
@@ -173,6 +176,7 @@ struct RouteEditor {
     original_profile: Profile,
     catalog: Vec<ModelEntry>,
     enabled: BTreeSet<String>,
+    disabled: BTreeSet<String>,
     locked: BTreeSet<String>,
     default_model: String,
     one_m: BTreeSet<String>,
@@ -562,7 +566,7 @@ impl App {
                                         self.status = "Cleared non-essential enabled models".into();
                                     }
                                     KeyCode::Char('a') if self.selected_profile().is_some() => {
-                                        self.modal = Some(Modal::Model(ModelForm::new()));
+                                        self.open_add_model_modal();
                                     }
                                     KeyCode::Char('x') | KeyCode::Delete => {
                                         self.disable_or_delete_selected_model();
@@ -787,7 +791,7 @@ impl App {
                         if let Some(btn_rect) = catalog_add_button_rect(search_area)
                             && contains(btn_rect, mouse.column, mouse.row)
                         {
-                            self.modal = Some(Modal::Model(ModelForm::new()));
+                            self.open_add_model_modal();
                             return Ok(MouseAction::None);
                         }
                         if contains(search_area, mouse.column, mouse.row) {
@@ -1016,7 +1020,7 @@ impl App {
                         {
                             match control {
                                 DetailControl::AddModel => {
-                                    self.modal = Some(Modal::Model(ModelForm::new()));
+                                    self.open_add_model_modal();
                                 }
                                 DetailControl::FetchModels => {
                                     self.refresh_models();
@@ -1047,7 +1051,7 @@ impl App {
                     {
                         match control {
                             DetailControl::AddModel => {
-                                self.modal = Some(Modal::Model(ModelForm::new()));
+                                self.open_add_model_modal();
                             }
                             DetailControl::FetchModels => {
                                 self.refresh_models();
@@ -1146,6 +1150,7 @@ impl App {
         let button_count = match self.modal.as_ref() {
             Some(Modal::Help) => 1,
             Some(Modal::Route(_) | Modal::Proxy(_)) => 0,
+            Some(Modal::Model(_)) => 3,
             Some(_) => 2,
             None => 0,
         };
@@ -1154,11 +1159,19 @@ impl App {
             .position(|rect| contains(*rect, mouse.column, mouse.row))
         {
             let key = match (self.modal.as_ref(), button) {
+                (Some(Modal::Model(_)), 0) => {
+                    self.fetch_api_models_for_form();
+                    return Ok(());
+                }
+                (Some(Modal::Model(_)), 1) => {
+                    KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
+                }
+                (Some(Modal::Model(_)), 2) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                 (Some(Modal::Import(_)), 0)
                 | (Some(Modal::DeleteProfile | Modal::DeleteModel), 0) => {
                     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
                 }
-                (Some(Modal::Profile(_) | Modal::Model(_)), 0) => {
+                (Some(Modal::Profile(_)), 0) => {
                     KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
                 }
                 (Some(Modal::Help), 0) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -1205,12 +1218,30 @@ impl App {
                 }
             }
             Some(Modal::Model(form)) => {
-                if let Some(index) = clicked_field
-                    && index < form.fields.len()
-                {
-                    form.selected = index;
-                    if form.fields[index].toggle {
-                        toggle_form_field(&mut form.fields[index]);
+                let content_area = Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width,
+                    inner.height.saturating_sub(2),
+                );
+                let (form_area, api_area) = model_form_areas(content_area);
+                if contains(form_area, mouse.column, mouse.row) {
+                    let form_inner = panel_inner(form_area);
+                    let clicked_field = contains(form_inner, mouse.column, mouse.row)
+                        .then(|| usize::from(mouse.row.saturating_sub(form_inner.y)));
+                    if let Some(index) = clicked_field
+                        && index < form.fields.len()
+                    {
+                        form.selected = index;
+                        if form.fields[index].toggle {
+                            toggle_form_field(&mut form.fields[index]);
+                        }
+                    }
+                } else if contains(api_area, mouse.column, mouse.row) {
+                    let api_inner = panel_inner(api_area);
+                    if mouse.row >= api_inner.y && mouse.row < api_inner.y + api_inner.height {
+                        let clicked_row = usize::from(mouse.row.saturating_sub(api_inner.y));
+                        form.pick_api_model(clicked_row);
                     }
                 }
             }
@@ -1342,6 +1373,7 @@ impl App {
                 .iter()
                 .map(|id| canonical_model_id(id))
                 .collect(),
+            disabled: BTreeSet::new(),
             locked,
             default_model,
             one_m,
@@ -1350,6 +1382,52 @@ impl App {
             search_active: false,
             status: "Space 切换启用 · 1 切换 1M · d 设为默认 · Enter 运行".into(),
         })
+    }
+
+    fn open_add_model_modal(&mut self) {
+        let cached = self
+            .selected_profile_id()
+            .and_then(|id| self.cache.profiles.get(&id).map(|c| c.models.clone()))
+            .unwrap_or_default();
+        self.modal = Some(Modal::Model(ModelForm::with_api_models(cached)));
+    }
+
+    fn fetch_api_models_for_form(&mut self) {
+        let Some(profile_id) = self.selected_profile_id() else {
+            return;
+        };
+        let profile = match self.config.profiles.get(&profile_id) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        match discovery::discover(&profile) {
+            Ok(models) => {
+                let count = models.len();
+                let cached = CachedModels {
+                    fetched_at: state::now_epoch(),
+                    models: models.clone(),
+                };
+                let _ = discovery::update_cache(&self.paths.cache, |cache| {
+                    cache.profiles.insert(profile_id.clone(), cached);
+                });
+                self.cache.profiles.insert(
+                    profile_id,
+                    CachedModels {
+                        fetched_at: state::now_epoch(),
+                        models: models.clone(),
+                    },
+                );
+                if let Some(Modal::Model(form)) = &mut self.modal {
+                    form.api_models = models;
+                    form.api_status = format!("✓ 从 API 获取到 {count} 个模型，点击即可填入");
+                }
+            }
+            Err(e) => {
+                if let Some(Modal::Model(form)) = &mut self.modal {
+                    form.api_status = format!("✗ API 获取失败: {e:#}");
+                }
+            }
+        }
     }
 
     fn init_provider_editor(&mut self) {
@@ -2023,7 +2101,7 @@ impl App {
                         }
                         KeyCode::Char('a') => {
                             self.commit_route_editor(editor)?;
-                            self.modal = Some(Modal::Model(ModelForm::new()));
+                            self.open_add_model_modal();
                             return Ok(());
                         }
                         KeyCode::Char('e') | KeyCode::Char('E') => {
@@ -2144,6 +2222,13 @@ impl App {
                 }
             }
             Modal::Model(form) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && (key.code == KeyCode::Char('f') || key.code == KeyCode::Char('r'))
+                {
+                    self.modal = Some(modal);
+                    self.fetch_api_models_for_form();
+                    return Ok(());
+                }
                 let outcome = handle_form_key(&mut form.fields, &mut form.selected, key);
                 if outcome == FormOutcome::Close {
                     return Ok(());
@@ -2508,14 +2593,16 @@ impl App {
                 .iter()
                 .map(|&idx| {
                     let model = &editor.catalog[idx];
-                    let is_req = editor.is_required(&model.id);
-                    let is_en = editor.enabled.contains(&model.id);
+                    let is_en = editor.is_enabled(&model.id);
                     let is_1m = editor.one_m.contains(&model.id);
                     let is_def = model.id == editor.default_model;
                     let is_man = manual_map.contains_key(model.id.as_str());
+                    let is_req = editor.is_required(&model.id) && !is_def;
 
-                    let marker = if is_def {
+                    let marker = if is_def && is_en {
                         "◆"
+                    } else if is_def && !is_en {
+                        "◇"
                     } else if is_req {
                         "◈"
                     } else if is_en {
@@ -2523,8 +2610,10 @@ impl App {
                     } else {
                         "○"
                     };
-                    let marker_color = if is_def {
+                    let marker_color = if is_def && is_en {
                         WARNING
+                    } else if is_def && !is_en {
+                        MUTED
                     } else if is_req || is_en {
                         CONNECTED
                     } else {
@@ -2701,11 +2790,13 @@ impl App {
             ),
         ]));
 
-        let status_span = if is_default {
+        let status_span = if is_default && is_enabled {
             Span::styled(
                 "◆ 默认启动模型",
                 Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
             )
+        } else if is_default && !is_enabled {
+            Span::styled("◇ 默认模型 (未启用)", Style::default().fg(WARNING))
         } else if is_enabled {
             Span::styled(
                 "● 已启用 (Enabled)",
@@ -3099,14 +3190,8 @@ impl App {
                 draw_modal_buttons(frame, area, &["Save", "Cancel"]);
             }
             Modal::Model(form) => {
-                draw_form(
-                    frame,
-                    area,
-                    " Manual model · Space toggles 1M ",
-                    &form.fields,
-                    form.selected,
-                );
-                draw_modal_buttons(frame, area, &["Save", "Cancel"]);
+                draw_model_form(frame, area, form);
+                draw_modal_buttons(frame, area, &["Fetch API (Ctrl+F)", "Save", "Cancel"]);
             }
             Modal::Route(editor) => {
                 let profile = &self.config.profiles[&editor.profile_id];
@@ -3424,7 +3509,18 @@ impl ProfileForm {
 }
 
 impl ModelForm {
+    #[cfg(test)]
     fn new() -> Self {
+        Self::with_api_models(vec![])
+    }
+
+    fn with_api_models(api_models: Vec<ModelEntry>) -> Self {
+        let count = api_models.len();
+        let api_status = if count > 0 {
+            format!("已加载缓存的 {count} 个 API 模型 (点击右侧直接填入)")
+        } else {
+            "点击下方 [Fetch API] 按钮可实时从网关获取可用模型".into()
+        };
         Self {
             fields: vec![
                 field("Model ID", ""),
@@ -3433,6 +3529,47 @@ impl ModelForm {
                 toggle_field("1M context", false),
             ],
             selected: 0,
+            api_models,
+            api_query: String::new(),
+            api_status,
+        }
+    }
+
+    fn filtered_api_models(&self) -> Vec<&ModelEntry> {
+        let q = self.api_query.trim().to_lowercase();
+        self.api_models
+            .iter()
+            .filter(|m| {
+                q.is_empty()
+                    || m.id.to_lowercase().contains(&q)
+                    || m.label
+                        .as_deref()
+                        .is_some_and(|l| l.to_lowercase().contains(&q))
+            })
+            .collect()
+    }
+
+    fn pick_api_model(&mut self, index: usize) {
+        let model = self.filtered_api_models().get(index).copied().cloned();
+        if let Some(model) = model {
+            let base_id = canonical_model_id(&model.id);
+            self.fields[0].value = base_id.clone();
+            self.fields[0].cursor = self.fields[0].char_count();
+            if let Some(label) = &model.label {
+                self.fields[1].value = label.clone();
+                self.fields[1].cursor = self.fields[1].char_count();
+            } else {
+                self.fields[1].value = base_id.clone();
+                self.fields[1].cursor = self.fields[1].char_count();
+            }
+            if let Some(desc) = &model.description {
+                self.fields[2].value = desc.clone();
+                self.fields[2].cursor = self.fields[2].char_count();
+            }
+            if has_1m_suffix(&model.id) {
+                self.fields[3].value = "true".into();
+            }
+            self.api_status = format!("✓ 已填入 API 模型: {base_id}");
         }
     }
 
@@ -3494,10 +3631,16 @@ impl RouteEditor {
     }
 
     fn is_required(&self, id: &str) -> bool {
+        if self.disabled.contains(id) {
+            return false;
+        }
         id == self.default_model || self.locked.contains(id)
     }
 
     fn is_enabled(&self, id: &str) -> bool {
+        if self.disabled.contains(id) {
+            return false;
+        }
         self.is_required(id) || self.enabled.contains(id)
     }
 
@@ -3526,12 +3669,31 @@ impl RouteEditor {
             self.status = "No model matches this search".into();
             return;
         };
-        if self.is_required(&id) {
-            self.status = format!("{id} is required by the current route and stays enabled");
-        } else if self.enabled.remove(&id) {
-            self.status = format!("Disabled {id}");
+        if self.is_enabled(&id) {
+            self.enabled.remove(&id);
+            self.disabled.insert(id.clone());
+            self.locked.remove(&id);
+            if self.default_model == id {
+                if let Some(next) = self
+                    .catalog
+                    .iter()
+                    .find(|m| self.is_enabled(&m.id) && m.id != id)
+                {
+                    self.default_model = next.id.clone();
+                    self.status =
+                        format!("Disabled {id}; default switched to {}", self.default_model);
+                } else {
+                    self.status = format!("Disabled {id}");
+                }
+            } else {
+                self.status = format!("Disabled {id}");
+            }
         } else {
+            self.disabled.remove(&id);
             self.enabled.insert(id.clone());
+            if !self.is_enabled(&self.default_model) {
+                self.default_model = id.clone();
+            }
             self.status = format!("Enabled {id}");
         }
     }
@@ -3554,6 +3716,7 @@ impl RouteEditor {
             self.status = "No model matches this search".into();
             return;
         };
+        self.disabled.remove(&id);
         self.enabled.remove(&id);
         self.default_model = id.clone();
         self.status = format!("Default model set to {id}");
@@ -3564,6 +3727,7 @@ impl RouteEditor {
         let mut count = 0;
         for index in indices {
             let id = self.catalog[index].id.clone();
+            self.disabled.remove(&id);
             if !self.is_required(&id) && self.enabled.insert(id) {
                 count += 1;
             }
@@ -3623,7 +3787,13 @@ fn normalize_model_catalog(models: Vec<ModelEntry>) -> Vec<ModelEntry> {
 }
 
 fn apply_route_editor(profile: &mut Profile, editor: &RouteEditor) {
-    profile.default_model = editor.effective_id(&editor.default_model);
+    if editor.is_enabled(&editor.default_model) {
+        profile.default_model = editor.effective_id(&editor.default_model);
+    } else if let Some(next) = editor.catalog.iter().find(|m| editor.is_enabled(&m.id)) {
+        profile.default_model = editor.effective_id(&next.id);
+    } else {
+        profile.default_model = editor.effective_id(&editor.default_model);
+    }
     for model in [
         &mut profile.aliases.opus,
         &mut profile.aliases.sonnet,
@@ -3634,18 +3804,23 @@ fn apply_route_editor(profile: &mut Profile, editor: &RouteEditor) {
     .into_iter()
     .flatten()
     {
-        *model = editor.effective_id(model);
+        let base = canonical_model_id(model);
+        if editor.is_enabled(&base) {
+            *model = editor.effective_id(model);
+        }
     }
     profile.fallback_models = profile
         .fallback_models
         .iter()
+        .filter(|id| editor.is_enabled(&canonical_model_id(id)))
         .map(|id| editor.effective_id(id))
         .collect();
+    let def_canonical = canonical_model_id(&profile.default_model);
     profile.enabled_models = editor
-        .enabled
+        .catalog
         .iter()
-        .filter(|id| !editor.is_required(id))
-        .map(|id| editor.effective_id(id))
+        .filter(|m| editor.is_enabled(&m.id) && m.id != def_canonical)
+        .map(|m| editor.effective_id(&m.id))
         .collect();
 }
 
@@ -3936,6 +4111,147 @@ fn draw_form(
             ),
         ]);
         frame.render_widget(Paragraph::new(line), rows[index]);
+    }
+}
+
+fn model_form_areas(area: Rect) -> (Rect, Rect) {
+    if area.width >= 80 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(38), Constraint::Min(36)])
+            .split(area);
+        (cols[0], cols[1])
+    } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(8), Constraint::Min(6)])
+            .split(area);
+        (rows[0], rows[1])
+    }
+}
+
+fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        panel(
+            " 添加模型 (Add Model) · 支持手动输入或从 API 候选列表直接选择 ",
+            true,
+        ),
+        area,
+    );
+    let inner = panel_inner(area);
+    let content_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let (form_area, api_area) = model_form_areas(content_area);
+
+    frame.render_widget(panel(" 模型信息 (Model Info) ", true), form_area);
+    let form_inner = panel_inner(form_area);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Length(1); form.fields.len()])
+        .split(form_inner);
+    for (index, field) in form.fields.iter().enumerate() {
+        let shown = if field.toggle {
+            if field.value == "true" {
+                "[● ON 1M 长上下文]".into()
+            } else {
+                "[○ OFF 标准上下文]".into()
+            }
+        } else if index == form.selected {
+            let chars: Vec<char> = field.value.chars().collect();
+            let cursor = field.cursor.min(chars.len());
+            let mut s = String::new();
+            for (i, &ch) in chars.iter().enumerate() {
+                if i == cursor {
+                    s.push('▌');
+                }
+                s.push(ch);
+            }
+            if cursor >= chars.len() {
+                s.push('▌');
+            }
+            s
+        } else {
+            field.value.clone()
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{:>13}  ", field.label),
+                Style::default().fg(if index == form.selected { ROUTE } else { MUTED }),
+            ),
+            Span::styled(
+                shown,
+                Style::default()
+                    .fg(if field.toggle && field.value == "true" {
+                        CONNECTED
+                    } else {
+                        Color::Reset
+                    })
+                    .add_modifier(if index == form.selected {
+                        Modifier::REVERSED
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ]);
+        if index < rows.len() {
+            frame.render_widget(Paragraph::new(line), rows[index]);
+        }
+    }
+
+    let api_count = form.api_models.len();
+    let api_title = format!(" ⟳ 网关 API 可选模型 ({api_count}) ");
+    frame.render_widget(panel(&api_title, false), api_area);
+    let api_inner = panel_inner(api_area);
+    if form.api_models.is_empty() {
+        let msg = vec![
+            Line::raw(""),
+            Line::styled(" 暂无已缓存的 API 模型", Style::default().fg(MUTED)),
+            Line::raw(""),
+            Line::styled(
+                " 点击下方 [Fetch API (Ctrl+F)] 按钮",
+                Style::default().fg(ROUTE),
+            ),
+            Line::styled(
+                " 即可实时从网关获取全部可用模型列表",
+                Style::default().fg(ROUTE),
+            ),
+            Line::raw(""),
+            Line::styled(
+                format!(" 提示: {}", form.api_status),
+                Style::default().fg(WARNING),
+            ),
+        ];
+        frame.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), api_inner);
+    } else {
+        let items: Vec<ListItem> = form
+            .filtered_api_models()
+            .iter()
+            .take(usize::from(api_inner.height))
+            .map(|model| {
+                let mut spans = vec![
+                    Span::styled("● ", Style::default().fg(CONNECTED)),
+                    Span::styled(
+                        &model.id,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                if let Some(label) = &model.label {
+                    spans.push(Span::styled(
+                        format!(" ({label})"),
+                        Style::default().fg(MUTED),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        frame.render_widget(List::new(items), api_inner);
     }
 }
 
@@ -4678,6 +4994,11 @@ fn modal_area_for(modal: &Modal, screen: Rect) -> Rect {
             22.min(screen.height.saturating_sub(2)),
             screen,
         ),
+        Modal::Model(_) => centered_rect(
+            86.min(screen.width.saturating_sub(2)),
+            20.min(screen.height.saturating_sub(2)),
+            screen,
+        ),
         _ => modal_area(screen),
     }
 }
@@ -4816,7 +5137,7 @@ fn modal_button_rects(area: Rect, count: usize) -> Vec<Rect> {
     let count = u16::try_from(count).unwrap_or(u16::MAX);
     let gap = if count >= 5 { 1_u16 } else { 2_u16 };
     let available = area.width.saturating_sub(4);
-    let width = 12_u16
+    let width = 22_u16
         .min(available.saturating_sub(gap.saturating_mul(count.saturating_sub(1))) / count.max(1));
     let total = width
         .saturating_mul(count)
@@ -5185,6 +5506,7 @@ mod tests {
             original_profile: interactive_test_app().config.profiles["one"].clone(),
             catalog: models,
             enabled: BTreeSet::new(),
+            disabled: BTreeSet::new(),
             locked: BTreeSet::new(),
             default_model: "alpha".into(),
             one_m: BTreeSet::new(),
@@ -5272,6 +5594,7 @@ mod tests {
             original_profile: profile.clone(),
             catalog: profile.models.clone(),
             enabled: BTreeSet::from(["model-b".into()]),
+            disabled: BTreeSet::new(),
             locked: BTreeSet::from(["model-a".into()]),
             default_model: "model-a".into(),
             one_m: BTreeSet::from(["model-a".into(), "model-b".into()]),
@@ -5379,6 +5702,7 @@ mod tests {
             original_profile: interactive_test_app().config.profiles["one"].clone(),
             catalog,
             enabled: BTreeSet::new(),
+            disabled: BTreeSet::new(),
             locked: BTreeSet::new(),
             default_model: "default-m".into(),
             one_m: BTreeSet::new(),
@@ -5655,6 +5979,94 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(app.modal, Some(Modal::Model(_))));
+    }
+
+    #[test]
+    fn model_can_be_disabled_and_enabled_freely() {
+        let mut app = interactive_test_app();
+        app.view_mode = ViewMode::Provider;
+        app.init_provider_editor();
+        let editor = app.provider_editor.as_mut().unwrap();
+
+        // Initially default model "model-a" is enabled
+        assert!(editor.is_enabled("model-a"));
+        assert_eq!(editor.default_model, "model-a");
+
+        // Select model-a (index 0) and toggle it to disable
+        editor.selected = 0;
+        editor.toggle_selected();
+        assert!(!editor.is_enabled("model-a"));
+        // Since model-b was enabled, default model should be switched to model-b
+        assert_eq!(editor.default_model, "model-b");
+
+        // Toggle model-a again to re-enable it
+        editor.toggle_selected();
+        assert!(editor.is_enabled("model-a"));
+
+        // Single model profile toggle test (like flatkey)
+        let single_catalog = vec![ModelEntry {
+            id: "only-model".into(),
+            label: None,
+            description: None,
+        }];
+        let mut single_editor = RouteEditor {
+            profile_id: "single".into(),
+            original_profile: app.config.profiles["one"].clone(),
+            catalog: single_catalog,
+            enabled: BTreeSet::new(),
+            disabled: BTreeSet::new(),
+            locked: BTreeSet::new(),
+            default_model: "only-model".into(),
+            one_m: BTreeSet::new(),
+            query: String::new(),
+            selected: 0,
+            search_active: false,
+            status: String::new(),
+        };
+        assert!(single_editor.is_enabled("only-model"));
+        single_editor.toggle_selected();
+        assert!(!single_editor.is_enabled("only-model"));
+        assert!(single_editor.status.contains("Disabled only-model"));
+
+        single_editor.toggle_selected();
+        assert!(single_editor.is_enabled("only-model"));
+        assert!(single_editor.status.contains("Enabled only-model"));
+    }
+
+    #[test]
+    fn model_form_api_model_picker_populates_fields() {
+        let api_models = vec![
+            ModelEntry {
+                id: "qwen-max-latest".into(),
+                label: Some("Qwen Max Latest".into()),
+                description: Some("Alibaba Cloud flagship model".into()),
+            },
+            ModelEntry {
+                id: "deepseek-v4-flash[1m]".into(),
+                label: Some("DeepSeek V4 Flash".into()),
+                description: Some("Fast reasoning model".into()),
+            },
+        ];
+
+        let mut form = ModelForm::with_api_models(api_models);
+        assert_eq!(form.filtered_api_models().len(), 2);
+
+        // Filter by keyword "deep"
+        form.api_query = "deep".into();
+        assert_eq!(form.filtered_api_models().len(), 1);
+        assert_eq!(form.filtered_api_models()[0].id, "deepseek-v4-flash[1m]");
+
+        // Pick the filtered model (index 0)
+        form.pick_api_model(0);
+        assert_eq!(form.fields[0].value, "deepseek-v4-flash");
+        assert_eq!(form.fields[1].value, "DeepSeek V4 Flash");
+        assert_eq!(form.fields[2].value, "Fast reasoning model");
+        assert_eq!(form.fields[3].value, "true");
+
+        // Form to model conversion
+        let model = form.to_model();
+        assert_eq!(model.id, "deepseek-v4-flash[1m]");
+        assert!(model.label.unwrap().contains("1M"));
     }
 
     fn interactive_test_app() -> App {
