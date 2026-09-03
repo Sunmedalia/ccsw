@@ -72,6 +72,13 @@ pub struct ProxyStatus {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProxyServiceStatus {
+    pub installed: bool,
+    pub manager: &'static str,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 struct ProxyPaths {
     registry: PathBuf,
     registry_lock: PathBuf,
@@ -349,6 +356,29 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
         listen: registry.listen,
         routes: registry.routes.len(),
         pid,
+    })
+}
+
+pub fn service_status() -> Result<ProxyServiceStatus> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set")?;
+    #[cfg(target_os = "macos")]
+    let (manager, path) = (
+        "launchd",
+        home.join("Library/LaunchAgents/com.ccsw.proxy.plist"),
+    );
+    #[cfg(target_os = "linux")]
+    let (manager, path) = (
+        "systemd user",
+        home.join(".config/systemd/user/ccsw-proxy.service"),
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let (manager, path) = ("unsupported", home.join(".ccsw-proxy-service"));
+    Ok(ProxyServiceStatus {
+        installed: path.exists(),
+        manager,
+        path,
     })
 }
 

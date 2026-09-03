@@ -33,45 +33,59 @@ ccsw
 cargo run
 ```
 
-## 快捷键
+## 快捷键与层级化操作逻辑
+
+CCSW 采用现代两层层级式（Two-Tier / Drill-Down）交互模型：启动后直接呈现 **Router 厂商列表首页**；选中厂商后按 `Enter` 或鼠标点击下钻进入 **厂商详情与模型管理子页面**；随时按 `Esc` 或点击顶部 `[‹ 返回]` 平滑回退到首页。
+
+### 1. 厂商首页（Home View）
 
 | 按键 | 动作 |
 | --- | --- |
-| `↑/↓`、`j/k` | 移动选择 |
-| `Tab`、`←/→` | 切换 Routes、Enabled models 与 Route details |
-| `Enter` | 在 Routes 进入模型选择；在 Models 启动 Claude；在 Route details 管理模型 |
-| `N` | 使用当前路由新建会话 |
-| `m`、`Space` | 切换 Resume/New 会话模式 |
-| `/` | 打开模型管理并立即搜索 |
-| `1` | 为当前模型切换 `[1m]` 上下文 |
-| `p` | 保存并应用到 Claude 全局配置 |
-| `n/e/d` | 新建路由、管理模型、删除路由 |
-| `E` | 编辑 API Endpoint、API Key/Token 和角色映射 |
-| `a/x` | 手动添加、删除模型 |
-| `r` 或 `t` | 自动获取提供商模型并测试连接 |
-| `A` | 在首页启用当前 Profile 的全部可用模型 |
-| `p` | 在首页将所有 Profile 的已启用模型同步到 Claude `/model` |
-| `?` | 帮助 |
-| `q` | 退出 |
-| 鼠标左键 | 选择配置/模型，点击底部开关和操作按钮 |
-| 鼠标滚轮/触控板 | 滚动鼠标所在的配置或模型列表 |
-| 滚动条 | 点击轨道跳转；按住左键拖动滚动 |
+| `↑/↓`、`j/k` | 在厂商卡片列表中上下移动光标 |
+| `Enter`、鼠标单击 | **进入该厂商**：下钻进入该厂商的模型列表与配置详情页 |
+| `n` | 新建厂商路由配置 |
+| `e`、`E` | 编辑当前选中的厂商基础配置（API Endpoint、Key/Token 与角色映射） |
+| `d`、`Delete` | 删除当前选中的厂商路由（弹窗确认） |
+| `r`、`t` | 自动探测网络连接并获取厂商最新模型目录 |
+| `m`、`Space` | 切换会话模式（Resume 恢复上次会话 / New 开启全新会话） |
+| `R` | **直接恢复会话**：以 Resume 模式直接拉起 Claude 并恢复该厂商最新会话 |
+| `N` | **直接新建会话**：以 New 模式直接拉起独立的新 Claude 会话 |
+| `p` | 将所有厂商的已启用模型聚合同步到 Claude `/model` |
+| `P` | 打开后台代理与开机自启动管理面板（查看状态/端口/PID，支持 Start/Stop/开机自启） |
+| `?` | 打开详细帮助面板（按 `Esc`、`q` 或 `Enter` 关闭） |
+| `q` | 退出程序 |
 
-底部操作栏提供 Launch、Sync all、Resume/New、Test、Help 和 Quit 按钮；窄窗口还会显示 Routes/Models/Details 面板开关。宽窗口采用 Routes / Enabled models / Route details 三栏布局，模型列表占据最大的工作区域；窄窗口使用页签和上下分区，避免端点、模型名和操作按钮互相挤压。
+### 2. 厂商详情与模型子页面（Provider Detail View）
 
-Route details 底部直接提供 `[Enable all]`、`[Sync all → Claude]`、`[Manage models]` 和 `[Edit route]`。`Enable all` 会打开当前 Profile 的全部已发现和手动模型；`Sync all → Claude` 会把所有 Profile 当前启用的模型同步到 Claude。点击 `[Edit route]`，或者在主界面按 `E`，即可修改 API Format、API Endpoint、认证类型及 API Key/Token。API Format 和认证类型使用可循环选择控件，按 `Enter`、`Space` 或左右方向键切换，也可以鼠标点击。
+| 按键 | 动作 |
+| --- | --- |
+| `Esc`、点击顶部 `[‹ 返回]` | **返回厂商首页**：退出当前厂商详情，回退至首页列表 |
+| `Tab`、`h/l`、`←/→` | 在左侧模型列表（Models）与右侧配置详情（Details）间顺滑切换焦点 |
+| `↑/↓`、`j/k` | 在模型列表中上下浏览模型 |
+| `Enter` | **启动 Claude**：在模型列表中以选中的模型直接启动 Claude |
+| `d` | **设为默认**：将当前选中的模型设为该厂商的默认模型（原默认模型保留在已启用列表中） |
+| `1` | **1M 上下文切换**：一键为选中模型开启/关闭 `[1m]` 扩展上下文规格 |
+| `x`、`Delete` | **安全禁用/删除**：禁用选中模型（若为手动添加的自定义模型则弹窗确认删除） |
+| `/` | 打开全量模型目录与搜索弹窗 |
+| `a` | 手动为当前厂商添加自定义模型 |
+| `A` | 一键启用当前厂商的所有可用模型 |
+| `E` | 编辑当前厂商的基础 Endpoint、密钥与角色映射 |
+| `p` | 同步所有厂商模型到 Claude |
 
-在 Route details 上按 `Enter`，或者按 `/`、`e`，会打开同页模型管理器。Provider 和 Credential 只读显示；输入 `/` 搜索模型，使用 `↑/↓` 选择，`Enter`/`Space` 打开或关闭模型，`1` 切换 1M 上下文，`d` 设为默认模型，`Ctrl+S` 保存。`◆` 表示默认或角色映射所需模型，不能直接关闭；`●` 表示已启用，`○` 表示未启用。长列表右侧显示滚动条，支持滚轮和触控板。
+### 3. 表单与输入框操作
 
-模型管理器底部将操作分成两行，提供 `Enable`、`1M`、`Default`、`Fetch`（自动获取）、`Add`（手动添加）、`Save`、`Sync all`、`Edit route` 和 `Cancel`。`Sync all` 会先保存当前勾选，再把所有 Profile 的已启用模型合并写入 `~/.claude/settings.json`。Claude 连接统一的 CCSW 本地聚合代理；代理根据模型名把请求发往对应的 Anthropic、OpenAI Chat 或 OpenAI Responses API。其他 Claude 设置会保留，旧文件备份为 `settings.json.ccsw-backup`。
+- **行内光标编辑**：文本字段支持 `←` / `→` 逐字移动光标，`Home` / `Ctrl+A` 跳到行首，`End` / `Ctrl+E` 跳到行尾，`Delete` 向后删除，`Backspace` 向前删除，`Ctrl+U` 一键清空。
+- **流程化跳转**：在文本字段中按 `Enter` 自动跳至下一个字段；在最后一个字段按 `Enter` 直接提交保存。
+- **选项切换**：在单选/下拉选项或开关字段中，按 `Space`、`Enter` 或左右键切换选项。
+- **快速保存/取消**：随时按 `Ctrl+S` 保存表单，按 `Esc` 取消并返回。
 
-同步后可以退出 CCSW，直接运行 `claude`。原生 `/model` 会同时显示不同 API 的模型，例如 `ark::deepseek-v4-flash[1m]` 和 `openai::gpt-5`；显示标签包含 Profile 名称。`profile::model` 仅用于 CCSW 本地路由，代理转发时会恢复上游真实模型 ID。当前选中的 Profile 决定首次同步后的默认模型，但不会限制 `/model` 中可选择的其他提供商。
+### 4. 模型管理器（Route Editor）
 
-1M 开关通过模型 ID 的 `[1m]` 后缀持久化，例如 `glm-5.3-flash` 会变成 `glm-5.3-flash[1m]`。只有网关支持该上下文规格时才应开启。
-
-手动添加模型时，表单也包含 `1M context [○ OFF]` 开关。使用 `Tab` 或方向键移动到该行，按 `Space`/`Enter` 切换，或者直接用鼠标点击。开启后 CCSW 会自动为 Model ID 添加 `[1m]`，不需要手动输入后缀。
-
-高级表单中可以点击字段和 Save/Cancel 按钮，也可以继续使用 `Tab` 切换字段、`Ctrl+S` 保存、`Esc` 取消。
+- **搜索与列表切换**：按 `/` 或 `Tab` 激活搜索框；在搜索框中按 `Tab` 或回车后可直接在过滤结果中 `↑/↓` 浏览；按 `Esc` 优先清空搜索词，再次按 `Esc` 退出。
+- **回车即切换**：在搜索输入状态下直接按 `Enter` 即可切换当前高亮模型的启用/禁用状态。
+- **批量操作**：按 `A`（Enable All）一键启用所有匹配模型；按 `C`（Clear）一键禁用所有非必需模型（保留默认与系统所需模型）。
+- **保存与退出**：按 `s` 或 `Ctrl+S` 保存并生效，按 `Esc` 取消退出。
+- **鼠标交互**：点击搜索栏激活输入；点击已有选中项或复选框标记直接切换启用状态；点击底部按钮执行对应操作。
 
 ## 配置文件
 
@@ -173,6 +187,8 @@ ccsw proxy stop
 ```
 
 默认监听 `127.0.0.1:17321`。若端口冲突，可以先执行 `ccsw proxy start --listen 127.0.0.1:19021`，再重新同步。
+
+这些操作也可以全部在 TUI 的 Proxy 管理页完成。`Sync all` 会自动启动后台代理，但不会自动安装开机启动；需要在 Proxy 页点击 `Enable at login`。安装完成后可以退出 TUI，代理由 macOS launchd 或 Linux systemd user service 管理。
 
 同步后即使退出 CCSW，后台代理仍会运行，因此可以直接启动 `claude`。如需机器重启后自动恢复，显式安装用户服务：
 
