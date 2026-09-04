@@ -1,110 +1,195 @@
 # CCSW
 
-CCSW 是一个面向 Claude Code 的多网关、多模型 TUI。它让每个 Claude 进程使用独立的 Base URL、凭据和模型映射，不需要在多个终端之间反复覆盖 `~/.claude/settings.json`。
+[![CI](https://github.com/Sunmedalia/ccsw/actions/workflows/ci.yml/badge.svg)](https://github.com/Sunmedalia/ccsw/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## 它解决什么
+CCSW 是 Claude Code 的多厂商、多模型终端管理器。每次启动的 Claude 进程都使用独立的 Endpoint、凭据和模型映射，因此不同终端不会互相覆盖配置。
 
-- 同时运行配置 A 和 B，两个 Claude 进程不会互相覆盖连接信息。
-- 在 Claude 内使用原生 `/model`，只显示当前配置档可用的模型。
-- 退出 Claude 后返回 CCSW，换一个网关或模型并恢复同一段会话。
-- 用 TOML 和 TUI 共同管理默认模型、角色别名、子代理模型和回退链。
-- 从 Anthropic 兼容网关的 `/v1/models` 自动发现模型，失败时保留缓存和手工模型。
-- 将网关模型目录与启用列表分开；只有你打开的模型才会进入 CCSW 和 Claude `/model`。
-- 一键把当前路由和启用模型同步到 Claude 全局设置，之后直接运行 `claude` 也能使用。
-- 把 Claude Code 的 Anthropic Messages 请求转换到 OpenAI-compatible Chat Completions 或 Responses 端点。
+它提供三个核心能力：
 
-普通的 `ccsw run` 和 TUI Launch 不会修改 `~/.claude/settings.json`，它们通过每个子进程独立的环境、`--model` 和临时 `--settings` 完成路由。只有显式点击 `Sync all` 或执行 `ccsw apply` 才会修改并备份全局设置。
+- 在 TUI 中管理厂商、模型目录、默认模型、角色别名与 1M 上下文。
+- 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
+- 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-## 要求与安装
+## 安装
 
-- macOS 或 Linux
-- Rust 1.88+（从源码安装时）
-- Claude Code 2.1.242+
+### 下载 Release
+
+当前提供 macOS Apple Silicon 与 Linux x86_64 二进制：
 
 ```sh
+# macOS Apple Silicon
+curl -L https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-macos-arm64.tar.gz | tar -xz
+
+# Linux x86_64
+curl -L https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-linux-x86_64.tar.gz | tar -xz
+
+chmod +x ccsw
+sudo install ccsw /usr/local/bin/ccsw
+```
+
+### 从源码安装
+
+需要 Rust 1.88+：
+
+```sh
+git clone https://github.com/Sunmedalia/ccsw.git
+cd ccsw
 cargo install --path .
-ccsw doctor
-ccsw
 ```
 
-当前也可以直接开发运行：
+CCSW 支持 macOS 与 Linux，需要 Claude Code 2.1.242 或更高版本。
+
+## 快速开始
 
 ```sh
-cargo run
+ccsw doctor   # 检查 Claude、配置权限与网关连接
+ccsw          # 打开 TUI
 ```
 
-## 快捷键与层级化操作逻辑
+首次使用时：
 
-CCSW 采用现代两层层级式（Two-Tier / Drill-Down）交互模型：启动后直接呈现 **Router 厂商列表首页**；选中厂商后按 `Enter` 或鼠标点击下钻进入 **厂商详情与模型管理子页面**；随时按 `Esc` 或点击顶部 `[‹ 返回]` 平滑回退到首页。
+1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和默认模型。
+2. 进入厂商详情，按 `r` 获取模型目录。
+3. 用 `Space` 启用需要的模型；禁用只暂停模型，不会删除模型。
+4. 按 `Enter` 直接启动 Claude，或按 `p` 将全部启用模型同步到 Claude `/model`。
 
-### 1. 厂商首页（Home View）
+首次运行若检测到 `~/.claude/settings.json`，CCSW 会显示脱敏导入预览。也可以手动执行：
 
-| 按键 | 动作 |
+```sh
+ccsw import
+ccsw import --yes
+```
+
+## TUI 导航
+
+界面会随终端尺寸调整。宽窗口并排显示模型与详情；窄窗口改为单面板，并让厂商信息自动换行。任何主页面按 `?` 都会打开当前场景对应的 Help：
+
+- `←/→` 或 `Tab`：切换 Home、All Enabled、Provider、Forms 分区。
+- `↑/↓`：滚动当前帮助内容。
+- `1`–`4`：直接打开对应分区。
+- `Esc`、`q`、`?` 或 `Enter`：关闭 Help。
+
+状态标记：`●` 已启用、`○` 已禁用、`◆` 默认模型、`◈` 角色依赖模型。
+
+### Home · 厂商首页
+
+首页第一行是 **All Enabled**，其后是所有厂商。
+
+| 按键 | 操作 |
 | --- | --- |
-| `↑/↓`、`j/k` | 在厂商卡片列表中上下移动光标 |
-| `Enter`、鼠标单击 | **进入该厂商**：下钻进入该厂商的模型列表与配置详情页 |
-| `n` | 新建厂商路由配置 |
-| `e`、`E` | 编辑当前选中的厂商基础配置（API Endpoint、Key/Token 与角色映射） |
-| `d`、`Delete` | 删除当前选中的厂商路由（弹窗确认） |
-| `r`、`t` | 自动探测网络连接并获取厂商最新模型目录 |
-| `m`、`Space` | 切换会话模式（Resume 恢复上次会话 / New 开启全新会话） |
-| `R` | **直接恢复会话**：以 Resume 模式直接拉起 Claude 并恢复该厂商最新会话 |
-| `N` | **直接新建会话**：以 New 模式直接拉起独立的新 Claude 会话 |
-| `p` | 将所有厂商的已启用模型聚合同步到 Claude `/model` |
-| `P` | 打开后台代理与开机自启动管理面板（查看状态/端口/PID，支持 Start/Stop/开机自启） |
-| `?` | 打开详细帮助面板（按 `Esc`、`q` 或 `Enter` 关闭） |
-| `q` | 退出程序 |
+| `↑/↓`、`j/k` | 选择 All Enabled 或厂商 |
+| `Enter`、鼠标单击 | 打开选中项 |
+| `Space` | 启用/禁用当前厂商，并同步 Claude `/model` |
+| `n` / `e` / `d` | 新建 / 编辑 / 删除厂商 |
+| `r`、`t` | 测试连接并刷新模型目录 |
+| `m` / `R` / `N` | 切换启动模式 / 恢复会话 / 新建会话 |
+| `p` / `P` | 同步全部模型 / 打开代理管理器 |
+| `?` / `q` | 帮助 / 退出 |
 
-### 2. 厂商详情与模型全量管理页（Provider View & Catalog Showcase）
+禁用厂商后，它的配置、模型和代理路由立即失效；其模型也会从 All Enabled 与 Claude `/model` 中移除。重新启用厂商会恢复其模型状态。
 
-进入厂商详情后，**直接全屏呈现全量模型目录与搜索栏，无需再按 `/` 打开多余弹窗**：
+### All Enabled · 全部模型
 
-- **左侧模型全量目录**：
-  - 顶部搜索框：按 `/` 或直接点击激活，输入关键字实时模糊筛选全量模型（Esc 清空搜索词或退出搜索）。
-  - 全量模型列表：直观呈现 `◆` 默认模型、`◈` 系统依赖、`●` 已启用、`○` 未启用状态，以及 `1M` 扩展标记与 `[自定义]` 标签。
-- **右侧独立展出卡片**：
-  - **当前选中模型独立展出卡片（Selected Model Showcase）**：精美呈现光标选中模型的完整名称、Canonical 模型 ID、状态标识、上下文规格（200k / 1M）、来源与角色别名映射（Sonnet/Opus/Haiku），以及直观的操作快捷指南。
-  - **厂商基础连接与配置卡片**：展示 Endpoint 路由地址、协议格式、Token 掩码、Claude /model 聚合统计及快捷操作按钮。
+该页面聚合所有已启用厂商的已配置模型。已禁用模型仍会保留在列表中，方便再次启用。
 
-| 按键 | 动作 |
+| 按键 | 操作 |
 | --- | --- |
-| `Esc`、点击顶部 `[‹ 返回]` | **返回厂商首页**：退出当前厂商详情，回退至首页列表（搜索中按 Esc 则优先清空并退出搜索） |
-| `/` | **激活模型搜索框**：快速模糊过滤全量模型目录 |
-| `↑/↓`、`j/k` | **浏览模型**：在全量模型目录中移动光标，右侧独立展出卡片实时同步展示当前模型详细属性 |
-| `Space` | **切换启用状态**：一键切换当前高亮模型的启用/禁用（`●` 已启用 / `○` 未启用） |
-| `d` | **设为默认**：将当前选中的模型设为该厂商的默认启动模型（`◆` 默认） |
-| `1` | **1M 上下文切换**：一键为选中模型开启/关闭 `[1m]` 扩展长上下文规格 |
-| `Enter` | **启动 Claude**：以当前选中的模型直接启动 Claude（若未启用将自动激活） |
-| `m` | **切换启动模式**：在 Resume（恢复上次会话）与 New（新建独立会话）间切换 |
-| `R` / `N` | **快捷拉起**：以选中模型直接恢复最新会话 / 新建独立会话 |
-| `A` / `C` | **批量操作**：一键启用当前筛选出的全部模型 / 清空非必要启用模型 |
-| `x`、`Delete` | **安全禁用/删除**：禁用选中模型（若为手动添加的自定义模型则弹窗确认删除） |
-| `a` | 手动为当前厂商添加自定义模型 |
-| `E` | 编辑当前厂商的基础 Endpoint、密钥与角色映射 |
-| `p` | 同步所有厂商模型到 Claude |
+| `↑/↓`、`j/k` | 跨厂商选择模型 |
+| `PgUp/PgDn`、`Home/End` | 翻页或跳转首尾 |
+| `Space` | 启用/禁用模型，并实时同步 Claude `/model` |
+| `Enter` | 打开模型所属厂商 |
+| `Esc` | 返回首页 |
 
-### 3. 表单与输入框操作
+### Provider · 厂商与模型
 
-- **行内光标编辑**：文本字段支持 `←` / `→` 逐字移动光标，`Home` / `Ctrl+A` 跳到行首，`End` / `Ctrl+E` 跳到行尾，`Delete` 向后删除，`Backspace` 向前删除，`Ctrl+U` 一键清空。
-- **流程化跳转**：在文本字段中按 `Enter` 自动跳至下一个字段；在最后一个字段按 `Enter` 直接提交保存。
-- **选项切换**：在单选/下拉选项或开关字段中，按 `Space`、`Enter` 或左右键切换选项。
-- **快速保存/取消**：随时按 `Ctrl+S` 保存表单，按 `Esc` 取消并返回。
+厂商详情页直接展示完整模型目录、搜索框和当前模型信息，不再需要额外的模型管理弹窗。
 
-## 配置文件
+| 按键 | 操作 |
+| --- | --- |
+| `↑/↓`、`j/k` | 浏览模型；窄窗口用 `Tab` 切换模型与详情面板 |
+| `/` | 搜索模型；搜索中按 `Esc` 清空或退出搜索 |
+| `Space` | 启用/禁用模型 |
+| `d` / `1` | 设为默认模型 / 切换 `[1m]` 上下文 |
+| `Enter` / `R` / `N` | 运行选中模型 / 恢复会话 / 新建会话 |
+| `A` / `C` | 启用筛选结果 / 清空非必要启用项 |
+| `a` | 添加自定义模型，并选择是否立即启用 |
+| `x`、`Delete` | 删除自定义模型；网关模型不能删除 |
+| `E` / `r` / `p` / `P` | 编辑厂商 / 刷新目录 / 同步 / 代理 |
 
-默认路径是 `~/.config/ccsw/config.toml`。可通过 `CCSW_CONFIG` 或 `XDG_CONFIG_HOME` 覆盖：
+### Forms · 表单
+
+| 按键 | 操作 |
+| --- | --- |
+| `↑/↓`、`Tab/Shift+Tab` | 切换字段 |
+| `Enter` | 确认选项或进入下一字段；最后一项直接保存 |
+| `←/→`、`Home/End` | 移动文本光标 |
+| `Backspace/Delete`、`Ctrl+U` | 删除字符 / 清空字段 |
+| `Space`、`←/→` | 切换开关或选项 |
+| `Ctrl+F`、`Ctrl+R` | 在自定义模型表单中，从厂商 API 刷新可选模型 |
+| `Ctrl+S` / `Esc` | 保存 / 取消 |
+
+## 模型状态规则
+
+CCSW 将“模型存在”和“模型启用”分开处理：
+
+- 添加或发现模型会把它放入目录；未启用时模型仍然存在。
+- `Space` 只切换启用状态，不删除目录项。
+- `x` 或 `Delete` 只删除手动添加的自定义模型，并要求确认。
+- `disabled_models` 记录显式禁用项，因此重启后不会被默认模型或角色引用意外重新启用。
+- `model-a` 与 `model-a[1m]` 是同一个目录模型；`[1m]` 只表示上下文规格，导入和发现时不会生成重复项。
+
+## Claude `/model` 同步
+
+| 操作 | 是否修改 `~/.claude/settings.json` |
+| --- | --- |
+| TUI 中启动 Claude、`ccsw run` | 否。使用子进程环境、`--model` 和临时 `--settings` |
+| 按 `p`、执行 `ccsw apply` | 是。先备份，再聚合所有已启用厂商和模型 |
+| 在 Home 切换厂商 | 是。实时移除或恢复该厂商模型 |
+| 在 All Enabled 切换模型 | 是。实时更新模型选择器 |
+
+Claude 原生 `/model` 中按 `Enter` 可能写入 Claude 的全局默认模型，但不会改变 CCSW 以 `--model` 启动的实例。只想修改当前会话时，在 Claude 的模型选择器中按 `s`。
+
+## 命令行
+
+```sh
+# 直接启动指定厂商和模型
+ccsw run --profile local --model claude-sonnet-4-6
+
+# 恢复指定会话，并向 Claude 透传参数
+ccsw run --profile local --resume SESSION_UUID -- --permission-mode plan
+
+# 启动 TUI，并向之后启动的 Claude 透传参数
+ccsw -- --permission-mode plan --add-dir ../shared
+
+# 同步全部已启用模型；local 的默认模型作为 Claude 初始默认值
+ccsw apply --profile local
+
+ccsw config path
+ccsw doctor
+ccsw proxy status
+```
+
+CCSW 自己管理 `--model`、`--resume`、`--continue`、`--session-id` 和 `--fallback-model`，不要把这些选项放在透传参数中。一个外部 `--settings` 可以透传，CCSW 会保留其内容并加入会话跟踪 Hook 与当前模型选择器。
+
+## 配置
+
+默认配置路径为 `~/.config/ccsw/config.toml`，可以用 `CCSW_CONFIG` 或 `XDG_CONFIG_HOME` 覆盖。
 
 ```toml
 version = 2
 
 [profiles.local]
 name = "Local gateway"
+enabled = true
 base_url = "http://127.0.0.1:18080"
 api_format = "anthropic"
 default_model = "claude-sonnet-4-6"
 subagent_model = "claude-haiku-4-5"
 fallback_models = ["claude-haiku-4-5"]
 enabled_models = ["claude-sonnet-4-6"]
+disabled_models = ["claude-opus-4-7"]
 
 [profiles.local.credential]
 kind = "bearer"
@@ -121,93 +206,47 @@ label = "Sonnet 4.6"
 description = "Daily coding"
 ```
 
-`api_format` 支持：
+`api_format` 支持 `anthropic`、`openai-chat` 和 `openai-responses`。Endpoint 可以填写服务根地址、带 `/v1` 的地址或完整生成端点，CCSW 会规范化路径并保留查询参数。
 
-- `anthropic`：直接使用 Anthropic Messages-compatible API。
-- `openai-chat`：通过 CCSW 本地代理转发到 `/v1/chat/completions`。
-- `openai-responses`：通过 CCSW 本地代理转发到 `/v1/responses`。
+认证类型：
 
-API URL 可以填写服务根地址、已有 `/v1` 的地址或完整生成端点。CCSW 会规范化路径并保留查询参数。
+- `bearer`：`Authorization: Bearer`。
+- `x-api-key`：`x-api-key` 请求头。
+- `api-key`：字面量 `api-key` 请求头，适用于 Azure 类端点。
+- `none`：无认证的本地网关。
 
-认证类型支持：
+版本 1 配置会在内存中自动迁移；旧配置缺少 `enabled` 时默认启用。下次保存后写为版本 2。
 
-- `bearer`：作为 `Authorization: Bearer` 使用。
-- `x-api-key`：作为 `x-api-key` 使用。
-- `api-key`：作为字面量 `api-key` 请求头使用，适用于 Azure 类兼容端点。
-- `none`：本地无认证网关。
+## 本地代理
 
-版本 1 配置会在内存中自动迁移：旧 `auth-token` 变为 `bearer`，旧 `api-key` 保留原来的 `x-api-key` 语义。下次保存时写成版本 2。
-
-配置包含明文上游 Token，CCSW 在 Unix 上强制使用 `0600` 权限；上游 Token 不会写入状态、缓存或运行日志。OpenAI 转发代理会在私有状态文件中保存一个独立的本地 Token。
-
-`enabled_models` 只保存额外打开的目录模型。默认模型、角色别名、子代理模型和回退模型始终保持启用，因此旧配置不需要迁移，也不会因为模型发现结果过多而全部启用。
-
-首次运行会检测 `~/.claude/settings.json`。确认导入前只显示脱敏预览，也可以单独执行：
-
-```sh
-ccsw import
-ccsw import --yes
-```
-
-## 命令行模式
-
-绕过 TUI 直接启动：
-
-```sh
-ccsw run --profile local --model claude-sonnet-4-6
-ccsw run --profile local --resume SESSION_UUID -- --permission-mode plan
-```
-
-在 TUI 启动时透传参数：
-
-```sh
-ccsw -- --permission-mode plan --add-dir ../shared
-```
-
-CCSW 自己管理 `--model`、`--resume`、`--continue`、`--session-id` 和 `--fallback-model`，这些参数不能放在透传区。一个外部 `--settings` 可以透传；CCSW 会保留其中的设置并加入会话跟踪 Hook 与当前模型选择器。
-
-Claude 原生 `/model` 中按 `Enter` 仍可能写入 Claude 的全局默认模型；这不会影响由 CCSW 以 `--model` 启动的实例，但可能影响之后直接运行的裸 `claude`。只想改变当前会话时，在 `/model` 选择器中按 `s`。
-
-其他命令：
-
-```sh
-ccsw config path
-ccsw doctor
-ccsw apply --profile local
-ccsw proxy status
-```
-
-`ccsw apply` 与 TUI 的 `Sync all` 按钮效果相同，会同步全部 Profile；`--profile` 指定哪个 Profile 的默认模型作为 Claude 初始默认值。
-
-## 多提供商转发代理
-
-执行 Sync all 时，CCSW 会自动启动只监听 `127.0.0.1` 的后台代理。Claude 得到的是本地随机 Token；Anthropic 和 OpenAI-compatible 的真正上游凭据只由代理从权限为 `0600` 的 CCSW 配置读取，不会写进 Claude settings。
+同步到 Claude `/model` 时，CCSW 会启动仅监听 `127.0.0.1` 的后台代理。Claude 只获得本地随机 Token；真实上游凭据保留在 CCSW 配置中。
 
 ```sh
 ccsw proxy start
+ccsw proxy start --listen 127.0.0.1:19021
 ccsw proxy status
 ccsw proxy stop
-```
-
-默认监听 `127.0.0.1:17321`。若端口冲突，可以先执行 `ccsw proxy start --listen 127.0.0.1:19021`，再重新同步。
-
-这些操作也可以全部在 TUI 的 Proxy 管理页完成。`Sync all` 会自动启动后台代理，但不会自动安装开机启动；需要在 Proxy 页点击 `Enable at login`。安装完成后可以退出 TUI，代理由 macOS launchd 或 Linux systemd user service 管理。
-
-同步后即使退出 CCSW，后台代理仍会运行，因此可以直接启动 `claude`。如需机器重启后自动恢复，显式安装用户服务：
-
-```sh
-ccsw proxy install
+ccsw proxy install     # 安装 launchd / systemd user 开机服务
 ccsw proxy uninstall
 ```
 
-macOS 使用 launchd，Linux 使用 systemd user service；同步操作不会静默安装开机启动项。`proxy stop` 或 `proxy uninstall` 不会改写 Claude settings，已经同步到 Claude 的模型在代理停止期间会不可用。
+默认地址是 `127.0.0.1:17321`。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
 
-协议转换支持流式文本、图片、function tools、并行工具调用、工具结果、usage、停止原因和 reasoning summary。无法无损转换的内容块会返回明确错误。`/v1/messages/count_tokens` 使用 OpenAI tokenizer 进行近似估算，因为 OpenAI-compatible 服务没有统一的等价计数接口。
+## 数据与安全
 
-`ccsw doctor` 会检查 Claude Code 版本与安装状态、配置权限，并逐个测试网关模型接口。可用 `CCSW_CLAUDE_BIN` 指定非默认的 Claude 可执行文件。
+- 配置：`~/.config/ccsw/config.toml`
+- 会话状态：`~/.local/state/ccsw/state.json`
+- 模型缓存：`~/.cache/ccsw/models.json`
 
-## 会话与并发
+配置包含明文上游 Token，Unix 下强制使用 `0600` 权限。Token 不会写入状态、缓存或运行日志。配置、状态和缓存使用原子替换，配置与状态写入带文件锁，因此多个 CCSW 实例可以并行运行。
 
-CCSW 为新会话生成 UUID，并用 Claude Code 的 `SessionStart`、`PostModelSwitch`、`SessionEnd` Hook 跟踪 `/clear`、`/resume` 和 `/model` 后的实际状态。状态保存在 `~/.local/state/ccsw/state.json`，模型缓存保存在 `~/.cache/ccsw/models.json`。
+## 开发
 
-配置、状态和缓存采用临时文件原子替换；配置和状态写入带文件锁。因此多个 CCSW 实例可以同时运行。正在运行的 Claude 使用启动时的配置快照，之后修改档案不会改变它。
+```sh
+cargo fmt -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo build --locked --release
+```
+
+CI 在 Ubuntu 与 macOS 上执行相同检查，并生成平台二进制。

@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tempfile::NamedTempFile;
 
-use crate::config::{Credential, ModelEntry, Profile, set_private};
+use crate::config::{
+    Credential, ModelEntry, Profile, canonical_model_id, deduplicate_model_entries, set_private,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelCache {
@@ -28,6 +30,9 @@ pub struct CachedModels {
 }
 
 pub fn discover(profile: &Profile) -> Result<Vec<ModelEntry>> {
+    if !profile.enabled {
+        bail!("provider is disabled");
+    }
     discover_with_client(
         &Client::builder().timeout(Duration::from_secs(8)).build()?,
         profile,
@@ -66,7 +71,7 @@ pub fn parse_models(value: &Value) -> Result<Vec<ModelEntry>> {
         .or_else(|| value.get("models"))
         .and_then(Value::as_array)
         .context("response has neither a data nor models array")?;
-    let mut models = BTreeMap::new();
+    let mut models = Vec::new();
     for row in rows {
         let Some(id) = row.get("id").and_then(Value::as_str) else {
             continue;
@@ -81,66 +86,124 @@ pub fn parse_models(value: &Value) -> Result<Vec<ModelEntry>> {
             .get("description")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        models.insert(
-            id.to_owned(),
-            ModelEntry {
-                id: id.to_owned(),
-                label,
-                description,
-            },
-        );
+        models.push(ModelEntry {
+            id: id.to_owned(),
+            label,
+            description,
+        });
     }
     if models.is_empty() {
         bail!("model discovery returned no model ids");
     }
-    Ok(models.into_values().collect())
+    Ok(deduplicate_model_entries(models))
 }
 
 pub fn merged_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelEntry> {
-    let mut models: BTreeMap<String, ModelEntry> = discovered
-        .iter()
-        .cloned()
-        .map(|model| (model.id.clone(), model))
-        .collect();
-    for model in &profile.models {
-        models.insert(model.id.clone(), model.clone());
-    }
-    for (_, id) in profile.aliases.iter() {
-        models.entry(id.to_owned()).or_insert_with(|| ModelEntry {
-            id: id.to_owned(),
-            label: None,
-            description: None,
-        });
-    }
-    for id in profile
+    let references = profile
         .required_model_ids()
         .into_iter()
         .chain(profile.enabled_models.iter().cloned())
+        .chain(profile.disabled_models.iter().cloned())
+        .collect::<Vec<_>>();
+    // A discovered or catalog model may contain both the base ID and its [1m]
+    // spelling. The user's configured references decide which spelling is active;
+    // catalog metadata is only a fallback for models that are not configured yet.
+    let mut one_m_by_model = BTreeMap::<String, bool>::new();
+    let configured_ids = std::iter::once(profile.default_model.as_str())
+        .chain(profile.aliases.iter().map(|(_, id)| id))
+        .chain(profile.subagent_model.iter().map(String::as_str))
+        .chain(profile.fallback_models.iter().map(String::as_str))
+        .chain(profile.enabled_models.iter().map(String::as_str))
+        .chain(profile.disabled_models.iter().map(String::as_str));
+    for id in configured_ids
+        .chain(profile.models.iter().map(|model| model.id.as_str()))
+        .chain(discovered.iter().map(|model| model.id.as_str()))
     {
-        models.entry(id.clone()).or_insert_with(|| ModelEntry {
-            id,
-            label: None,
-            description: None,
-        });
+        one_m_by_model
+            .entry(canonical_model_id(id).to_owned())
+            .or_insert_with(|| canonical_model_id(id) != id);
     }
-    models.into_values().collect()
+
+    let mut models: BTreeMap<String, ModelEntry> = BTreeMap::new();
+    for model in deduplicate_model_entries(discovered.iter().cloned()) {
+        models.insert(canonical_model_id(&model.id).to_owned(), model);
+    }
+    for model in &profile.models {
+        let canonical = canonical_model_id(&model.id).to_owned();
+        let entry = models.entry(canonical).or_insert_with(|| model.clone());
+        if model.label.is_some() {
+            entry.label.clone_from(&model.label);
+        }
+        if model.description.is_some() {
+            entry.description.clone_from(&model.description);
+        }
+    }
+    for id in references {
+        let canonical = canonical_model_id(&id).to_owned();
+        models
+            .entry(canonical.clone())
+            .or_insert_with(|| ModelEntry {
+                id: canonical,
+                label: None,
+                description: None,
+            });
+    }
+    models
+        .into_iter()
+        .map(|(canonical, mut model)| {
+            let use_one_m = one_m_by_model.get(&canonical).copied().unwrap_or(false);
+            model.id = if use_one_m {
+                format!("{canonical}[1m]")
+            } else {
+                canonical
+            };
+            if let Some(label) = &mut model.label {
+                let base = label
+                    .strip_suffix(" · 1M")
+                    .or_else(|| label.strip_suffix(" 1M"))
+                    .unwrap_or(label)
+                    .to_owned();
+                *label = if use_one_m {
+                    format!("{base} · 1M")
+                } else {
+                    base
+                };
+            }
+            model
+        })
+        .collect()
 }
 
 pub fn active_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelEntry> {
-    let required = profile.required_model_ids();
-    let enabled: std::collections::BTreeSet<_> = profile.enabled_models.iter().collect();
+    if !profile.enabled {
+        return Vec::new();
+    }
+    let required = profile
+        .required_model_ids()
+        .into_iter()
+        .map(|id| canonical_id(&id))
+        .collect::<BTreeSet<_>>();
+    let enabled = profile
+        .enabled_models
+        .iter()
+        .map(|id| canonical_id(id))
+        .collect::<BTreeSet<_>>();
+    let disabled = profile
+        .disabled_models
+        .iter()
+        .map(|id| canonical_id(id))
+        .collect::<BTreeSet<_>>();
     merged_models(profile, discovered)
         .into_iter()
-        .filter(|model| required.contains(&model.id) || enabled.contains(&model.id))
+        .filter(|model| {
+            let id = canonical_id(&model.id);
+            !disabled.contains(&id) && (required.contains(&id) || enabled.contains(&id))
+        })
         .collect()
 }
 
 fn canonical_id(id: &str) -> String {
-    if id.to_ascii_lowercase().ends_with("[1m]") {
-        id[..id.len().saturating_sub(4)].to_owned()
-    } else {
-        id.to_owned()
-    }
+    canonical_model_id(id).to_owned()
 }
 
 pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelEntry> {
@@ -176,6 +239,9 @@ pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<Mo
     for en in &profile.enabled_models {
         add_id(en);
     }
+    for disabled in &profile.disabled_models {
+        add_id(disabled);
+    }
     for (_, alias) in profile.aliases.iter() {
         add_id(alias);
     }
@@ -204,10 +270,14 @@ pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<Mo
 }
 
 pub fn load_cache(path: &Path) -> ModelCache {
-    fs::read(path)
+    let mut cache: ModelCache = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for cached in cache.profiles.values_mut() {
+        cached.models = deduplicate_model_entries(std::mem::take(&mut cached.models));
+    }
+    cache
 }
 
 pub fn save_cache(path: &Path, cache: &ModelCache) -> Result<()> {
@@ -260,6 +330,22 @@ mod tests {
     }
 
     #[test]
+    fn model_discovery_deduplicates_base_and_1m_variants() {
+        let models = parse_models(&json!({
+            "data": [
+                {"id": "model-a[1m]", "display_name": "Model A 1M"},
+                {"id": "model-a", "description": "Base model"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[0].label.as_deref(), Some("Model A 1M"));
+        assert_eq!(models[0].description.as_deref(), Some("Base model"));
+    }
+
+    #[test]
     fn discovery_sends_bearer_auth() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -280,6 +366,7 @@ mod tests {
         });
         let profile = Profile {
             name: "test".into(),
+            enabled: true,
             base_url: format!("http://{address}"),
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::Bearer {
@@ -290,6 +377,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec![],
+            disabled_models: vec![],
             models: vec![],
         };
         let models = discover(&profile).unwrap();
@@ -301,6 +389,7 @@ mod tests {
     fn active_models_exclude_unselected_catalog_entries() {
         let mut profile = Profile {
             name: "test".into(),
+            enabled: true,
             base_url: "https://example.com".into(),
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::None,
@@ -309,6 +398,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec!["model-c".into()],
+            disabled_models: vec![],
             models: vec![],
         };
         let discovered = ["model-a", "model-b", "model-c"]
@@ -332,12 +422,116 @@ mod tests {
         let active = active_models(&profile, &discovered);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, "model-a");
+
+        profile.disabled_models.push("model-a".into());
+        let active = active_models(&profile, &discovered);
+        assert!(active.is_empty());
+
+        profile.disabled_models.clear();
+        profile.enabled = false;
+        assert!(active_models(&profile, &discovered).is_empty());
+    }
+
+    #[test]
+    fn active_models_count_canonical_models_once_when_1m_is_enabled() {
+        let profile = Profile {
+            name: "edgefn".into(),
+            enabled: true,
+            base_url: "https://example.com".into(),
+            api_format: crate::config::ApiFormat::OpenaiChat,
+            credential: Credential::None,
+            default_model: "model-c[1m]".into(),
+            aliases: Default::default(),
+            subagent_model: None,
+            fallback_models: vec![],
+            enabled_models: vec!["model-a[1m]".into(), "model-b[1m]".into()],
+            disabled_models: vec![],
+            models: vec![
+                ModelEntry {
+                    id: "model-b[1m]".into(),
+                    label: Some("Model B · 1M".into()),
+                    description: None,
+                },
+                ModelEntry {
+                    id: "model-c[1m]".into(),
+                    label: Some("Model C · 1M".into()),
+                    description: None,
+                },
+            ],
+        };
+        let discovered = ["model-a", "model-b", "model-c"]
+            .into_iter()
+            .map(|id| ModelEntry {
+                id: id.into(),
+                label: None,
+                description: None,
+            })
+            .collect::<Vec<_>>();
+
+        let active = active_models(&profile, &discovered);
+        assert_eq!(active.len(), 3);
+        assert_eq!(
+            active
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["model-a[1m]", "model-b[1m]", "model-c[1m]"]
+        );
+    }
+
+    #[test]
+    fn configured_context_mode_overrides_catalog_and_discovery_variants() {
+        let profile = Profile {
+            name: "mixed-context".into(),
+            enabled: true,
+            base_url: "https://example.com".into(),
+            api_format: crate::config::ApiFormat::Anthropic,
+            credential: Credential::None,
+            default_model: "model-a".into(),
+            aliases: Default::default(),
+            subagent_model: None,
+            fallback_models: vec![],
+            enabled_models: vec!["model-b[1m]".into()],
+            disabled_models: vec![],
+            models: vec![
+                ModelEntry {
+                    id: "model-a[1m]".into(),
+                    label: Some("Model A · 1M".into()),
+                    description: None,
+                },
+                ModelEntry {
+                    id: "model-b".into(),
+                    label: Some("Model B".into()),
+                    description: None,
+                },
+            ],
+        };
+        let discovered = ["model-a[1m]", "model-a", "model-b", "model-b[1m]"]
+            .into_iter()
+            .map(|id| ModelEntry {
+                id: id.into(),
+                label: None,
+                description: None,
+            })
+            .collect::<Vec<_>>();
+
+        let active = active_models(&profile, &discovered);
+        assert_eq!(
+            active
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["model-a", "model-b[1m]"]
+        );
+        assert_eq!(active[0].label.as_deref(), Some("Model A"));
+        assert_eq!(active[1].label.as_deref(), Some("Model B · 1M"));
     }
 
     #[test]
     fn configured_models_only_include_added_and_profile_models() {
         let profile = Profile {
             name: "test".into(),
+            enabled: true,
             base_url: "https://example.com".into(),
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::None,
@@ -346,6 +540,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec!["model-c".into()],
+            disabled_models: vec![],
             models: vec![ModelEntry {
                 id: "manual-x".into(),
                 label: Some("Manual X".into()),

@@ -70,6 +70,9 @@ pub struct LaunchRequest<'a> {
 }
 
 pub fn launch(paths: &AppPaths, request: LaunchRequest<'_>) -> Result<LaunchResult> {
+    if !request.profile.enabled {
+        bail!("provider is disabled");
+    }
     fs::create_dir_all(&paths.runtime_dir)?;
     let initial_session = match &request.mode {
         SessionMode::New => Uuid::new_v4().to_string(),
@@ -365,6 +368,7 @@ mod tests {
     fn profile(token: &str) -> Profile {
         Profile {
             name: "Test".into(),
+            enabled: true,
             base_url: "https://gateway.example".into(),
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::Bearer {
@@ -378,6 +382,7 @@ mod tests {
             subagent_model: Some("model-b".into()),
             fallback_models: vec!["model-b".into()],
             enabled_models: vec![],
+            disabled_models: vec![],
             models: vec![],
         }
     }

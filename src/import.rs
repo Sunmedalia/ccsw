@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::config::{Credential, ModelEntry, Profile, RoleModels};
+use crate::config::{Credential, ModelEntry, Profile, RoleModels, deduplicate_model_entries};
 
 #[derive(Debug, Clone)]
 pub struct ImportCandidate {
@@ -69,22 +69,13 @@ pub fn detect() -> Result<Option<ImportCandidate>> {
     ids.insert(default_model.clone());
     ids.extend(aliases.iter().map(|(_, model)| model.to_owned()));
     ids.extend(subagent_model.iter().cloned());
-    let models = ids
-        .into_iter()
-        .map(|id| {
-            let label = alias_label(env, &id);
-            ModelEntry {
-                id,
-                label,
-                description: None,
-            }
-        })
-        .collect();
+    let models = imported_models(env, ids);
 
     Ok(Some(ImportCandidate {
         source,
         profile: Profile {
             name: "Imported Claude settings".into(),
+            enabled: true,
             base_url,
             api_format: crate::config::ApiFormat::Anthropic,
             credential,
@@ -93,8 +84,23 @@ pub fn detect() -> Result<Option<ImportCandidate>> {
             subagent_model,
             fallback_models: vec![],
             enabled_models: vec![],
+            disabled_models: vec![],
             models,
         },
+    }))
+}
+
+fn imported_models(
+    env: Option<&serde_json::Map<String, Value>>,
+    ids: impl IntoIterator<Item = String>,
+) -> Vec<ModelEntry> {
+    deduplicate_model_entries(ids.into_iter().map(|id| {
+        let label = alias_label(env, &id);
+        ModelEntry {
+            id,
+            label,
+            description: None,
+        }
     }))
 }
 
@@ -124,6 +130,7 @@ mod tests {
             source: "/tmp/settings.json".into(),
             profile: Profile {
                 name: "x".into(),
+                enabled: true,
                 base_url: "http://localhost".into(),
                 api_format: crate::config::ApiFormat::Anthropic,
                 credential: Credential::Bearer {
@@ -134,10 +141,26 @@ mod tests {
                 subagent_model: None,
                 fallback_models: vec![],
                 enabled_models: vec![],
+                disabled_models: vec![],
                 models: vec![],
             },
         };
         let summary = candidate.summary().join("\n");
         assert!(!summary.contains("top-secret-token"));
+    }
+
+    #[test]
+    fn import_deduplicates_base_and_1m_variants() {
+        let env = serde_json::json!({
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "model-a",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Model A",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "model-a[1m]"
+        });
+        let env = env.as_object().unwrap();
+        let models = imported_models(Some(env), ["model-a".to_owned(), "model-a[1m]".to_owned()]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[0].label.as_deref(), Some("Model A"));
     }
 }

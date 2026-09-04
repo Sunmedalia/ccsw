@@ -192,10 +192,13 @@ fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
 
 fn apply_to_claude(paths: &AppPaths, profile_id: &str) -> Result<()> {
     let config = config::load(&paths.config)?;
-    config
+    let profile = config
         .profiles
         .get(profile_id)
         .with_context(|| format!("profile '{profile_id}' does not exist"))?;
+    if !profile.enabled {
+        bail!("profile '{profile_id}' is disabled");
+    }
     let cache = discovery::load_cache(&paths.cache);
     let settings = claude_config::settings_path()?;
     let result = claude_config::apply_all(&settings, paths, &config, &cache, profile_id)?;
@@ -216,6 +219,9 @@ fn run_direct(paths: AppPaths, args: RunArgs) -> Result<()> {
         .profiles
         .get(&args.profile)
         .with_context(|| format!("profile '{}' does not exist", args.profile))?;
+    if !profile.enabled {
+        bail!("profile '{}' is disabled", args.profile);
+    }
     let model_id = args.model.as_deref().unwrap_or(&profile.default_model);
     let cache = discovery::load_cache(&paths.cache);
     let discovered = cache
@@ -351,6 +357,10 @@ fn doctor(paths: &AppPaths) -> Result<()> {
                 }
             }
             for (id, profile) in config.profiles {
+                if !profile.enabled {
+                    println!("○ {id}: provider disabled (network check skipped)");
+                    continue;
+                }
                 match discovery::discover(&profile) {
                     Ok(models) => {
                         println!("✓ {id}: {} models from {}", models.len(), profile.base_url)

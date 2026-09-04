@@ -34,6 +34,8 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
+    #[serde(default = "default_profile_enabled", skip_serializing_if = "is_true")]
+    pub enabled: bool,
     pub base_url: String,
     #[serde(default)]
     pub api_format: ApiFormat,
@@ -49,8 +51,22 @@ pub struct Profile {
     /// Additional catalog model ids explicitly enabled by the user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_models: Vec<String>,
+    /// Catalog model ids explicitly disabled by the user.
+    ///
+    /// This is kept separately from `models`: disabling controls availability,
+    /// while deleting a model removes its catalog entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_models: Vec<String>,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+}
+
+fn default_profile_enabled() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +168,51 @@ impl ModelEntry {
     }
 }
 
+pub(crate) fn canonical_model_id(id: &str) -> &str {
+    if id.to_ascii_lowercase().ends_with("[1m]") {
+        &id[..id.len().saturating_sub(4)]
+    } else {
+        id
+    }
+}
+
+pub(crate) fn deduplicate_model_entries(
+    models: impl IntoIterator<Item = ModelEntry>,
+) -> Vec<ModelEntry> {
+    let mut unique = BTreeMap::<String, ModelEntry>::new();
+    for model in models {
+        let canonical = canonical_model_id(&model.id).to_owned();
+        match unique.entry(canonical.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(model);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                let prefer_incoming = canonical_model_id(&existing.id) != existing.id
+                    && canonical_model_id(&model.id) == model.id;
+                if prefer_incoming {
+                    let mut preferred = model;
+                    if preferred.label.is_none() {
+                        preferred.label = existing.label.take();
+                    }
+                    if preferred.description.is_none() {
+                        preferred.description = existing.description.take();
+                    }
+                    *existing = preferred;
+                } else {
+                    if existing.label.is_none() {
+                        existing.label = model.label;
+                    }
+                    if existing.description.is_none() {
+                        existing.description = model.description;
+                    }
+                }
+            }
+        }
+    }
+    unique.into_values().collect()
+}
+
 impl Profile {
     pub fn required_model_ids(&self) -> BTreeSet<String> {
         let mut ids = BTreeSet::from([self.default_model.clone()]);
@@ -208,6 +269,19 @@ impl Profile {
                 bail!("duplicate enabled model id after normalizing [1m]: {id}");
             }
         }
+        let mut disabled = BTreeSet::new();
+        for id in &self.disabled_models {
+            let canonical = canonical_context_model(id);
+            if canonical.trim().is_empty() {
+                bail!("disabled model id cannot be empty");
+            }
+            if !disabled.insert(canonical) {
+                bail!("duplicate disabled model id after normalizing [1m]: {id}");
+            }
+            if enabled.contains(canonical) {
+                bail!("model cannot be both enabled and disabled: {id}");
+            }
+        }
         Ok(())
     }
 
@@ -217,11 +291,7 @@ impl Profile {
 }
 
 fn canonical_context_model(id: &str) -> &str {
-    if id.to_ascii_lowercase().ends_with("[1m]") {
-        &id[..id.len().saturating_sub(4)]
-    } else {
-        id
-    }
+    canonical_model_id(id)
 }
 
 fn default_version() -> u32 {
@@ -299,9 +369,12 @@ pub fn load(path: &Path) -> Result<Config> {
             CONFIG_VERSION
         );
     }
-    let config: Config = raw
+    let mut config: Config = raw
         .try_into()
         .with_context(|| format!("failed to parse {}", path.display()))?;
+    for profile in config.profiles.values_mut() {
+        profile.models = deduplicate_model_entries(std::mem::take(&mut profile.models));
+    }
     for (id, profile) in &config.profiles {
         validate_profile_id(id).with_context(|| format!("invalid profile id {id}"))?;
         profile
@@ -417,6 +490,7 @@ mod tests {
     fn profile() -> Profile {
         Profile {
             name: "Local gateway".into(),
+            enabled: true,
             base_url: "http://127.0.0.1:18080".into(),
             api_format: ApiFormat::Anthropic,
             credential: Credential::Bearer {
@@ -427,6 +501,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec!["claude-sonnet".into()],
+            disabled_models: vec!["claude-opus".into()],
             models: vec![ModelEntry {
                 id: "claude-sonnet".into(),
                 label: Some("Sonnet".into()),
@@ -447,7 +522,72 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.profiles["local"].default_model, "claude-sonnet");
         assert_eq!(loaded.profiles["local"].enabled_models, ["claude-sonnet"]);
+        assert_eq!(loaded.profiles["local"].disabled_models, ["claude-opus"]);
         assert!(!std::fs::read_to_string(path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn legacy_profiles_default_to_enabled_and_disabled_state_persists() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+
+[profiles.legacy]
+name = "Legacy"
+base_url = "https://example.com"
+default_model = "model-a"
+"#,
+        )
+        .unwrap();
+        assert!(load(&path).unwrap().profiles["legacy"].enabled);
+
+        let updated = update(&path, |config| {
+            config.profiles.get_mut("legacy").unwrap().enabled = false;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!updated.profiles["legacy"].enabled);
+        assert!(!load(&path).unwrap().profiles["legacy"].enabled);
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains("enabled = false")
+        );
+    }
+
+    #[test]
+    fn load_repairs_duplicate_base_and_1m_catalog_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"version = 2
+
+[profiles.local]
+name = "Local"
+base_url = "http://localhost:8080"
+default_model = "model-a[1m]"
+
+[[profiles.local.models]]
+id = "model-a[1m]"
+label = "Model A 1M"
+
+[[profiles.local.models]]
+id = "model-a"
+description = "Base model"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load(&path).unwrap();
+        let models = &loaded.profiles["local"].models;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[0].label.as_deref(), Some("Model A 1M"));
+        assert_eq!(models[0].description.as_deref(), Some("Base model"));
+        assert_eq!(loaded.profiles["local"].default_model, "model-a[1m]");
     }
 
     #[test]

@@ -101,6 +101,9 @@ impl ProxyPaths {
 }
 
 pub fn ensure_route(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Result<LocalRoute> {
+    if !profile.enabled {
+        bail!("profile '{profile_id}' is disabled");
+    }
     if !profile.api_format.is_openai() {
         bail!("ensure_route only accepts OpenAI-compatible profiles");
     }
@@ -141,6 +144,23 @@ pub fn aggregate_model_id(profile_id: &str, model_id: &str) -> String {
     format!("{profile_id}::{}{suffix}", strip_1m(model_id))
 }
 
+fn resolve_aggregate_model_id(
+    targets: &BTreeMap<String, AggregateModelTarget>,
+    profile_id: &str,
+    model_id: &str,
+) -> Option<String> {
+    let exact = aggregate_model_id(profile_id, model_id);
+    if targets.contains_key(&exact) {
+        return Some(exact);
+    }
+    let canonical = config::canonical_model_id(model_id);
+    targets.iter().find_map(|(exposed, target)| {
+        (target.profile_id == profile_id
+            && config::canonical_model_id(&target.model_id) == canonical)
+            .then(|| exposed.clone())
+    })
+}
+
 pub fn aggregate_profile(
     paths: &AppPaths,
     config: &Config,
@@ -151,6 +171,9 @@ pub fn aggregate_profile(
         .profiles
         .get(default_profile_id)
         .with_context(|| format!("profile '{default_profile_id}' does not exist"))?;
+    if !default_profile.enabled {
+        bail!("default profile '{default_profile_id}' is disabled");
+    }
     let mut targets = BTreeMap::new();
     let mut models = Vec::new();
     for (profile_id, profile) in &config.profiles {
@@ -182,13 +205,14 @@ pub fn aggregate_profile(
     if targets.is_empty() {
         bail!("enable at least one model before syncing to Claude");
     }
-    let default_model = aggregate_model_id(default_profile_id, &default_profile.default_model);
-    if !targets.contains_key(&default_model) {
-        bail!(
-            "default model '{}' is not enabled for profile '{default_profile_id}'",
-            default_profile.default_model
-        );
-    }
+    let default_model =
+        resolve_aggregate_model_id(&targets, default_profile_id, &default_profile.default_model)
+            .with_context(|| {
+                format!(
+                    "default model '{}' is not enabled for profile '{default_profile_id}'",
+                    default_profile.default_model
+                )
+            })?;
 
     let proxy_paths = ProxyPaths::from_app(paths)?;
     let route_id =
@@ -205,14 +229,17 @@ pub fn aggregate_profile(
                 RouteTarget {
                     config_path: paths.config.clone(),
                     profile_id: None,
-                    models: targets,
+                    models: targets.clone(),
                 },
             );
             id
         })?;
     start(paths, None)?;
     let registry = load_registry(&proxy_paths)?;
-    let expose = |model: &str| aggregate_model_id(default_profile_id, model);
+    let expose = |model: &str| {
+        resolve_aggregate_model_id(&targets, default_profile_id, model)
+            .unwrap_or_else(|| aggregate_model_id(default_profile_id, model))
+    };
     let mut routed = default_profile.clone();
     routed.name = "CCSW · all providers".into();
     routed.api_format = ApiFormat::Anthropic;
@@ -243,7 +270,24 @@ pub fn aggregate_profile(
     Ok((routed, models))
 }
 
+pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    update_registry(&proxy_paths, None, |registry| {
+        for target in registry
+            .routes
+            .values_mut()
+            .filter(|target| target.config_path == paths.config && target.profile_id.is_none())
+        {
+            target.models.clear();
+        }
+    })?;
+    Ok(())
+}
+
 pub fn routed_profile(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Result<Profile> {
+    if !profile.enabled {
+        bail!("profile '{profile_id}' is disabled");
+    }
     if !profile.api_format.is_openai() {
         return Ok(profile.clone());
     }
@@ -708,6 +752,9 @@ fn resolve_profile(
         .get(profile_id)
         .cloned()
         .with_context(|| format!("profile '{profile_id}' no longer exists"))?;
+    if !profile.enabled {
+        bail!("profile '{profile_id}' is disabled");
+    }
     if target.profile_id.is_some() && !profile.api_format.is_openai() {
         bail!("profile '{profile_id}' is not an OpenAI route");
     }
@@ -1785,6 +1832,59 @@ mod tests {
     };
 
     #[test]
+    fn aggregate_model_resolution_falls_back_to_the_configured_context_variant() {
+        let targets = BTreeMap::from([(
+            "route::model-a[1m]".into(),
+            AggregateModelTarget {
+                profile_id: "route".into(),
+                model_id: "model-a[1m]".into(),
+            },
+        )]);
+
+        assert_eq!(
+            resolve_aggregate_model_id(&targets, "route", "model-a").as_deref(),
+            Some("route::model-a[1m]")
+        );
+        assert_eq!(
+            resolve_aggregate_model_id(&targets, "other", "model-a"),
+            None
+        );
+    }
+
+    #[test]
+    fn clearing_aggregate_models_removes_stale_disabled_routes() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state: temp.path().join("state/state.json"),
+            cache: temp.path().join("cache/models.json"),
+            runtime_dir: temp.path().join("cache/runtime"),
+        };
+        let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+        update_registry(&proxy_paths, None, |registry| {
+            registry.routes.insert(
+                "aggregate".into(),
+                RouteTarget {
+                    config_path: paths.config.clone(),
+                    profile_id: None,
+                    models: BTreeMap::from([(
+                        "route::model-a".into(),
+                        AggregateModelTarget {
+                            profile_id: "route".into(),
+                            model_id: "model-a".into(),
+                        },
+                    )]),
+                },
+            );
+        })
+        .unwrap();
+
+        clear_aggregate_models(&paths).unwrap();
+        let registry = load_registry(&proxy_paths).unwrap();
+        assert!(registry.routes["aggregate"].models.is_empty());
+    }
+
+    #[test]
     fn normalizes_root_v1_and_complete_urls() {
         assert_eq!(
             completion_endpoint("https://api.example", ApiFormat::OpenaiChat)
@@ -1945,6 +2045,7 @@ mod tests {
         };
         let profile = Profile {
             name: "OpenAI".into(),
+            enabled: true,
             base_url: format!("http://{upstream_address}"),
             api_format: ApiFormat::OpenaiChat,
             credential: Credential::Bearer {
@@ -1955,6 +2056,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec![],
+            disabled_models: vec![],
             models: vec![],
         };
         config::update(&app_paths.config, |config: &mut Config| {
@@ -2050,6 +2152,7 @@ mod tests {
         };
         let profile = Profile {
             name: "Anthropic compatible".into(),
+            enabled: true,
             base_url: format!("http://{upstream_address}"),
             api_format: ApiFormat::Anthropic,
             credential: Credential::XApiKey {
@@ -2060,6 +2163,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec![],
+            disabled_models: vec![],
             models: vec![],
         };
         config::update(&app_paths.config, |config: &mut Config| {

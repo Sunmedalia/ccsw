@@ -24,6 +24,7 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     claude_config,
@@ -46,6 +47,7 @@ pub enum ViewMode {
     #[default]
     Home,
     Provider,
+    AllEnabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,10 +84,10 @@ enum FooterControl {
     Models,
     Details,
     Launch,
+    AddProfile,
     Resume,
     New,
     Sync,
-    Test,
     Proxy,
     Help,
     Quit,
@@ -93,35 +95,16 @@ enum FooterControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DetailControl {
-    AddModel,
     FetchModels,
-    Manage,
-    SyncAll,
-    EnableAll,
     Edit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShowcaseControl {
-    Launch,
     Toggle,
     Default,
     OneM,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RouteControl {
-    Enable,
-    OneM,
-    Default,
-    EnableAll,
-    DisableAll,
-    Fetch,
-    Add,
-    Save,
-    Apply,
-    Edit,
-    Cancel,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,14 +119,83 @@ enum ProxyControl {
 
 enum Modal {
     Import(Box<ImportCandidate>),
-    Profile(ProfileForm),
+    Profile(Box<ProfileForm>),
     Model(ModelForm),
-    #[allow(dead_code)]
-    Route(RouteEditor),
     DeleteProfile,
     DeleteModel,
     Proxy(ProxyManager),
-    Help,
+    Help(HelpModal),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelpSection {
+    Home,
+    AllEnabled,
+    Provider,
+    Forms,
+}
+
+impl HelpSection {
+    const ALL: [Self; 4] = [Self::Home, Self::AllEnabled, Self::Provider, Self::Forms];
+
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|section| *section == self)
+            .unwrap_or_default()
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::AllEnabled => "All Enabled",
+            Self::Provider => "Provider",
+            Self::Forms => "Forms",
+        }
+    }
+}
+
+struct HelpModal {
+    section: HelpSection,
+    scroll: u16,
+}
+
+impl HelpModal {
+    fn for_view(view_mode: ViewMode) -> Self {
+        let section = match view_mode {
+            ViewMode::Home => HelpSection::Home,
+            ViewMode::AllEnabled => HelpSection::AllEnabled,
+            ViewMode::Provider => HelpSection::Provider,
+        };
+        Self { section, scroll: 0 }
+    }
+
+    fn move_section(&mut self, forward: bool) {
+        let len = HelpSection::ALL.len();
+        let current = self.section.index();
+        let next = if forward {
+            (current + 1) % len
+        } else {
+            (current + len - 1) % len
+        };
+        self.section = HelpSection::ALL[next];
+        self.scroll = 0;
+    }
+
+    fn select(&mut self, index: usize) {
+        if let Some(section) = HelpSection::ALL.get(index) {
+            self.section = *section;
+            self.scroll = 0;
+        }
+    }
+
+    fn scroll(&mut self, down: bool) {
+        if down {
+            self.scroll = self.scroll.saturating_add(1).min(32);
+        } else {
+            self.scroll = self.scroll.saturating_sub(1);
+        }
+    }
 }
 
 struct ProxyManager {
@@ -157,8 +209,10 @@ struct ProxyManager {
 struct ProfileForm {
     original_id: Option<String>,
     original_profile: Option<Profile>,
+    provider_enabled: bool,
     models: Vec<ModelEntry>,
     enabled_models: Vec<String>,
+    disabled_models: Vec<String>,
     fields: Vec<FormField>,
     selected: usize,
 }
@@ -178,6 +232,7 @@ struct ModelForm {
 struct RouteEditor {
     profile_id: String,
     original_profile: Profile,
+    provider_enabled: bool,
     catalog: Vec<ModelEntry>,
     enabled: BTreeSet<String>,
     disabled: BTreeSet<String>,
@@ -188,6 +243,14 @@ struct RouteEditor {
     selected: usize,
     search_active: bool,
     status: String,
+}
+
+#[derive(Debug, Clone)]
+struct GlobalModelRef {
+    profile_id: String,
+    profile_name: String,
+    model: ModelEntry,
+    enabled: bool,
 }
 
 struct FormField {
@@ -205,6 +268,7 @@ pub struct App {
     cache: ModelCache,
     cwd: String,
     view_mode: ViewMode,
+    home_all_selected: bool,
     profile_idx: usize,
     model_idx: usize,
     profile_offset: usize,
@@ -252,6 +316,7 @@ pub fn run(
         config,
         cwd,
         view_mode: ViewMode::Home,
+        home_all_selected: false,
         profile_idx,
         model_idx: 0,
         profile_offset: 0,
@@ -262,7 +327,7 @@ pub fn run(
         } else {
             LaunchMode::New
         },
-        status: "Enter 进入厂商详情 · n 新建 · e 编辑 · d 删除 · r 测速 · ? 帮助".into(),
+        status: "↑↓ 选择 · Space 启用/禁用厂商 · Enter 查看或管理".into(),
         status_error: false,
         modal: None,
         current_session,
@@ -318,9 +383,12 @@ impl App {
                     match self.view_mode {
                         ViewMode::Home => match key.code {
                             KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Char('?') => self.modal = Some(Modal::Help),
+                            KeyCode::Char('?') => self.open_help(),
                             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+                            KeyCode::Enter if self.home_all_selected => {
+                                self.enter_all_enabled_view();
+                            }
                             KeyCode::Enter if self.selected_profile().is_some() => {
                                 self.enter_provider_view();
                             }
@@ -332,7 +400,10 @@ impl App {
                                 self.modal = Some(Modal::DeleteProfile);
                             }
                             KeyCode::Char('r') | KeyCode::Char('t') => self.refresh_models(),
-                            KeyCode::Char('m') | KeyCode::Char(' ') => self.toggle_launch_mode(),
+                            KeyCode::Char(' ') if self.selected_profile().is_some() => {
+                                self.toggle_selected_provider()?;
+                            }
+                            KeyCode::Char('m') => self.toggle_launch_mode(),
                             KeyCode::Char('R') => {
                                 if self.current_session.is_some() {
                                     self.launch_selected(terminal, false)?;
@@ -344,6 +415,31 @@ impl App {
                             }
                             KeyCode::Char('N') => self.launch_selected(terminal, true)?,
                             KeyCode::Char('A') => self.enable_all_models(),
+                            KeyCode::Char('p') => self.sync_all_to_claude(),
+                            KeyCode::Char('P') => self.open_proxy_manager(),
+                            _ => {}
+                        },
+                        ViewMode::AllEnabled => match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Char('?') => self.open_help(),
+                            KeyCode::Esc => self.return_home(),
+                            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+                            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+                            KeyCode::PageUp => {
+                                self.model_idx = self.model_idx.saturating_sub(10);
+                            }
+                            KeyCode::PageDown => {
+                                self.model_idx = (self.model_idx + 10)
+                                    .min(self.all_managed_models().len().saturating_sub(1));
+                            }
+                            KeyCode::Home => self.model_idx = 0,
+                            KeyCode::End => {
+                                self.model_idx = self.all_managed_models().len().saturating_sub(1);
+                            }
+                            KeyCode::Char(' ') => {
+                                self.toggle_selected_global_model()?;
+                            }
+                            KeyCode::Enter => self.open_selected_global_model(),
                             KeyCode::Char('p') => self.sync_all_to_claude(),
                             KeyCode::Char('P') => self.open_proxy_manager(),
                             _ => {}
@@ -387,12 +483,9 @@ impl App {
                             } else {
                                 match key.code {
                                     KeyCode::Char('q') => return Ok(()),
-                                    KeyCode::Char('?') => self.modal = Some(Modal::Help),
+                                    KeyCode::Char('?') => self.open_help(),
                                     KeyCode::Esc => {
-                                        self.view_mode = ViewMode::Home;
-                                        self.focus = Focus::Profiles;
-                                        self.status_error = false;
-                                        self.status = "Returned to Providers home".into();
+                                        self.return_home();
                                     }
                                     KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
                                     KeyCode::Left | KeyCode::Char('h') => {
@@ -512,6 +605,7 @@ impl App {
                                             if let Some(&idx) = filtered.get(editor.selected) {
                                                 let model_id = editor.catalog[idx].id.clone();
                                                 if !editor.is_enabled(&model_id) {
+                                                    editor.disabled.remove(&model_id);
                                                     editor.enabled.insert(model_id);
                                                 }
                                             }
@@ -529,6 +623,7 @@ impl App {
                                             if let Some(&idx) = filtered.get(editor.selected) {
                                                 let model_id = editor.catalog[idx].id.clone();
                                                 if !editor.is_enabled(&model_id) {
+                                                    editor.disabled.remove(&model_id);
                                                     editor.enabled.insert(model_id);
                                                 }
                                             }
@@ -548,6 +643,7 @@ impl App {
                                             if let Some(&idx) = filtered.get(editor.selected) {
                                                 let model_id = editor.catalog[idx].id.clone();
                                                 if !editor.is_enabled(&model_id) {
+                                                    editor.disabled.remove(&model_id);
                                                     editor.enabled.insert(model_id);
                                                 }
                                             }
@@ -573,10 +669,9 @@ impl App {
                                         self.open_add_model_modal();
                                     }
                                     KeyCode::Char('x') | KeyCode::Delete => {
-                                        self.disable_or_delete_selected_model();
+                                        self.delete_selected_model();
                                     }
                                     KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
-                                    KeyCode::Char('M') => self.manage_models(false),
                                     KeyCode::Char('r') | KeyCode::Char('t') => {
                                         self.refresh_models();
                                         self.init_provider_editor();
@@ -610,12 +705,71 @@ impl App {
     }
 
     fn selected_profile_id(&self) -> Option<String> {
+        if self.view_mode == ViewMode::AllEnabled
+            || (self.view_mode == ViewMode::Home && self.home_all_selected)
+        {
+            return None;
+        }
         self.profile_ids().get(self.profile_idx).cloned()
     }
 
     fn selected_profile(&self) -> Option<&Profile> {
         self.selected_profile_id()
             .and_then(|id| self.config.profiles.get(&id))
+    }
+
+    fn home_profile_item_heights(&self, panel: Rect) -> Vec<usize> {
+        let mut heights = vec![
+            all_enabled_lines(
+                self.config
+                    .profiles
+                    .values()
+                    .filter(|profile| profile.enabled)
+                    .count(),
+                self.all_enabled_model_count(),
+                panel.width.saturating_sub(2),
+            )
+            .len(),
+        ];
+        heights.extend(self.profile_ids().iter().map(|id| {
+            let profile = &self.config.profiles[id];
+            let discovered = self
+                .cache
+                .profiles
+                .get(id)
+                .map(|cached| cached.models.as_slice())
+                .unwrap_or_default();
+            home_profile_lines(
+                id,
+                profile,
+                discovery::active_models(profile, discovered).len(),
+                panel.width.saturating_sub(2),
+            )
+            .len()
+        }));
+        heights
+    }
+
+    fn home_selected_index(&self) -> usize {
+        if self.home_all_selected || self.config.profiles.is_empty() {
+            0
+        } else {
+            self.profile_idx.saturating_add(1)
+        }
+    }
+
+    fn select_home_index(&mut self, index: usize) {
+        if index == 0 {
+            self.home_all_selected = true;
+            self.model_idx = 0;
+            self.current_session = None;
+        } else {
+            self.home_all_selected = false;
+            self.profile_idx = (index - 1).min(self.config.profiles.len().saturating_sub(1));
+            self.model_idx = self.default_model_index();
+            self.sync_session_for_profile();
+        }
+        self.model_offset = 0;
     }
 
     fn models(&self) -> Vec<ModelEntry> {
@@ -636,11 +790,15 @@ impl App {
         let Some(id) = self.selected_profile_id() else {
             return vec![];
         };
-        let profile = &self.config.profiles[&id];
+        self.catalog_models_for(&id)
+    }
+
+    fn catalog_models_for(&self, id: &str) -> Vec<ModelEntry> {
+        let profile = &self.config.profiles[id];
         let discovered = self
             .cache
             .profiles
-            .get(&id)
+            .get(id)
             .map(|cached| cached.models.as_slice())
             .unwrap_or_default();
         discovery::configured_models(profile, discovered)
@@ -662,6 +820,41 @@ impl App {
             .sum()
     }
 
+    fn all_managed_models(&self) -> Vec<GlobalModelRef> {
+        let mut models = Vec::new();
+        for (profile_id, profile) in self
+            .config
+            .profiles
+            .iter()
+            .filter(|(_, profile)| profile.enabled)
+        {
+            let discovered = self
+                .cache
+                .profiles
+                .get(profile_id)
+                .map(|cached| cached.models.as_slice())
+                .unwrap_or_default();
+            let active = discovery::active_models(profile, discovered)
+                .into_iter()
+                .map(|model| canonical_model_id(&model.id))
+                .collect::<BTreeSet<_>>();
+            let Some(editor) = self.create_route_editor_for(profile_id.clone()) else {
+                continue;
+            };
+            for catalog_model in &editor.catalog {
+                let mut model = catalog_model.clone();
+                model.id = editor.effective_id(&model.id);
+                models.push(GlobalModelRef {
+                    profile_id: profile_id.clone(),
+                    profile_name: profile.name.clone(),
+                    enabled: active.contains(&canonical_model_id(&model.id)),
+                    model,
+                });
+            }
+        }
+        models
+    }
+
     fn selected_model(&self) -> Option<ModelEntry> {
         if self.view_mode == ViewMode::Provider {
             let fallback;
@@ -681,6 +874,10 @@ impl App {
                 label: model.label.clone(),
                 description: model.description.clone(),
             })
+        } else if self.view_mode == ViewMode::AllEnabled {
+            self.all_managed_models()
+                .get(self.model_idx)
+                .map(|entry| entry.model.clone())
         } else {
             self.models().get(self.model_idx).cloned()
         }
@@ -689,6 +886,8 @@ impl App {
     fn toggle_focus(&mut self) {
         if self.view_mode == ViewMode::Home {
             self.focus = Focus::Profiles;
+        } else if self.view_mode == ViewMode::AllEnabled {
+            self.focus = Focus::Models;
         } else {
             self.focus = match self.focus {
                 Focus::Models => Focus::Details,
@@ -752,36 +951,43 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-                if self.view_mode == ViewMode::Provider && mouse.row <= 2 && mouse.column <= 16 {
-                    self.view_mode = ViewMode::Home;
-                    self.focus = Focus::Profiles;
-                    self.status_error = false;
-                    self.status = "Returned to Providers home".into();
+                if self.view_mode != ViewMode::Home && mouse.row <= 2 && mouse.column <= 16 {
+                    self.return_home();
                     return Ok(MouseAction::None);
                 }
 
-                if let Some(panel) = ui.profiles
-                    && let Some(index) = scrollbar_index(
+                if let Some(panel) = ui.profiles {
+                    let visible = if self.view_mode == ViewMode::Home {
+                        visible_variable_items(
+                            &self.home_profile_item_heights(panel),
+                            self.profile_offset,
+                            usize::from(panel.height.saturating_sub(2)),
+                        )
+                    } else {
+                        usize::from(panel.height.saturating_sub(2))
+                    };
+                    if let Some(index) = scrollbar_index(
                         panel,
                         mouse.column,
                         mouse.row,
-                        self.config.profiles.len(),
-                        usize::from(
-                            panel.height.saturating_sub(2)
-                                / if self.view_mode == ViewMode::Home {
-                                    3
-                                } else {
-                                    1
-                                },
-                        ),
-                    )
-                {
-                    self.focus = Focus::Profiles;
-                    self.profile_idx = index;
-                    self.model_idx = self.default_model_index();
-                    self.model_offset = 0;
-                    self.sync_session_for_profile();
-                    return Ok(MouseAction::None);
+                        if self.view_mode == ViewMode::Home {
+                            self.config.profiles.len().saturating_add(1)
+                        } else {
+                            self.config.profiles.len()
+                        },
+                        visible,
+                    ) {
+                        self.focus = Focus::Profiles;
+                        if self.view_mode == ViewMode::Home {
+                            self.select_home_index(index);
+                        } else {
+                            self.profile_idx = index;
+                            self.model_idx = self.default_model_index();
+                            self.model_offset = 0;
+                            self.sync_session_for_profile();
+                        }
+                        return Ok(MouseAction::None);
+                    }
                 }
                 if let Some(panel) = ui.models {
                     if self.view_mode == ViewMode::Provider {
@@ -865,17 +1071,14 @@ impl App {
                 if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
                     return Ok(MouseAction::None);
                 }
-                for (control, rect) in footer_controls(ui.footer, area.width < 110, self.view_mode)
+                for (control, rect) in footer_controls(ui.footer, area.width < 100, self.view_mode)
                 {
                     if !contains(rect, mouse.column, mouse.row) {
                         continue;
                     }
                     return Ok(match control {
                         FooterControl::Back => {
-                            self.view_mode = ViewMode::Home;
-                            self.focus = Focus::Profiles;
-                            self.status_error = false;
-                            self.status = "Returned to Providers home".into();
+                            self.return_home();
                             MouseAction::None
                         }
                         FooterControl::Models => {
@@ -888,13 +1091,19 @@ impl App {
                         }
                         FooterControl::Launch => {
                             if self.view_mode == ViewMode::Home {
-                                if self.selected_profile().is_some() {
+                                if self.home_all_selected {
+                                    self.enter_all_enabled_view();
+                                } else if self.selected_profile().is_some() {
                                     self.enter_provider_view();
                                 }
                                 MouseAction::None
                             } else {
                                 MouseAction::Launch
                             }
+                        }
+                        FooterControl::AddProfile => {
+                            self.new_profile();
+                            MouseAction::None
                         }
                         FooterControl::Resume => {
                             if self.current_session.is_some() {
@@ -912,56 +1121,88 @@ impl App {
                             self.sync_all_to_claude();
                             MouseAction::None
                         }
-                        FooterControl::Test => {
-                            self.refresh_models();
-                            MouseAction::None
-                        }
                         FooterControl::Proxy => {
                             self.open_proxy_manager();
                             MouseAction::None
                         }
                         FooterControl::Help => {
-                            self.modal = Some(Modal::Help);
+                            self.open_help();
                             MouseAction::None
                         }
                         FooterControl::Quit => MouseAction::Quit,
                     });
                 }
 
-                if let Some(panel) = ui.profiles
-                    && let Some(index) = clicked_list_index(
-                        panel,
-                        mouse.column,
-                        mouse.row,
-                        self.profile_offset,
-                        if self.view_mode == ViewMode::Home {
-                            3
-                        } else {
-                            1
-                        },
-                    )
-                    && index < self.config.profiles.len()
-                {
-                    self.focus = Focus::Profiles;
-                    if self.profile_idx == index && self.view_mode == ViewMode::Home {
-                        self.enter_provider_view();
+                if let Some(panel) = ui.profiles {
+                    let index = if self.view_mode == ViewMode::Home {
+                        clicked_variable_item(
+                            panel,
+                            mouse.row,
+                            self.profile_offset,
+                            &self.home_profile_item_heights(panel),
+                        )
                     } else {
-                        self.profile_idx = index;
-                        self.model_idx = self.default_model_index();
-                        self.model_offset = 0;
-                        self.sync_session_for_profile();
+                        clicked_list_index(panel, mouse.column, mouse.row, self.profile_offset, 1)
+                    };
+                    let item_count = if self.view_mode == ViewMode::Home {
+                        self.config.profiles.len().saturating_add(1)
+                    } else {
+                        self.config.profiles.len()
+                    };
+                    if let Some(index) = index.filter(|index| *index < item_count) {
+                        self.focus = Focus::Profiles;
+                        if self.view_mode == ViewMode::Home {
+                            if index > 0 && mouse.column < panel.x.saturating_add(5) {
+                                self.select_home_index(index);
+                                self.toggle_selected_provider()?;
+                                return Ok(MouseAction::None);
+                            }
+                            if self.home_selected_index() == index {
+                                if index == 0 {
+                                    self.enter_all_enabled_view();
+                                } else {
+                                    self.enter_provider_view();
+                                }
+                            } else {
+                                self.select_home_index(index);
+                            }
+                        } else {
+                            self.profile_idx = index;
+                            self.model_idx = self.default_model_index();
+                            self.model_offset = 0;
+                            self.sync_session_for_profile();
+                        }
                     }
                 } else if let Some(panel) = ui.models
                     && self.view_mode != ViewMode::Provider
                     && let Some(index) =
                         clicked_list_index(panel, mouse.column, mouse.row, self.model_offset, 2)
-                    && index < self.models().len()
                 {
-                    self.focus = Focus::Models;
-                    self.model_idx = index;
-                    if let Some(model) = self.selected_model() {
-                        self.status_error = false;
-                        self.status = format!("Selected {} · click Launch to start", model.label());
+                    if self.view_mode == ViewMode::AllEnabled {
+                        let models = self.all_managed_models();
+                        if let Some(entry) = models.get(index) {
+                            self.focus = Focus::Models;
+                            self.model_idx = index;
+                            if mouse.column < panel.x.saturating_add(4) {
+                                self.toggle_selected_global_model()?;
+                                return Ok(MouseAction::None);
+                            }
+                            self.status_error = false;
+                            self.status = format!(
+                                "{} · {} · Space {} · Enter 打开厂商",
+                                entry.profile_name,
+                                entry.model.label(),
+                                if entry.enabled { "禁用" } else { "启用" }
+                            );
+                        }
+                    } else if index < self.models().len() {
+                        self.focus = Focus::Models;
+                        self.model_idx = index;
+                        if let Some(model) = self.selected_model() {
+                            self.status_error = false;
+                            self.status =
+                                format!("Selected {} · click Launch to start", model.label());
+                        }
                     }
                 } else if let Some(details) = ui.details
                     && contains(details, mouse.column, mouse.row)
@@ -975,19 +1216,6 @@ impl App {
                                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                             {
                                 match control {
-                                    ShowcaseControl::Launch => {
-                                        if let Some(editor) = self.ensure_provider_editor() {
-                                            let filtered = editor.filtered_indices();
-                                            if let Some(&idx) = filtered.get(editor.selected) {
-                                                let model_id = editor.catalog[idx].id.clone();
-                                                if !editor.is_enabled(&model_id) {
-                                                    editor.enabled.insert(model_id);
-                                                }
-                                            }
-                                        }
-                                        self.commit_provider_editor()?;
-                                        return Ok(MouseAction::Launch);
-                                    }
                                     ShowcaseControl::Toggle => {
                                         if let Some(editor) = self.ensure_provider_editor() {
                                             editor.toggle_selected();
@@ -1015,6 +1243,10 @@ impl App {
                                         self.toggle_selected_model_1m();
                                         return Ok(MouseAction::None);
                                     }
+                                    ShowcaseControl::Delete => {
+                                        self.delete_selected_model();
+                                        return Ok(MouseAction::None);
+                                    }
                                 }
                             }
                         } else if contains(provider_card, mouse.column, mouse.row)
@@ -1023,25 +1255,9 @@ impl App {
                                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                         {
                             match control {
-                                DetailControl::AddModel => {
-                                    self.open_add_model_modal();
-                                }
                                 DetailControl::FetchModels => {
                                     self.refresh_models();
                                     self.init_provider_editor();
-                                }
-                                DetailControl::Manage => {
-                                    self.manage_models(false);
-                                }
-                                DetailControl::SyncAll => {
-                                    self.sync_all_to_claude();
-                                }
-                                DetailControl::EnableAll => {
-                                    if let Some(editor) = self.ensure_provider_editor() {
-                                        editor.enable_all_filtered();
-                                    }
-                                    let _ = self.commit_provider_editor();
-                                    self.status = "Enabled all filtered models".into();
                                 }
                                 DetailControl::Edit => {
                                     self.edit_profile();
@@ -1054,20 +1270,8 @@ impl App {
                         .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                     {
                         match control {
-                            DetailControl::AddModel => {
-                                self.open_add_model_modal();
-                            }
                             DetailControl::FetchModels => {
                                 self.refresh_models();
-                            }
-                            DetailControl::Manage => {
-                                self.manage_models(true);
-                            }
-                            DetailControl::SyncAll => {
-                                self.sync_all_to_claude();
-                            }
-                            DetailControl::EnableAll => {
-                                self.enable_all_models();
                             }
                             DetailControl::Edit => {
                                 self.edit_profile();
@@ -1131,40 +1335,7 @@ impl App {
             return Ok(());
         }
 
-        if matches!(self.modal, Some(Modal::Route(_))) {
-            let list = route_model_list_area(area);
-            let filtered_len = match self.modal.as_ref() {
-                Some(Modal::Route(editor)) => editor.filtered_indices().len(),
-                _ => 0,
-            };
-            if let Some(index) = scrollbar_index(
-                list,
-                mouse.column,
-                mouse.row,
-                filtered_len,
-                usize::from(list.height.saturating_sub(2)),
-            ) {
-                if let Some(Modal::Route(editor)) = self.modal.as_mut() {
-                    editor.selected = index;
-                    editor.status = format!("Model {} of {filtered_len}", index + 1);
-                }
-                return Ok(());
-            }
-            if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
-                return Ok(());
-            }
-            if let Some((control, _)) = route_controls(area)
-                .into_iter()
-                .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
-            {
-                self.handle_modal(route_control_key(control))?;
-                return Ok(());
-            }
-            if contains(route_edit_area(area), mouse.column, mouse.row) {
-                self.handle_modal(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE))?;
-                return Ok(());
-            }
-        } else if matches!(self.modal, Some(Modal::Proxy(_))) {
+        if matches!(self.modal, Some(Modal::Proxy(_))) {
             if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
                 return Ok(());
             }
@@ -1180,8 +1351,8 @@ impl App {
         }
 
         let button_count = match self.modal.as_ref() {
-            Some(Modal::Help) => 1,
-            Some(Modal::Route(_) | Modal::Proxy(_)) => 0,
+            Some(Modal::Help(_)) => 1,
+            Some(Modal::Proxy(_)) => 0,
             Some(Modal::Model(_)) => 3,
             Some(_) => 2,
             None => 0,
@@ -1206,7 +1377,7 @@ impl App {
                 (Some(Modal::Profile(_)), 0) => {
                     KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
                 }
-                (Some(Modal::Help), 0) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                (Some(Modal::Help(_)), 0) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                 (Some(_), 1) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                 _ => return Ok(()),
             };
@@ -1218,27 +1389,6 @@ impl App {
         let clicked_field = contains(inner, mouse.column, mouse.row)
             .then(|| usize::from(mouse.row.saturating_sub(inner.y)));
         match self.modal.as_mut() {
-            Some(Modal::Route(editor)) => {
-                if contains(route_search_area(area), mouse.column, mouse.row) {
-                    editor.search_active = true;
-                    return Ok(());
-                }
-                let list = route_model_list_area(area);
-                let list_inner = panel_inner(list);
-                if contains(list_inner, mouse.column, mouse.row) {
-                    let offset = route_editor_offset(editor, list.height.saturating_sub(2));
-                    let index = offset + usize::from(mouse.row.saturating_sub(list_inner.y));
-                    if index < editor.filtered_indices().len() {
-                        if editor.selected == index || mouse.column < list_inner.x.saturating_add(4)
-                        {
-                            editor.selected = index;
-                            editor.toggle_selected();
-                        } else {
-                            editor.selected = index;
-                        }
-                    }
-                }
-            }
             Some(Modal::Profile(form)) => {
                 if let Some(index) = clicked_field
                     && index < form.fields.len()
@@ -1290,8 +1440,32 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: isize) {
+        if self.view_mode == ViewMode::Home && self.focus == Focus::Profiles {
+            let len = self.config.profiles.len().saturating_add(1);
+            let current = self.home_selected_index();
+            let next = ((current as isize + delta).rem_euclid(len as isize)) as usize;
+            self.select_home_index(next);
+            self.status_error = false;
+            self.status = if self.home_all_selected {
+                format!(
+                    "All Enabled · {} models · Enter 管理全部启用模型",
+                    self.all_enabled_model_count()
+                )
+            } else {
+                let profile = self.selected_profile().expect("provider selected");
+                format!(
+                    "Selected {} · Space {}厂商 · Enter 详情",
+                    profile.name,
+                    if profile.enabled { "禁用" } else { "启用" }
+                )
+            };
+            return;
+        }
         let len = match self.focus {
             Focus::Profiles => self.config.profiles.len(),
+            Focus::Models if self.view_mode == ViewMode::AllEnabled => {
+                self.all_managed_models().len()
+            }
             Focus::Models => self.models().len(),
             Focus::Details => return,
         };
@@ -1317,11 +1491,21 @@ impl App {
                 };
             }
         }
-        if self.focus == Focus::Models
-            && let Some(model) = self.selected_model()
-        {
-            self.status_error = false;
-            self.status = format!("Selected {} · Enter or click Launch", model.label());
+        if self.focus == Focus::Models {
+            if self.view_mode == ViewMode::AllEnabled {
+                if let Some(entry) = self.all_managed_models().get(self.model_idx) {
+                    self.status_error = false;
+                    self.status = format!(
+                        "{} · {} · Space {} · Enter 打开厂商",
+                        entry.profile_name,
+                        entry.model.label(),
+                        if entry.enabled { "禁用" } else { "启用" }
+                    );
+                }
+            } else if let Some(model) = self.selected_model() {
+                self.status_error = false;
+                self.status = format!("Selected {} · Enter or click Launch", model.label());
+            }
         }
     }
 
@@ -1370,16 +1554,21 @@ impl App {
     }
 
     fn new_profile(&mut self) {
-        self.modal = Some(Modal::Profile(ProfileForm::new()));
+        self.modal = Some(Modal::Profile(Box::new(ProfileForm::new())));
     }
 
     fn create_route_editor(&self) -> Option<RouteEditor> {
         let profile_id = self.selected_profile_id()?;
+        self.create_route_editor_for(profile_id)
+    }
+
+    fn create_route_editor_for(&self, profile_id: String) -> Option<RouteEditor> {
         let profile = self.config.profiles.get(&profile_id)?;
         let references = profile
             .required_model_ids()
             .into_iter()
             .chain(profile.enabled_models.iter().cloned())
+            .chain(profile.disabled_models.iter().cloned())
             .collect::<Vec<_>>();
         let one_m = references
             .iter()
@@ -1393,7 +1582,7 @@ impl App {
             .map(|id| canonical_model_id(id))
             .collect::<BTreeSet<_>>();
         locked.remove(&default_model);
-        let catalog = normalize_model_catalog(self.catalog_models());
+        let catalog = normalize_model_catalog(self.catalog_models_for(&profile_id));
         let default_idx = catalog
             .iter()
             .position(|m| m.id == default_model)
@@ -1406,13 +1595,18 @@ impl App {
         Some(RouteEditor {
             profile_id,
             original_profile: (*profile).clone(),
+            provider_enabled: profile.enabled,
             catalog,
             enabled: profile
                 .enabled_models
                 .iter()
                 .map(|id| canonical_model_id(id))
                 .collect(),
-            disabled: BTreeSet::new(),
+            disabled: profile
+                .disabled_models
+                .iter()
+                .map(|id| canonical_model_id(id))
+                .collect(),
             locked,
             default_model,
             one_m,
@@ -1519,11 +1713,53 @@ impl App {
         self.status = format!("Viewing {name} · Enter runs model · Esc back to providers");
     }
 
-    fn manage_models(&mut self, search_active: bool) {
-        if let Some(mut editor) = self.create_route_editor() {
-            editor.search_active = search_active;
-            self.modal = Some(Modal::Route(editor));
+    fn enter_all_enabled_view(&mut self) {
+        self.view_mode = ViewMode::AllEnabled;
+        self.focus = Focus::Models;
+        self.model_idx = self
+            .model_idx
+            .min(self.all_managed_models().len().saturating_sub(1));
+        self.model_offset = 0;
+        self.status_error = false;
+        self.status = "Space 启用/禁用模型 · Enter 打开所属厂商 · Esc 返回".into();
+    }
+
+    fn return_home(&mut self) {
+        self.view_mode = ViewMode::Home;
+        self.focus = Focus::Profiles;
+        self.status_error = false;
+        self.status = "Returned to Providers home".into();
+    }
+
+    fn open_selected_global_model(&mut self) {
+        let Some(selected) = self.all_managed_models().get(self.model_idx).cloned() else {
+            return;
+        };
+        let Some(profile_idx) = self
+            .profile_ids()
+            .iter()
+            .position(|id| id == &selected.profile_id)
+        else {
+            return;
+        };
+        self.profile_idx = profile_idx;
+        self.home_all_selected = false;
+        self.view_mode = ViewMode::Provider;
+        self.focus = Focus::Models;
+        self.provider_editor = self.create_route_editor_for(selected.profile_id);
+        if let Some(editor) = &mut self.provider_editor {
+            let wanted = canonical_model_id(&selected.model.id);
+            if let Some(index) = editor.catalog.iter().position(|model| model.id == wanted) {
+                editor.selected = index;
+            }
         }
+        self.sync_session_for_profile();
+        self.status_error = false;
+        self.status = format!(
+            "Viewing {} · {}",
+            selected.profile_name,
+            selected.model.label()
+        );
     }
 
     fn edit_profile(&mut self) {
@@ -1531,13 +1767,17 @@ impl App {
             return;
         };
         let profile = self.config.profiles[&id].clone();
-        self.modal = Some(Modal::Profile(ProfileForm::edit(id, &profile)));
+        self.modal = Some(Modal::Profile(Box::new(ProfileForm::edit(id, &profile))));
     }
 
     fn open_proxy_manager(&mut self) {
         let manager = ProxyManager::load(&self.paths);
         self.proxy_status = manager.runtime.clone();
         self.modal = Some(Modal::Proxy(manager));
+    }
+
+    fn open_help(&mut self) {
+        self.modal = Some(Modal::Help(HelpModal::for_view(self.view_mode)));
     }
 
     fn refresh_models(&mut self) {
@@ -1614,6 +1854,7 @@ impl App {
                     })
                 })
                 .collect();
+            profile.disabled_models.clear();
             Ok(())
         });
         match update {
@@ -1631,22 +1872,119 @@ impl App {
     }
 
     fn sync_all_to_claude(&mut self) {
-        let Some(default_profile_id) = self.selected_profile_id() else {
-            self.set_error("Create a profile before syncing Claude");
-            return;
-        };
-        match self.apply_all_to_claude(&default_profile_id) {
+        match self.apply_enabled_to_claude() {
             Ok(result) => {
                 self.proxy_status = proxy::status(&self.paths).ok();
                 self.status_error = false;
                 self.status = format!(
-                    "Synced {} models from {} profiles to Claude /model",
+                    "Synced {} models from {} enabled profiles to Claude /model",
                     result.model_count,
-                    self.config.profiles.len()
+                    self.config
+                        .profiles
+                        .values()
+                        .filter(|profile| profile.enabled)
+                        .count()
                 );
             }
             Err(error) => self.set_error(format!("Could not sync Claude: {error:#}")),
         }
+    }
+
+    fn toggle_selected_provider(&mut self) -> Result<()> {
+        let Some(profile_id) = self.selected_profile_id() else {
+            return Ok(());
+        };
+        let enabled = !self.config.profiles[&profile_id].enabled;
+        self.config = config::update(&self.paths.config, |latest| {
+            let profile = latest
+                .profiles
+                .get_mut(&profile_id)
+                .context("profile was removed in another CCSW instance")?;
+            profile.enabled = enabled;
+            if enabled {
+                let default = canonical_model_id(&profile.default_model);
+                profile
+                    .disabled_models
+                    .retain(|id| canonical_model_id(id) != default);
+            }
+            Ok(())
+        })?;
+        self.model_idx = 0;
+        self.model_offset = 0;
+        self.sync_session_for_profile();
+        let action = if enabled { "Enabled" } else { "Disabled" };
+        match self.apply_enabled_to_claude() {
+            Ok(result) => {
+                self.proxy_status = proxy::status(&self.paths).ok();
+                self.status_error = false;
+                self.status = format!(
+                    "{action} provider {profile_id} · Claude /model now has {} models",
+                    result.model_count
+                );
+            }
+            Err(error) => self.set_error(format!(
+                "{action} provider {profile_id}, but Claude sync failed: {error:#}"
+            )),
+        }
+        Ok(())
+    }
+
+    fn toggle_selected_global_model(&mut self) -> Result<()> {
+        let Some(selected) = self.all_managed_models().get(self.model_idx).cloned() else {
+            return Ok(());
+        };
+        let profile = self.toggled_global_model_profile(&selected)?;
+        let profile_id = selected.profile_id.clone();
+        self.config = config::update(&self.paths.config, |latest| {
+            latest.profiles.insert(profile_id.clone(), profile.clone());
+            Ok(())
+        })?;
+        let remaining = self.all_managed_models().len();
+        self.model_idx = self.model_idx.min(remaining.saturating_sub(1));
+        let action = if selected.enabled {
+            "Disabled"
+        } else {
+            "Enabled"
+        };
+        match self.apply_enabled_to_claude() {
+            Ok(result) => {
+                self.proxy_status = proxy::status(&self.paths).ok();
+                self.status_error = false;
+                self.status = format!(
+                    "{action} {} · {} · Claude /model now has {} models",
+                    selected.profile_name,
+                    selected.model.label(),
+                    result.model_count
+                );
+            }
+            Err(error) => self.set_error(format!(
+                "{action} {} · {}, but Claude sync failed: {error:#}",
+                selected.profile_name,
+                selected.model.label()
+            )),
+        }
+        Ok(())
+    }
+
+    fn toggled_global_model_profile(&self, selected: &GlobalModelRef) -> Result<Profile> {
+        let mut editor = self
+            .create_route_editor_for(selected.profile_id.clone())
+            .context("provider no longer exists")?;
+        let wanted = canonical_model_id(&selected.model.id);
+        let index = editor
+            .catalog
+            .iter()
+            .position(|model| model.id == wanted)
+            .with_context(|| format!("model '{}' is no longer configured", selected.model.id))?;
+        editor.selected = editor
+            .filtered_indices()
+            .iter()
+            .position(|candidate| *candidate == index)
+            .unwrap_or(0);
+        editor.toggle_selected();
+        let mut profile = self.config.profiles[&selected.profile_id].clone();
+        apply_route_editor(&mut profile, &editor);
+        Ok(profile)
     }
 
     fn set_selected_as_default(&mut self) {
@@ -1688,6 +2026,9 @@ impl App {
                 profile.enabled_models.push(old);
             }
             profile.enabled_models.retain(|id| id != &model_id);
+            profile
+                .disabled_models
+                .retain(|id| canonical_model_id(id) != canonical_model_id(&model_id));
             profile.default_model = model_id.clone();
             Ok(())
         });
@@ -1757,6 +2098,11 @@ impl App {
                     *em = new_id.clone();
                 }
             }
+            for disabled in &mut profile.disabled_models {
+                if *disabled == old_id {
+                    *disabled = new_id.clone();
+                }
+            }
             for m in &mut profile.models {
                 if m.id == old_id {
                     m.id = new_id.clone();
@@ -1786,75 +2132,23 @@ impl App {
         }
     }
 
-    fn disable_or_delete_selected_model(&mut self) {
-        if self.view_mode == ViewMode::Provider {
-            let target = if let Some(editor) = self.ensure_provider_editor() {
-                let filtered = editor.filtered_indices();
-                filtered
-                    .get(editor.selected)
-                    .map(|&idx| editor.catalog[idx].id.clone())
-            } else {
-                None
-            };
-            if let Some(id) = target {
-                let is_manual = self
-                    .selected_profile()
-                    .is_some_and(|p| p.models.iter().any(|m| m.id == id));
-                if is_manual {
-                    self.modal = Some(Modal::DeleteModel);
-                } else {
-                    let removed = if let Some(editor) = self.ensure_provider_editor() {
-                        editor.enabled.remove(&id)
-                    } else {
-                        false
-                    };
-                    if removed {
-                        let _ = self.commit_provider_editor();
-                        self.status = format!("Disabled model {id}");
-                    }
-                }
-            }
-            return;
-        }
-        let Some(profile_id) = self.selected_profile_id() else {
-            return;
-        };
+    fn delete_selected_model(&mut self) {
         let Some(model) = self.selected_model() else {
             return;
         };
-        let profile = match self.config.profiles.get(&profile_id) {
-            Some(p) => p,
-            None => return,
-        };
-        if profile.required_model_ids().contains(&model.id) {
-            self.set_error(format!(
-                "{} is required by this route and stays enabled",
-                model.id
-            ));
-            return;
-        }
-        let is_manual = profile.models.iter().any(|entry| entry.id == model.id);
-        if is_manual {
+        let base_id = canonical_model_id(&model.id);
+        let is_custom = self.selected_profile().is_some_and(|profile| {
+            profile
+                .models
+                .iter()
+                .any(|entry| canonical_model_id(&entry.id) == base_id)
+        });
+        if is_custom {
             self.modal = Some(Modal::DeleteModel);
         } else {
-            let model_id = model.id.clone();
-            let update = config::update(&self.paths.config, |latest| {
-                let profile = latest
-                    .profiles
-                    .get_mut(&profile_id)
-                    .context("profile was removed in another CCSW instance")?;
-                profile.enabled_models.retain(|id| id != &model_id);
-                Ok(())
-            });
-            match update {
-                Ok(config) => {
-                    self.config = config;
-                    self.model_idx = self.model_idx.min(self.models().len().saturating_sub(1));
-                    self.status_error = false;
-                    self.status = format!("Disabled model {model_id}");
-                }
-                Err(error) => self.set_error(format!("Could not disable model: {error:#}")),
-            }
+            self.set_error(
+                "Gateway models cannot be deleted · press Space to enable or disable this model",
+            );
         }
     }
 
@@ -1956,39 +2250,43 @@ impl App {
         self.status = message.into();
     }
 
-    fn commit_route_editor(&mut self, editor: &RouteEditor) -> Result<()> {
-        let mut profile = self
-            .config
-            .profiles
-            .get(&editor.profile_id)
-            .cloned()
-            .expect("route editor profile exists");
-        apply_route_editor(&mut profile, editor);
-        let id = editor.profile_id.clone();
-        let original = editor.original_profile.clone();
-        self.config = config::update(&self.paths.config, |latest| {
-            if latest.profiles.get(&id) != Some(&original) {
-                anyhow::bail!(
-                    "profile '{id}' changed in another CCSW instance; reopen model management"
-                );
-            }
-            latest.profiles.insert(id, profile);
-            Ok(())
-        })?;
-        self.model_idx = self.default_model_index();
-        self.model_offset = 0;
-        self.init_provider_editor();
-        Ok(())
+    fn apply_enabled_to_claude(&self) -> Result<claude_config::ApplyResult> {
+        let settings = claude_config::settings_path()?;
+        let selected = self
+            .selected_profile_id()
+            .filter(|id| self.profile_has_active_models(id));
+        let default_profile_id = selected.or_else(|| {
+            self.config
+                .profiles
+                .iter()
+                .find(|(id, _)| self.profile_has_active_models(id))
+                .map(|(id, _)| id.clone())
+        });
+        if let Some(default_profile_id) = default_profile_id {
+            claude_config::apply_all(
+                &settings,
+                &self.paths,
+                &self.config,
+                &self.cache,
+                &default_profile_id,
+            )
+        } else {
+            proxy::clear_aggregate_models(&self.paths)?;
+            claude_config::clear(&settings)
+        }
     }
 
-    fn apply_all_to_claude(&self, default_profile_id: &str) -> Result<claude_config::ApplyResult> {
-        claude_config::apply_all(
-            &claude_config::settings_path()?,
-            &self.paths,
-            &self.config,
-            &self.cache,
-            default_profile_id,
-        )
+    fn profile_has_active_models(&self, profile_id: &str) -> bool {
+        let Some(profile) = self.config.profiles.get(profile_id) else {
+            return false;
+        };
+        let discovered = self
+            .cache
+            .profiles
+            .get(profile_id)
+            .map(|cached| cached.models.as_slice())
+            .unwrap_or_default();
+        !discovery::active_models(profile, discovered).is_empty()
     }
 
     fn handle_modal(&mut self, key: KeyEvent) -> Result<()> {
@@ -2014,14 +2312,20 @@ impl App {
                 KeyCode::Char('s') | KeyCode::Esc => return Ok(()),
                 _ => {}
             },
-            Modal::Help => {
-                if matches!(
-                    key.code,
-                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
-                ) {
+            Modal::Help(help) => match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
                     return Ok(());
                 }
-            }
+                KeyCode::Tab | KeyCode::Right => help.move_section(true),
+                KeyCode::BackTab | KeyCode::Left => help.move_section(false),
+                KeyCode::Down | KeyCode::PageDown => help.scroll(true),
+                KeyCode::Up | KeyCode::PageUp => help.scroll(false),
+                KeyCode::Char('1') => help.select(0),
+                KeyCode::Char('2') => help.select(1),
+                KeyCode::Char('3') => help.select(2),
+                KeyCode::Char('4') => help.select(3),
+                _ => {}
+            },
             Modal::DeleteProfile => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     if let Some(id) = self.selected_profile_id() {
@@ -2043,132 +2347,97 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                 _ => {}
             },
-            Modal::DeleteModel => {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Enter => {
-                        if let (Some(profile_id), Some(model)) =
-                            (self.selected_profile_id(), self.selected_model())
-                        {
-                            let is_manual = self.config.profiles[&profile_id]
-                                .models
-                                .iter()
-                                .any(|entry| entry.id == model.id);
-                            if !is_manual {
-                                self.set_error("Discovered models cannot be deleted; refresh or edit the gateway");
-                            } else {
-                                let model_id = model.id.clone();
-                                self.config = config::update(&self.paths.config, |latest| {
-                                    let profile = latest
-                                        .profiles
-                                        .get_mut(&profile_id)
-                                        .context("profile was removed in another CCSW instance")?;
-                                    profile.models.retain(|entry| entry.id != model_id);
-                                    profile.enabled_models.retain(|id| id != &model_id);
-                                    Ok(())
-                                })?;
-                                self.model_idx =
-                                    self.model_idx.min(self.models().len().saturating_sub(1));
-                                self.status = format!("Deleted manual model {}", model.id);
-                                self.init_provider_editor();
+            Modal::DeleteModel => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    if let (Some(profile_id), Some(model)) =
+                        (self.selected_profile_id(), self.selected_model())
+                    {
+                        let model_base = canonical_model_id(&model.id);
+                        let is_manual = self.config.profiles[&profile_id]
+                            .models
+                            .iter()
+                            .any(|entry| canonical_model_id(&entry.id) == model_base);
+                        if !is_manual {
+                            self.set_error(
+                                "Gateway models cannot be deleted · use Space to disable them",
+                            );
+                        } else {
+                            let model_id = model.id.clone();
+                            let deleting_default = canonical_model_id(
+                                &self.config.profiles[&profile_id].default_model,
+                            ) == model_base;
+                            let replacement = self.provider_editor.as_ref().and_then(|editor| {
+                                editor
+                                    .catalog
+                                    .iter()
+                                    .find(|entry| {
+                                        entry.id != model_base && editor.is_enabled(&entry.id)
+                                    })
+                                    .or_else(|| {
+                                        editor.catalog.iter().find(|entry| entry.id != model_base)
+                                    })
+                                    .map(|entry| editor.effective_id(&entry.id))
+                            });
+                            if deleting_default && replacement.is_none() {
+                                self.set_error(
+                                    "The only model cannot be deleted · add another model first",
+                                );
+                                return Ok(());
                             }
+                            self.config = config::update(&self.paths.config, |latest| {
+                                let profile = latest
+                                    .profiles
+                                    .get_mut(&profile_id)
+                                    .context("profile was removed in another CCSW instance")?;
+                                profile
+                                    .models
+                                    .retain(|entry| canonical_model_id(&entry.id) != model_base);
+                                profile
+                                    .enabled_models
+                                    .retain(|id| canonical_model_id(id) != model_base);
+                                profile
+                                    .disabled_models
+                                    .retain(|id| canonical_model_id(id) != model_base);
+                                for alias in [
+                                    &mut profile.aliases.opus,
+                                    &mut profile.aliases.sonnet,
+                                    &mut profile.aliases.haiku,
+                                    &mut profile.aliases.fable,
+                                    &mut profile.subagent_model,
+                                ] {
+                                    if alias
+                                        .as_ref()
+                                        .is_some_and(|id| canonical_model_id(id) == model_base)
+                                    {
+                                        *alias = None;
+                                    }
+                                }
+                                profile
+                                    .fallback_models
+                                    .retain(|id| canonical_model_id(id) != model_base);
+                                if let Some(replacement) = &replacement
+                                    && deleting_default
+                                {
+                                    let replacement_base = canonical_model_id(replacement);
+                                    profile
+                                        .disabled_models
+                                        .retain(|id| canonical_model_id(id) != replacement_base);
+                                    profile.default_model = replacement.clone();
+                                }
+                                Ok(())
+                            })?;
+                            self.model_idx =
+                                self.model_idx.min(self.models().len().saturating_sub(1));
+                            self.status_error = false;
+                            self.status = format!("Deleted custom model {model_id}");
+                            self.init_provider_editor();
                         }
-                        return Ok(());
                     }
-                    KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    _ => {}
-                }
-            }
-            Modal::Route(editor) => {
-                if !editor.search_active
-                    && (key.code == KeyCode::Char('s')
-                        || (key.modifiers.contains(KeyModifiers::CONTROL)
-                            && key.code == KeyCode::Char('s')))
-                {
-                    self.commit_route_editor(editor)?;
-                    self.focus = Focus::Models;
-                    self.status_error = false;
-                    self.status = format!(
-                        "Saved {} enabled models for {}",
-                        self.models().len(),
-                        editor.profile_id
-                    );
                     return Ok(());
                 }
-                if editor.search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            if !editor.query.is_empty() {
-                                editor.query.clear();
-                                editor.selected = 0;
-                            } else {
-                                editor.search_active = false;
-                            }
-                        }
-                        KeyCode::Tab => editor.search_active = false,
-                        KeyCode::Enter => {
-                            editor.toggle_selected();
-                        }
-                        KeyCode::Backspace => {
-                            editor.query.pop();
-                            editor.selected = 0;
-                        }
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            editor.query.clear();
-                            editor.selected = 0;
-                        }
-                        KeyCode::Up | KeyCode::Down => {
-                            editor.move_selection(matches!(key.code, KeyCode::Down))
-                        }
-                        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            editor.query.push(ch);
-                            editor.selected = 0;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('/') | KeyCode::Tab => editor.search_active = true,
-                        KeyCode::Up | KeyCode::Char('k') => editor.move_selection(false),
-                        KeyCode::Down | KeyCode::Char('j') => editor.move_selection(true),
-                        KeyCode::Enter | KeyCode::Char(' ') => editor.toggle_selected(),
-                        KeyCode::Char('1') => editor.toggle_selected_1m(),
-                        KeyCode::Char('d') => editor.set_selected_default(),
-                        KeyCode::Char('A') => editor.enable_all_filtered(),
-                        KeyCode::Char('C') => editor.disable_all_filtered(),
-                        KeyCode::Char('r') => {
-                            self.commit_route_editor(editor)?;
-                            self.refresh_models();
-                            self.manage_models(false);
-                            return Ok(());
-                        }
-                        KeyCode::Char('a') => {
-                            self.commit_route_editor(editor)?;
-                            self.open_add_model_modal();
-                            return Ok(());
-                        }
-                        KeyCode::Char('e') | KeyCode::Char('E') => {
-                            self.commit_route_editor(editor)?;
-                            self.edit_profile();
-                            return Ok(());
-                        }
-                        KeyCode::Char('p') => {
-                            self.commit_route_editor(editor)?;
-                            let result = self.apply_all_to_claude(&editor.profile_id)?;
-                            self.proxy_status = proxy::status(&self.paths).ok();
-                            self.focus = Focus::Models;
-                            self.status_error = false;
-                            self.status = format!(
-                                "Synced {} models from all profiles to {}",
-                                result.model_count,
-                                result.path.display()
-                            );
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
-                }
-            }
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                _ => {}
+            },
             Modal::Proxy(manager) => {
                 let control = match key.code {
                     KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => return Ok(()),
@@ -2377,24 +2646,48 @@ impl App {
                     } else if let Some(profile_id) = self.selected_profile_id() {
                         let model = form.to_model();
                         let saved_model = model.clone();
+                        let enable_now = form.enable_now();
                         self.config = config::update(&self.paths.config, |latest| {
                             let profile = latest
                                 .profiles
                                 .get_mut(&profile_id)
                                 .context("profile was removed in another CCSW instance")?;
-                            profile.models.retain(|entry| entry.id != saved_model.id);
+                            let saved_base = canonical_model_id(&saved_model.id);
+                            profile
+                                .models
+                                .retain(|entry| canonical_model_id(&entry.id) != saved_base);
                             profile.models.push(saved_model.clone());
-                            if !profile.required_model_ids().contains(&saved_model.id)
-                                && !profile.enabled_models.contains(&saved_model.id)
-                            {
-                                profile.enabled_models.push(saved_model.id.clone());
+                            profile
+                                .enabled_models
+                                .retain(|id| canonical_model_id(id) != saved_base);
+                            profile
+                                .disabled_models
+                                .retain(|id| canonical_model_id(id) != saved_base);
+                            if enable_now {
+                                if !profile.required_model_ids().contains(&saved_model.id) {
+                                    profile.enabled_models.push(saved_model.id.clone());
+                                }
+                            } else {
+                                profile.disabled_models.push(saved_model.id.clone());
                             }
                             Ok(())
                         })?;
                         self.select_model_id(&model.id);
                         self.status_error = false;
-                        self.status = format!("Saved model {}", model.id);
+                        self.status = format!(
+                            "Saved model {} · {}",
+                            model.id,
+                            if enable_now { "enabled" } else { "disabled" }
+                        );
                         self.init_provider_editor();
+                        if let Some(editor) = &mut self.provider_editor
+                            && let Some(index) = editor
+                                .catalog
+                                .iter()
+                                .position(|entry| canonical_model_id(&entry.id) == base_id)
+                        {
+                            editor.selected = index;
+                        }
                         return Ok(());
                     }
                 }
@@ -2406,14 +2699,7 @@ impl App {
 
     fn draw(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(8),
-                Constraint::Length(3),
-            ])
-            .split(area);
+        let rows = app_rows(area);
         self.draw_route(frame, rows[0]);
         let ui = ui_areas(area, self.focus, self.view_mode);
         if let Some(profiles) = ui.profiles {
@@ -2425,7 +2711,7 @@ impl App {
         if let Some(details) = ui.details {
             self.draw_details(frame, details, self.focus == Focus::Details);
         }
-        self.draw_status(frame, ui.footer, area.width < 110);
+        self.draw_status(frame, ui.footer, area.width < 100);
         if let Some(modal) = &self.modal {
             self.draw_modal(frame, modal);
         }
@@ -2455,13 +2741,11 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "  Routers / 厂商列表  ",
+                    "  Routers / 厂商列表",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("·  ", Style::default().fg(MUTED)),
-                Span::styled("Enter / 单击进入详情与模型", Style::default().fg(CONNECTED)),
                 Span::styled(
-                    "  ·  n 新建 · e 编辑 · d 删除 · r 测速 · p 同步 Claude",
+                    format!("  ·  {} 个厂商", self.config.profiles.len()),
                     Style::default().fg(MUTED),
                 ),
             ]),
@@ -2485,9 +2769,28 @@ impl App {
                 Span::styled("→", Style::default().fg(ROUTE)),
                 Span::styled(format!("  {session}"), Style::default().fg(MUTED)),
             ]),
+            ViewMode::AllEnabled => Line::from(vec![
+                Span::styled(
+                    " ‹ 返回 (Esc) ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "  All Enabled / 全部启用",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ·  {} models", self.all_enabled_model_count()),
+                    Style::default().fg(CONNECTED),
+                ),
+            ]),
         };
         frame.render_widget(
-            Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM)),
+            Paragraph::new(line)
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::BOTTOM)),
             area,
         );
     }
@@ -2495,68 +2798,58 @@ impl App {
     fn draw_profiles(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let ids = self.profile_ids();
         let is_home = self.view_mode == ViewMode::Home;
-        let items: Vec<_> = ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| {
-                let profile = &self.config.profiles[id];
-                let is_selected = i == self.profile_idx;
-                if is_home {
-                    let enabled_count = profile.enabled_models.len()
-                        + profile
-                            .models
-                            .iter()
-                            .filter(|m| profile.required_model_ids().contains(&m.id))
-                            .count();
-                    let line1 = Line::from(vec![
-                        Span::styled(" ● ", Style::default().fg(CONNECTED)),
-                        Span::styled(
-                            format!("{:<20}", profile.name),
-                            Style::default().add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!(" [{}]", profile.api_format.label()),
-                            Style::default().fg(ROUTE),
-                        ),
-                        Span::styled(
-                            format!("   Default: {}", profile.default_model),
-                            Style::default().fg(WARNING),
-                        ),
-                        Span::styled(
-                            format!("   {} enabled", enabled_count.max(1)),
-                            Style::default().fg(CONNECTED),
-                        ),
-                        Span::styled(
-                            "   [Enter 详情 →]",
-                            Style::default().fg(if is_selected { Color::Black } else { ROUTE }),
-                        ),
-                    ]);
-                    let line2 = Line::from(vec![
-                        Span::styled("     Endpoint: ", Style::default().fg(MUTED)),
-                        Span::styled(profile.base_url.clone(), Style::default().fg(Color::Reset)),
-                        Span::styled(
-                            format!("   ·   Credential: {}", profile.credential.masked()),
-                            Style::default().fg(MUTED),
-                        ),
-                    ]);
-                    ListItem::new(vec![line1, line2, Line::raw("")])
-                } else {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("● ", Style::default().fg(CONNECTED)),
-                        Span::raw(profile.name.clone()),
-                        Span::styled(format!("  {id}"), Style::default().fg(MUTED)),
-                    ]))
-                }
-            })
-            .collect();
+        let content_width = area.width.saturating_sub(2);
+        let mut item_heights = Vec::with_capacity(ids.len().saturating_add(1));
+        let mut items = Vec::with_capacity(ids.len().saturating_add(1));
+        if is_home {
+            let lines = all_enabled_lines(
+                self.config
+                    .profiles
+                    .values()
+                    .filter(|profile| profile.enabled)
+                    .count(),
+                self.all_enabled_model_count(),
+                content_width,
+            );
+            item_heights.push(lines.len());
+            items.push(ListItem::new(lines));
+        }
+        items.extend(ids.iter().map(|id| {
+            let profile = &self.config.profiles[id];
+            if is_home {
+                let discovered = self
+                    .cache
+                    .profiles
+                    .get(id)
+                    .map(|cached| cached.models.as_slice())
+                    .unwrap_or_default();
+                let enabled_count = discovery::active_models(profile, discovered).len();
+                let lines = home_profile_lines(id, profile, enabled_count, content_width);
+                item_heights.push(lines.len());
+                ListItem::new(lines)
+            } else {
+                item_heights.push(1);
+                ListItem::new(Line::from(vec![
+                    Span::styled("● ", Style::default().fg(CONNECTED)),
+                    Span::raw(profile.name.clone()),
+                    Span::styled(format!("  {id}"), Style::default().fg(MUTED)),
+                ]))
+            }
+        }));
         let title = if is_home {
-            " Providers / 路由厂商 · Enter 进入详情 · n 新建 · e 编辑 · d 删除 · r 测速 · p 同步 "
+            " Providers / 路由厂商 "
         } else {
             " Routes "
         };
+        let selected = if is_home {
+            self.home_selected_index()
+        } else {
+            self.profile_idx
+        };
         let mut state = ListState::default()
             .with_offset(self.profile_offset)
-            .with_selected((!items.is_empty()).then_some(self.profile_idx));
+            .with_selected((!items.is_empty()).then_some(selected));
+        let item_count = items.len();
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(title, self.focus == Focus::Profiles))
@@ -2572,25 +2865,92 @@ impl App {
         );
         self.profile_offset = state.offset();
         let visible_items = if is_home {
-            usize::from(area.height.saturating_sub(2) / 3)
+            visible_variable_items(
+                &item_heights,
+                self.profile_offset,
+                usize::from(area.height.saturating_sub(2)),
+            )
         } else {
             usize::from(area.height.saturating_sub(2))
         };
-        draw_scrollbar(frame, area, ids.len(), self.profile_idx, visible_items);
-        if ids.is_empty() {
-            frame.render_widget(
-                Paragraph::new(
-                    "No providers configured yet.\nPress n to add a new router provider.",
-                )
-                .style(Style::default().fg(MUTED))
-                .alignment(Alignment::Center)
-                .block(panel(title, true)),
-                area,
-            );
-        }
+        draw_scrollbar(frame, area, item_count, selected, visible_items);
     }
 
     fn draw_models(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        if self.view_mode == ViewMode::AllEnabled {
+            let models = self.all_managed_models();
+            let enabled_count = models.iter().filter(|entry| entry.enabled).count();
+            let items = models
+                .iter()
+                .map(|entry| {
+                    ListItem::new(vec![
+                        Line::from(vec![
+                            Span::styled(
+                                if entry.enabled { "● " } else { "○ " },
+                                Style::default().fg(if entry.enabled { CONNECTED } else { MUTED }),
+                            ),
+                            Span::styled(
+                                entry.profile_name.clone(),
+                                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("  {}", entry.profile_id),
+                                Style::default().fg(MUTED),
+                            ),
+                            Span::raw("  ·  "),
+                            Span::styled(
+                                entry.model.label().to_owned(),
+                                Style::default().add_modifier(Modifier::BOLD),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("  ", Style::default()),
+                            Span::styled(entry.model.id.clone(), Style::default().fg(MUTED)),
+                        ]),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let mut state = ListState::default()
+                .with_offset(self.model_offset)
+                .with_selected((!items.is_empty()).then_some(self.model_idx));
+            let title = format!(
+                " All enabled models / 全部启用模型 · {enabled_count}/{} enabled ",
+                models.len()
+            );
+            frame.render_stateful_widget(
+                List::new(items)
+                    .block(panel(&title, true))
+                    .highlight_style(
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ROUTE)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol(" "),
+                area,
+                &mut state,
+            );
+            self.model_offset = state.offset();
+            draw_scrollbar(
+                frame,
+                area,
+                models.len(),
+                self.model_idx,
+                usize::from(area.height.saturating_sub(2) / 2),
+            );
+            if models.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(
+                        "No managed models.\nAdd models in a provider, or enable a provider from Home.",
+                    )
+                    .style(Style::default().fg(MUTED))
+                    .alignment(Alignment::Center)
+                    .block(panel(&title, true)),
+                    area,
+                );
+            }
+            return;
+        }
         if self.view_mode == ViewMode::Provider {
             let fallback;
             let editor = match &self.provider_editor {
@@ -2622,9 +2982,9 @@ impl App {
             );
 
             let search_title = if editor.search_active {
-                " 🔍 搜索模型 (输入中 · Esc 退出) "
+                " 🔍 搜索模型 · Esc 退出 "
             } else {
-                " 🔍 搜索模型 (按 / 激活搜索) "
+                " 🔍 搜索模型 · / 开始输入 "
             };
             let search_block = panel(search_title, editor.search_active);
             let search_inner = panel_inner(search_area);
@@ -2665,7 +3025,11 @@ impl App {
                     } else {
                         Span::raw("")
                     },
-                    Span::styled(format!("  {stats_text}"), Style::default().fg(MUTED)),
+                    if search_inner.width >= 55 {
+                        Span::styled(format!("  {stats_text}"), Style::default().fg(MUTED))
+                    } else {
+                        Span::raw("")
+                    },
                 ]);
                 let add_btn = catalog_add_button_rect(search_area);
                 let text_width = if let Some(btn) = add_btn {
@@ -2683,26 +3047,25 @@ impl App {
                 );
                 frame.render_widget(Paragraph::new(line), text_area);
                 if let Some(btn_rect) = add_btn {
+                    let label = if btn_rect.width >= 14 {
+                        "[+ Add model (a)]"
+                    } else {
+                        "[+ a]"
+                    };
                     frame.render_widget(
-                        Paragraph::new("[+ Add model (a)]")
-                            .alignment(Alignment::Center)
-                            .style(
-                                Style::default()
-                                    .fg(Color::Black)
-                                    .bg(CONNECTED)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
+                        Paragraph::new(label).alignment(Alignment::Center).style(
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(CONNECTED)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         btn_rect,
                     );
                 }
             }
 
             let filtered = editor.filtered_indices();
-            let list_title = if self.focus == Focus::Models && !editor.search_active {
-                " 模型全量目录 · Space 切换启用 · 1 切换 1M · d 设为默认 · Enter 运行 "
-            } else {
-                " 模型全量目录 (Catalog) "
-            };
+            let list_title = " 模型目录 · ◆ 默认  ● 启用  ○ 禁用 ";
             let block = panel(
                 list_title,
                 self.focus == Focus::Models && !editor.search_active,
@@ -2835,11 +3198,7 @@ impl App {
                 ])
             })
             .collect::<Vec<_>>();
-        let title = if self.focus == Focus::Models {
-            " Enabled models · Enter run · 1 1M · d default · x disable · / search · Esc back "
-        } else {
-            " Enabled models "
-        };
+        let title = " Enabled models ";
         let mut state = ListState::default()
             .with_offset(self.model_offset)
             .with_selected((!items.is_empty()).then_some(self.model_idx));
@@ -2873,8 +3232,7 @@ impl App {
         editor: &RouteEditor,
         profile: &Profile,
     ) {
-        let title = " ◆ 当前选中模型 (Selected Model Showcase) ";
-        frame.render_widget(panel(title, true), area);
+        frame.render_widget(panel(" ◆ Selected model / 当前模型 ", true), area);
         let inner = panel_inner(area);
         if inner.width == 0 || inner.height == 0 {
             return;
@@ -2894,125 +3252,127 @@ impl App {
         let is_default = model.id == editor.default_model;
         let is_enabled = editor.is_enabled(&model.id);
         let is_1m = editor.one_m.contains(&model.id);
-        let is_manual = profile.models.iter().any(|m| m.id == model.id);
+        let is_manual = profile
+            .models
+            .iter()
+            .any(|m| canonical_model_id(&m.id) == model.id);
+        let alias = profile
+            .aliases
+            .iter()
+            .find(|(_, id)| canonical_model_id(id) == model.id)
+            .map(|(role, _)| role);
 
-        let mut lines = Vec::new();
-
-        lines.push(Line::from(vec![
-            Span::styled(" 模型: ", Style::default().fg(MUTED)),
-            Span::styled(
-                model.label(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            if is_default {
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(" 模型: ", Style::default().fg(MUTED)),
                 Span::styled(
-                    "  ★ 默认模型",
-                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::raw("")
-            },
-        ]));
-
-        lines.push(Line::from(vec![
-            Span::styled(" 标识: ", Style::default().fg(MUTED)),
-            Span::styled(
-                &effective_id,
-                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        let status_span = if is_default && is_enabled {
-            Span::styled(
-                "◆ 默认启动模型",
-                Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-            )
-        } else if is_default && !is_enabled {
-            Span::styled("◇ 默认模型 (未启用)", Style::default().fg(WARNING))
-        } else if is_enabled {
-            Span::styled(
-                "● 已启用 (Enabled)",
-                Style::default().fg(CONNECTED).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled("○ 未启用 (Space 开启)", Style::default().fg(MUTED))
-        };
-        lines.push(Line::from(vec![
-            Span::styled(" 状态: ", Style::default().fg(MUTED)),
-            status_span,
-            Span::styled("   规格: ", Style::default().fg(MUTED)),
-            Span::styled(
-                if is_1m {
-                    "1M 扩展长上下文"
+                    model.label(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                if is_default {
+                    Span::styled(
+                        "  ★ 默认模型",
+                        Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    )
                 } else {
-                    "标准上下文 200k"
+                    Span::raw("")
                 },
-                Style::default().fg(if is_1m { CONNECTED } else { MUTED }),
+            ]),
+            Line::from(vec![
+                Span::styled(" 标识: ", Style::default().fg(MUTED)),
+                Span::styled(
+                    &effective_id,
+                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(" 状态: ", Style::default().fg(MUTED)),
+                Span::styled(
+                    if is_enabled {
+                        "● 已启用"
+                    } else {
+                        "○ 已禁用"
+                    },
+                    Style::default()
+                        .fg(if is_enabled { CONNECTED } else { MUTED })
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(" 上下文: ", Style::default().fg(MUTED)),
+                Span::styled(
+                    if is_1m { "1M 扩展" } else { "标准 200k" },
+                    Style::default().fg(if is_1m { CONNECTED } else { MUTED }),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(" 来源: ", Style::default().fg(MUTED)),
+                Span::raw(if is_manual { "自定义" } else { "网关" }),
+                if let Some(alias) = alias {
+                    Span::styled(format!("   角色: {alias}"), Style::default().fg(ROUTE))
+                } else {
+                    Span::raw("")
+                },
+            ]),
+        ];
+        let controls = showcase_controls(area);
+        let controls_top = controls
+            .iter()
+            .map(|(_, rect)| rect.y)
+            .min()
+            .unwrap_or(inner.y.saturating_add(inner.height));
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: false }),
+            Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                controls_top.saturating_sub(inner.y),
             ),
-        ]));
-
-        let source_str = if is_manual {
-            "手动自定义模型"
-        } else {
-            "网关自动发现"
-        };
-        let mut alias_str = String::new();
-        if profile.aliases.sonnet.as_deref() == Some(&model.id) {
-            alias_str = "Sonnet 别名".into();
-        } else if profile.aliases.opus.as_deref() == Some(&model.id) {
-            alias_str = "Opus 别名".into();
-        } else if profile.aliases.haiku.as_deref() == Some(&model.id) {
-            alias_str = "Haiku 别名".into();
+        );
+        for (control, rect) in controls {
+            let (label, style) = match control {
+                ShowcaseControl::Toggle => (
+                    if is_enabled {
+                        "[Space 禁用]"
+                    } else {
+                        "[Space 启用]"
+                    },
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                ShowcaseControl::Default => (
+                    "[d 设为默认]",
+                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                ),
+                ShowcaseControl::OneM => (
+                    if is_1m {
+                        "[1 关闭 1M]"
+                    } else {
+                        "[1 开启 1M]"
+                    },
+                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                ),
+                ShowcaseControl::Delete => (
+                    if is_manual {
+                        "[x 删除]"
+                    } else {
+                        "[网关模型不可删除]"
+                    },
+                    Style::default().fg(if is_manual { ERROR } else { MUTED }),
+                ),
+            };
+            frame.render_widget(
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(style),
+                rect,
+            );
         }
-        lines.push(Line::from(vec![
-            Span::styled(" 来源: ", Style::default().fg(MUTED)),
-            Span::raw(source_str),
-            if !alias_str.is_empty() {
-                Span::styled(format!("   角色: {alias_str}"), Style::default().fg(ROUTE))
-            } else {
-                Span::raw("")
-            },
-        ]));
-
-        lines.push(Line::styled(
-            " ────────────────────────────────────────────────",
-            Style::default().fg(MUTED).add_modifier(Modifier::DIM),
-        ));
-
-        lines.push(Line::from(vec![
-            Span::styled(" 快捷: ", Style::default().fg(MUTED)),
-            Span::styled(
-                "[ Enter 启动 ]",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(CONNECTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                "[ Space 切换启用 ]",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(ROUTE)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::raw("       "),
-            Span::styled(
-                "[ d 设为默认 ]",
-                Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                "[ 1 切换 1M  ]",
-                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 
     fn draw_provider_details(
@@ -3023,19 +3383,13 @@ impl App {
         active: bool,
     ) {
         let title = if active {
-            " 厂商连接与配置 · a 添加 · r 拉取 · M 弹窗 · p 同步 · E 编辑 "
+            " 厂商连接 · r 刷新 · E 编辑 "
         } else {
-            " 厂商连接与配置 (Provider Details) "
+            " 厂商连接 (Provider) "
         };
         frame.render_widget(panel(title, active), area);
         let inner = panel_inner(area);
-        let button_rows = if inner.height >= 7 {
-            4
-        } else if inner.height >= 5 {
-            3
-        } else {
-            2
-        };
+        let button_rows = 1;
         let content = Rect::new(
             inner.x,
             inner.y,
@@ -3059,6 +3413,14 @@ impl App {
             profile.api_format.label().into()
         };
         let mut lines = vec![
+            detail(
+                "Provider",
+                if profile.enabled {
+                    "● enabled"
+                } else {
+                    "○ disabled"
+                },
+            ),
             detail("API format", &api_format),
             detail("Endpoint", &profile.base_url),
             detail("Credential", &profile.credential.masked()),
@@ -3146,7 +3508,7 @@ impl App {
 
     fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
         for (control, rect) in footer_controls(area, compact, self.view_mode) {
-            let (label, style) = self.footer_control_style(control, compact);
+            let (label, style) = self.footer_control_style(control, compact, area.width < 55);
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)
@@ -3161,26 +3523,25 @@ impl App {
                 Style::default().fg(color),
             ),
             Span::styled(&self.status, Style::default().fg(color)),
-            Span::styled(
-                if self.view_mode == ViewMode::Home {
-                    "   Enter 进入详情 · n 新建 · e 编辑 · d 删除 · r 测速 · q 退出"
-                } else {
-                    "   Esc 返回首页 · Tab 切换面板 · Enter 启动 · 1 切换 1M · d 设为默认"
-                },
-                Style::default().fg(MUTED),
-            ),
         ]);
-        frame.render_widget(
-            Paragraph::new(footer),
-            Rect {
-                y: area.y.saturating_add(2),
-                height: 1,
-                ..area
-            },
-        );
+        if area.height > 1 {
+            frame.render_widget(
+                Paragraph::new(footer).wrap(Wrap { trim: true }),
+                Rect {
+                    y: area.y.saturating_add(1),
+                    height: area.height.saturating_sub(1),
+                    ..area
+                },
+            );
+        }
     }
 
-    fn footer_control_style(&self, control: FooterControl, compact: bool) -> (String, Style) {
+    fn footer_control_style(
+        &self,
+        control: FooterControl,
+        compact: bool,
+        tiny: bool,
+    ) -> (String, Style) {
         let selected = match control {
             FooterControl::Models => self.focus == Focus::Models,
             FooterControl::Details => self.focus == Focus::Details,
@@ -3189,33 +3550,51 @@ impl App {
             _ => false,
         };
         let dot = if selected { '●' } else { '○' };
-        let label = match (control, compact) {
-            (FooterControl::Back, true) => "‹ Back".into(),
-            (FooterControl::Back, false) => "‹ Back (Esc)".into(),
-            (FooterControl::Models, _) => format!("{dot} Models"),
-            (FooterControl::Details, _) => format!("{dot} Details"),
-            (FooterControl::Launch, true) => {
+        let label = match (control, compact, tiny) {
+            (FooterControl::Back, _, true) => "‹".into(),
+            (FooterControl::Models, _, true) => format!("{dot} M"),
+            (FooterControl::Details, _, true) => format!("{dot} D"),
+            (FooterControl::Launch, _, true) => {
+                if self.view_mode == ViewMode::Home {
+                    "Enter".into()
+                } else {
+                    "▶".into()
+                }
+            }
+            (FooterControl::AddProfile, _, true) => "+".into(),
+            (FooterControl::Sync, _, true) => "⇄".into(),
+            (FooterControl::Proxy, _, true) => "Px".into(),
+            (FooterControl::Help, _, true) => "?".into(),
+            (FooterControl::Quit, _, true) => "×".into(),
+            (FooterControl::Resume, _, true) => "R".into(),
+            (FooterControl::New, _, true) => "N".into(),
+            (FooterControl::Back, true, false) => "‹ Back".into(),
+            (FooterControl::Back, false, false) => "‹ Back (Esc)".into(),
+            (FooterControl::Models, _, false) => format!("{dot} Models"),
+            (FooterControl::Details, _, false) => format!("{dot} Details"),
+            (FooterControl::Launch, true, false) => {
                 if self.view_mode == ViewMode::Home {
                     "Enter".into()
                 } else {
                     "▶ Run".into()
                 }
             }
-            (FooterControl::Launch, false) => {
+            (FooterControl::Launch, false, false) => {
                 if self.view_mode == ViewMode::Home {
                     "Enter 详情".into()
                 } else {
                     "▶ Launch".into()
                 }
             }
-            (FooterControl::Resume, true) => format!("R{dot}"),
-            (FooterControl::Resume, false) => format!("{dot} Resume"),
-            (FooterControl::New, true) => format!("N{dot}"),
-            (FooterControl::New, false) => format!("{dot} New"),
-            (FooterControl::Sync, true) => "⇄ Sync".into(),
-            (FooterControl::Sync, false) => "⇄ Sync all".into(),
-            (FooterControl::Test, _) => "Test".into(),
-            (FooterControl::Proxy, true) => format!(
+            (FooterControl::AddProfile, true, false) => "+ Route".into(),
+            (FooterControl::AddProfile, false, false) => "+ New route".into(),
+            (FooterControl::Resume, true, false) => format!("R{dot}"),
+            (FooterControl::Resume, false, false) => format!("{dot} Resume"),
+            (FooterControl::New, true, false) => format!("N{dot}"),
+            (FooterControl::New, false, false) => format!("{dot} New"),
+            (FooterControl::Sync, true, false) => "⇄ Sync".into(),
+            (FooterControl::Sync, false, false) => "⇄ Sync all".into(),
+            (FooterControl::Proxy, true, false) => format!(
                 "{} Px",
                 if self
                     .proxy_status
@@ -3227,7 +3606,7 @@ impl App {
                     '○'
                 }
             ),
-            (FooterControl::Proxy, false) => format!(
+            (FooterControl::Proxy, false, false) => format!(
                 "{} Proxy",
                 if self
                     .proxy_status
@@ -3239,21 +3618,26 @@ impl App {
                     '○'
                 }
             ),
-            (FooterControl::Help, true) => "?".into(),
-            (FooterControl::Help, false) => "Help".into(),
-            (FooterControl::Quit, true) => "×".into(),
-            (FooterControl::Quit, false) => "Quit".into(),
+            (FooterControl::Help, true, false) => "?".into(),
+            (FooterControl::Help, false, false) => "Help".into(),
+            (FooterControl::Quit, true, false) => "×".into(),
+            (FooterControl::Quit, false, false) => "Quit".into(),
         };
         let style = if control == FooterControl::Back {
             Style::default()
                 .fg(Color::Black)
                 .bg(ROUTE)
                 .add_modifier(Modifier::BOLD)
-        } else if matches!(control, FooterControl::Launch | FooterControl::Sync) {
+        } else if matches!(
+            control,
+            FooterControl::Launch | FooterControl::AddProfile | FooterControl::Sync
+        ) {
             Style::default()
                 .fg(Color::Black)
                 .bg(
-                    if control == FooterControl::Launch && self.view_mode == ViewMode::Home {
+                    if matches!(control, FooterControl::Launch | FooterControl::AddProfile)
+                        && self.view_mode == ViewMode::Home
+                    {
                         CONNECTED
                     } else {
                         ROUTE
@@ -3327,10 +3711,6 @@ impl App {
                 draw_model_form(frame, area, form);
                 draw_modal_buttons(frame, area, &["Fetch API (Ctrl+F)", "Save", "Cancel"]);
             }
-            Modal::Route(editor) => {
-                let profile = &self.config.profiles[&editor.profile_id];
-                draw_route_editor(frame, area, profile, editor);
-            }
             Modal::Proxy(manager) => draw_proxy_manager(frame, area, manager),
             Modal::DeleteProfile => {
                 draw_confirmation(
@@ -3348,56 +3728,180 @@ impl App {
                 );
                 draw_modal_buttons(frame, area, &["Delete", "Cancel"]);
             }
-            Modal::Help => {
-                let text = vec![
-                    Line::styled(
-                        "Home Screen (厂商列表首页)",
-                        Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-                    ),
-                    Line::raw("Enter / Click 进入选中厂商详情（查看可用模型与配置）"),
-                    Line::raw("↑/↓ / j/k     在厂商列表间移动光标"),
-                    Line::raw("n / e / d     新建 / 编辑 / 删除厂商路由配置"),
-                    Line::raw("r / t         测试网络连接并自动拉取厂商最新模型"),
-                    Line::raw("p             将所有厂商的已启用模型聚合同步到 Claude /model"),
-                    Line::raw("P             管理后台代理服务及系统开机自启动"),
-                    Line::raw(""),
-                    Line::styled(
-                        "Provider Screen (厂商详情与模型全量管理页)",
-                        Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-                    ),
-                    Line::raw("Esc           返回厂商列表首页 (‹ Back to Home) / 退出搜索"),
-                    Line::raw("/             激活上方搜索框（实时模糊筛选全量模型）"),
-                    Line::raw("↑/↓ / j/k     在模型目录中浏览（右侧单独展出当前模型详情卡片）"),
-                    Line::raw("Space         切换当前模型的启用/禁用状态 (● 已启用 / ○ 未启用)"),
-                    Line::raw("d             将当前模型设为该厂商默认启动模型 (◆ 默认)"),
-                    Line::raw("1             一键开启/关闭 1M 扩展长上下文 ([1m])"),
-                    Line::raw("Enter         直接以选中的模型启动 Claude（未启用将自动开启）"),
-                    Line::raw("m             切换启动模式（Resume 恢复上次会话 / New 新建会话）"),
-                    Line::raw("R / N         恢复最新会话 / 新建独立会话"),
-                    Line::raw("A / C         一键启用筛选出的全部模型 / 清空非必要模型"),
-                    Line::raw("a             添加自定义模型"),
-                    Line::raw("E             编辑当前厂商 Endpoint、Token 与角色别名"),
-                    Line::raw(""),
-                    Line::styled(
-                        "Forms & Model Manager (输入框与模型管理)",
-                        Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-                    ),
-                    Line::raw("Enter         表单字段向下流转；末尾字段直接保存提交"),
-                    Line::raw(
-                        "←/→/Home/End  文本框逐字光标移动；Backspace/Delete 删除；Ctrl+U 清空",
-                    ),
-                    Line::raw("s / Ctrl+S    保存表单或模型管理器更改并退出"),
-                    Line::raw("A / C         模型管理中一键启用全部 / 清空所有可选模型"),
-                ];
-                frame.render_widget(
-                    Paragraph::new(text)
-                        .wrap(Wrap { trim: false })
-                        .block(panel(" Help · Esc/q to close ", true)),
-                    area,
-                );
-                draw_modal_buttons(frame, area, &["Close (Esc/q)"]);
-            }
+            Modal::Help(help) => draw_help(frame, area, help),
         }
+    }
+}
+
+fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)] {
+    match section {
+        HelpSection::Home => &[
+            ("↑↓ / j k", "选择 All Enabled 或厂商"),
+            ("Enter / Click", "打开当前选中项"),
+            ("Space", "启用/禁用厂商，并同步 Claude /model"),
+            ("n / e / d", "新建 / 编辑 / 删除厂商"),
+            ("r / t", "测试连接并刷新模型目录"),
+            ("m / R / N", "切换模式 / 恢复会话 / 新建会话"),
+            ("p / P", "同步全部模型 / 管理后台代理"),
+            ("q", "退出 CCSW"),
+        ],
+        HelpSection::AllEnabled => &[
+            ("↑↓ / j k", "跨厂商选择模型"),
+            ("PgUp / PgDn", "快速翻页；Home / End 跳转首尾"),
+            ("Space", "启用或禁用模型，并同步 Claude /model"),
+            ("Enter", "打开该模型所属厂商"),
+            ("p / P", "同步全部模型 / 管理后台代理"),
+            ("Esc", "返回厂商首页"),
+        ],
+        HelpSection::Provider => &[
+            ("↑↓ / j k", "浏览模型；窄窗口用 Tab 切换面板"),
+            ("/ / Esc", "搜索模型 / 清空搜索或返回首页"),
+            ("Space / d / 1", "切换启用 / 设为默认 / 切换 1M"),
+            ("Enter / R / N", "运行选中模型 / 恢复 / 新建会话"),
+            ("m", "切换 Resume / New 启动模式"),
+            ("A / C", "启用筛选结果 / 清空非必要启用项"),
+            ("a / x / Delete", "添加模型 / 删除自定义模型"),
+            ("E / r / p / P", "编辑厂商 / 刷新 / 同步 / 代理"),
+        ],
+        HelpSection::Forms => &[
+            ("↑↓ / Tab", "切换字段；Shift+Tab 返回上一项"),
+            ("Enter", "确认选项或前往下一项；末项保存"),
+            ("←→ / Home End", "移动文本光标"),
+            ("Backspace / Del", "删除字符；Ctrl+U 清空当前字段"),
+            ("Space / ←→", "切换开关或选项"),
+            ("Ctrl+F / Ctrl+R", "自定义模型表单：从厂商 API 刷新模型"),
+            ("Ctrl+S", "保存更改"),
+            ("Esc", "取消；模型搜索中先清空搜索"),
+        ],
+    }
+}
+
+fn help_tabs(active: HelpSection) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, section) in HelpSection::ALL.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let label = format!(" {} {} ", index + 1, section.label());
+        let style = if *section == active {
+            Style::default()
+                .fg(Color::Black)
+                .bg(ROUTE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(MUTED)
+        };
+        spans.push(Span::styled(label, style));
+    }
+    Line::from(spans)
+}
+
+fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static>> {
+    let heading = match section {
+        HelpSection::Home => "Home · 厂商首页",
+        HelpSection::AllEnabled => "All Enabled · 全部模型",
+        HelpSection::Provider => "Provider · 厂商与模型",
+        HelpSection::Forms => "Forms · 表单输入",
+    };
+    let mut lines = vec![
+        Line::styled(
+            heading,
+            Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    for (key, action) in help_commands(section) {
+        let key = if wide {
+            format!("{key:<18}")
+        } else {
+            format!("{key}  ")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(key, Style::default().fg(WARNING)),
+            Span::raw(*action),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("●", Style::default().fg(CONNECTED)),
+        Span::styled(" 启用  ", Style::default().fg(MUTED)),
+        Span::styled("○", Style::default().fg(MUTED)),
+        Span::styled(" 禁用  ", Style::default().fg(MUTED)),
+        Span::styled("◆", Style::default().fg(ROUTE)),
+        Span::styled(" 默认  ", Style::default().fg(MUTED)),
+        Span::styled("◈", Style::default().fg(WARNING)),
+        Span::styled(" 角色依赖", Style::default().fg(MUTED)),
+    ]));
+    lines
+}
+
+fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal) {
+    let compact = area.width < 58 || area.height < 14;
+    let title = if compact {
+        format!(" Help · {} · Esc ", help.section.label())
+    } else {
+        format!(" Help · {} ", help.section.label())
+    };
+    frame.render_widget(panel(&title, true), area);
+
+    let inner = panel_inner(area);
+    let show_button = area.height >= 12;
+    let usable = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(if show_button { 2 } else { 0 }),
+    );
+    if usable.height == 0 {
+        return;
+    }
+
+    let tab_height = if compact { 2 } else { 1 }.min(usable.height);
+    let tabs = Rect::new(usable.x, usable.y, usable.width, tab_height);
+    frame.render_widget(
+        Paragraph::new(help_tabs(help.section)).wrap(Wrap { trim: true }),
+        tabs,
+    );
+
+    let show_navigation = !compact && usable.height > tab_height;
+    let navigation_height = u16::from(show_navigation);
+    if show_navigation {
+        let navigation = Rect::new(
+            usable.x,
+            usable.y.saturating_add(tab_height),
+            usable.width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new("←→ / Tab 切换分区 · ↑↓ 滚动 · 1–4 直达")
+                .style(Style::default().fg(MUTED)),
+            navigation,
+        );
+    }
+
+    let content_y = usable
+        .y
+        .saturating_add(tab_height)
+        .saturating_add(navigation_height);
+    let content = Rect::new(
+        usable.x,
+        content_y,
+        usable.width,
+        usable
+            .height
+            .saturating_sub(tab_height.saturating_add(navigation_height)),
+    );
+    if content.height > 0 {
+        frame.render_widget(
+            Paragraph::new(help_content(help.section, area.width >= 58))
+                .wrap(Wrap { trim: false })
+                .scroll((help.scroll, 0)),
+            content,
+        );
+    }
+
+    if show_button {
+        draw_modal_buttons(frame, area, &["Close  Esc / q / ? / Enter"]);
     }
 }
 
@@ -3492,6 +3996,7 @@ impl ProfileForm {
             None,
             vec![],
             vec![],
+            vec![],
             "",
             "",
             "https://",
@@ -3524,6 +4029,7 @@ impl ProfileForm {
             Some(id.clone()),
             profile.models.clone(),
             profile.enabled_models.clone(),
+            profile.disabled_models.clone(),
             &id,
             &profile.name,
             &profile.base_url,
@@ -3538,6 +4044,7 @@ impl ProfileForm {
             profile.subagent_model.as_deref().unwrap_or(""),
             &profile.fallback_models.join(","),
         );
+        form.provider_enabled = profile.enabled;
         form.original_profile = Some(profile.clone());
         form
     }
@@ -3547,6 +4054,7 @@ impl ProfileForm {
         original_id: Option<String>,
         models: Vec<ModelEntry>,
         enabled_models: Vec<String>,
+        disabled_models: Vec<String>,
         id: &str,
         name: &str,
         base_url: &str,
@@ -3587,8 +4095,10 @@ impl ProfileForm {
         Self {
             original_id,
             original_profile: None,
+            provider_enabled: true,
             models,
             enabled_models,
+            disabled_models,
             fields,
             selected: 0,
         }
@@ -3617,6 +4127,7 @@ impl ProfileForm {
         };
         let profile = Profile {
             name: value(1),
+            enabled: self.provider_enabled,
             base_url: value(3),
             api_format,
             credential,
@@ -3635,6 +4146,7 @@ impl ProfileForm {
                 .map(str::to_owned)
                 .collect(),
             enabled_models: self.enabled_models.clone(),
+            disabled_models: self.disabled_models.clone(),
             models: self.models.clone(),
         };
         profile.validate()?;
@@ -3649,6 +4161,7 @@ impl ModelForm {
     }
 
     fn with_api_models(api_models: Vec<ModelEntry>) -> Self {
+        let api_models = config::deduplicate_model_entries(api_models);
         let count = api_models.len();
         let api_status = if count > 0 {
             format!("已加载缓存的 {count} 个 API 模型 (输入关键词过滤 / 点击填入)")
@@ -3661,6 +4174,7 @@ impl ModelForm {
                 field("Label", ""),
                 field("Description", ""),
                 toggle_field("1M context", false),
+                toggle_field("Enable now", true),
             ],
             selected: 0,
             api_models,
@@ -3781,6 +4295,10 @@ impl ModelForm {
             description: optional(2),
         }
     }
+
+    fn enable_now(&self) -> bool {
+        self.fields[4].value == "true"
+    }
 }
 
 impl RouteEditor {
@@ -3815,6 +4333,9 @@ impl RouteEditor {
     }
 
     fn is_required(&self, id: &str) -> bool {
+        if !self.provider_enabled {
+            return false;
+        }
         if self.disabled.contains(id) {
             return false;
         }
@@ -3822,6 +4343,9 @@ impl RouteEditor {
     }
 
     fn is_enabled(&self, id: &str) -> bool {
+        if !self.provider_enabled {
+            return false;
+        }
         if self.disabled.contains(id) {
             return false;
         }
@@ -3837,18 +4361,11 @@ impl RouteEditor {
         }
     }
 
-    fn move_selection(&mut self, down: bool) {
-        let len = self.filtered_indices().len();
-        if len == 0 {
-            self.selected = 0;
-        } else if down {
-            self.selected = (self.selected + 1) % len;
-        } else {
-            self.selected = self.selected.checked_sub(1).unwrap_or(len - 1);
-        }
-    }
-
     fn toggle_selected(&mut self) {
+        if !self.provider_enabled {
+            self.status = "Provider is disabled · enable it from the home page first".into();
+            return;
+        }
         let Some(id) = self.selected_model().map(|model| model.id.clone()) else {
             self.status = "No model matches this search".into();
             return;
@@ -4004,6 +4521,12 @@ fn apply_route_editor(profile: &mut Profile, editor: &RouteEditor) {
         .catalog
         .iter()
         .filter(|m| editor.is_enabled(&m.id) && m.id != def_canonical)
+        .map(|m| editor.effective_id(&m.id))
+        .collect();
+    profile.disabled_models = editor
+        .catalog
+        .iter()
+        .filter(|m| editor.disabled.contains(&m.id))
         .map(|m| editor.effective_id(&m.id))
         .collect();
 }
@@ -4344,7 +4867,13 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
     for (index, field) in form.fields.iter().enumerate() {
         let is_current = index == form.selected && !form.focus_api_search;
         let shown = if field.toggle {
-            if field.value == "true" {
+            if field.label == "Enable now" {
+                if field.value == "true" {
+                    "[● 保存后启用]".into()
+                } else {
+                    "[○ 保存但暂不启用]".into()
+                }
+            } else if field.value == "true" {
                 "[● ON 1M 长上下文]".into()
             } else {
                 "[○ OFF 标准上下文]".into()
@@ -4534,174 +5063,6 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
             }
         }
     }
-}
-
-fn draw_route_editor(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    profile: &Profile,
-    editor: &RouteEditor,
-) {
-    frame.render_widget(Clear, area);
-    frame.render_widget(panel(" Manage route · models ", true), area);
-    let inner = panel_inner(area);
-    let filtered = editor.filtered_indices();
-    let enabled_count = editor
-        .catalog
-        .iter()
-        .filter(|model| editor.is_enabled(&model.id))
-        .count();
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                profile.name.clone(),
-                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  {enabled_count}/{} enabled", editor.catalog.len()),
-                Style::default().fg(CONNECTED),
-            ),
-        ])),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Provider  ", Style::default().fg(MUTED)),
-            Span::styled(
-                format!("{}  ", profile.api_format.label()),
-                Style::default().fg(ROUTE),
-            ),
-            Span::raw(profile.base_url.clone()),
-        ])),
-        Rect::new(inner.x, inner.y + 1, inner.width, 1),
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Credential  ", Style::default().fg(MUTED)),
-            Span::raw(profile.credential.masked()),
-            Span::styled("  fixed · click to edit", Style::default().fg(WARNING)),
-        ])),
-        Rect::new(inner.x, inner.y + 2, inner.width, 1),
-    );
-
-    let search = if editor.query.is_empty() {
-        "type / to search models".to_owned()
-    } else {
-        editor.query.clone()
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Search  ", Style::default().fg(MUTED)),
-            Span::styled(
-                format!("{search}{}", if editor.search_active { "▌" } else { "" }),
-                if editor.search_active {
-                    Style::default().fg(Color::Black).bg(ROUTE)
-                } else {
-                    Style::default().fg(ROUTE)
-                },
-            ),
-            Span::styled(
-                if editor.search_active {
-                    format!(
-                        "  {} matches · Enter toggle · Tab list · Esc clear",
-                        filtered.len()
-                    )
-                } else {
-                    format!("  {} matches · / to search", filtered.len())
-                },
-                Style::default().fg(MUTED),
-            ),
-        ])),
-        route_search_area(area),
-    );
-
-    let items = filtered
-        .iter()
-        .map(|index| {
-            let model = &editor.catalog[*index];
-            let marker = if editor.is_required(&model.id) {
-                "◆"
-            } else if editor.enabled.contains(&model.id) {
-                "●"
-            } else {
-                "○"
-            };
-            let marker_color = if editor.is_required(&model.id) {
-                WARNING
-            } else if editor.enabled.contains(&model.id) {
-                CONNECTED
-            } else {
-                MUTED
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{marker}  "), Style::default().fg(marker_color)),
-                Span::raw(model.label().to_owned()),
-                Span::styled(format!("  {}", model.id), Style::default().fg(MUTED)),
-                Span::styled(
-                    format!(
-                        "  1M {}",
-                        if editor.one_m.contains(&model.id) {
-                            "●"
-                        } else {
-                            "○"
-                        }
-                    ),
-                    Style::default().fg(if editor.one_m.contains(&model.id) {
-                        CONNECTED
-                    } else {
-                        MUTED
-                    }),
-                ),
-                if model.id == editor.default_model {
-                    Span::styled("  default", Style::default().fg(WARNING))
-                } else {
-                    Span::raw("")
-                },
-            ]))
-        })
-        .collect::<Vec<_>>();
-    let list_area = route_model_list_area(area);
-    let offset = route_editor_offset(editor, list_area.height.saturating_sub(2));
-    let mut state = ListState::default()
-        .with_offset(offset)
-        .with_selected((!items.is_empty()).then_some(editor.selected));
-    frame.render_stateful_widget(
-        List::new(items)
-            .block(panel(" Models · ◆ required  ● enabled  ○ disabled ", true))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(ROUTE)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(" "),
-        list_area,
-        &mut state,
-    );
-    draw_scrollbar(
-        frame,
-        list_area,
-        filtered.len(),
-        editor.selected,
-        usize::from(list_area.height.saturating_sub(2)),
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(editor.status.clone()),
-            Span::styled(
-                "  · Enter toggle · 1 1M · d default · A all · C clear · s save · Esc cancel",
-                Style::default().fg(ROUTE),
-            ),
-        ]))
-        .style(Style::default().fg(MUTED)),
-        Rect::new(
-            inner.x,
-            area.y + area.height.saturating_sub(5),
-            inner.width,
-            1,
-        ),
-    );
-    draw_route_controls(frame, area);
 }
 
 fn draw_proxy_manager(frame: &mut ratatui::Frame, area: Rect, manager: &ProxyManager) {
@@ -4949,14 +5310,7 @@ fn draw_confirmation(frame: &mut ratatui::Frame, area: Rect, message: &str) {
 }
 
 fn ui_areas(area: Rect, focus: Focus, view_mode: ViewMode) -> UiAreas {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(3),
-        ])
-        .split(area);
+    let rows = app_rows(area);
     match view_mode {
         ViewMode::Home => UiAreas {
             profiles: Some(rows[1]),
@@ -4977,36 +5331,67 @@ fn ui_areas(area: Rect, focus: Focus, view_mode: ViewMode) -> UiAreas {
                     footer: rows[2],
                 }
             } else {
-                let inner = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-                    .split(rows[1]);
                 UiAreas {
                     profiles: None,
-                    models: (focus != Focus::Details).then_some(inner[0]),
-                    details: (focus == Focus::Details)
-                        .then_some(inner[0])
-                        .or(Some(inner[1])),
+                    models: (focus != Focus::Details).then_some(rows[1]),
+                    details: (focus == Focus::Details).then_some(rows[1]),
                     footer: rows[2],
                 }
             }
         }
+        ViewMode::AllEnabled => UiAreas {
+            profiles: None,
+            models: Some(rows[1]),
+            details: None,
+            footer: rows[2],
+        },
     }
 }
 
+fn app_rows(area: Rect) -> [Rect; 3] {
+    let edge_height = if area.height >= 14 {
+        3
+    } else if area.height >= 8 {
+        2
+    } else {
+        1
+    }
+    .min(area.height / 2);
+    let content_height = area.height.saturating_sub(edge_height.saturating_mul(2));
+    [
+        Rect::new(area.x, area.y, area.width, edge_height),
+        Rect::new(
+            area.x,
+            area.y.saturating_add(edge_height),
+            area.width,
+            content_height,
+        ),
+        Rect::new(
+            area.x,
+            area.y
+                .saturating_add(edge_height)
+                .saturating_add(content_height),
+            area.width,
+            edge_height,
+        ),
+    ]
+}
+
 fn footer_controls(area: Rect, compact: bool, view_mode: ViewMode) -> Vec<(FooterControl, Rect)> {
+    if area.width == 0 || area.height == 0 {
+        return vec![];
+    }
     const HOME_WIDE: &[(FooterControl, u16)] = &[
         (FooterControl::Launch, 13),
+        (FooterControl::AddProfile, 13),
         (FooterControl::Sync, 14),
-        (FooterControl::Resume, 11),
-        (FooterControl::New, 8),
-        (FooterControl::Test, 8),
         (FooterControl::Proxy, 10),
         (FooterControl::Help, 8),
         (FooterControl::Quit, 8),
     ];
     const HOME_COMPACT: &[(FooterControl, u16)] = &[
         (FooterControl::Launch, 9),
+        (FooterControl::AddProfile, 9),
         (FooterControl::Sync, 8),
         (FooterControl::Proxy, 7),
         (FooterControl::Help, 5),
@@ -5014,12 +5399,11 @@ fn footer_controls(area: Rect, compact: bool, view_mode: ViewMode) -> Vec<(Foote
     ];
     const PROVIDER_WIDE: &[(FooterControl, u16)] = &[
         (FooterControl::Back, 14),
-        (FooterControl::Models, 10),
-        (FooterControl::Details, 10),
         (FooterControl::Launch, 11),
         (FooterControl::Sync, 14),
         (FooterControl::Resume, 11),
         (FooterControl::New, 8),
+        (FooterControl::Proxy, 10),
         (FooterControl::Help, 8),
         (FooterControl::Quit, 8),
     ];
@@ -5032,11 +5416,52 @@ fn footer_controls(area: Rect, compact: bool, view_mode: ViewMode) -> Vec<(Foote
         (FooterControl::Help, 5),
         (FooterControl::Quit, 5),
     ];
-    let specs = match (view_mode, compact) {
-        (ViewMode::Home, false) => HOME_WIDE,
-        (ViewMode::Home, true) => HOME_COMPACT,
-        (ViewMode::Provider, false) => PROVIDER_WIDE,
-        (ViewMode::Provider, true) => PROVIDER_COMPACT,
+    const HOME_TINY: &[(FooterControl, u16)] = &[
+        (FooterControl::Launch, 7),
+        (FooterControl::AddProfile, 7),
+        (FooterControl::Sync, 6),
+        (FooterControl::Help, 3),
+        (FooterControl::Quit, 3),
+    ];
+    const PROVIDER_TINY: &[(FooterControl, u16)] = &[
+        (FooterControl::Back, 6),
+        (FooterControl::Models, 5),
+        (FooterControl::Details, 5),
+        (FooterControl::Launch, 5),
+        (FooterControl::Sync, 5),
+        (FooterControl::Help, 3),
+        (FooterControl::Quit, 3),
+    ];
+    const ALL_WIDE: &[(FooterControl, u16)] = &[
+        (FooterControl::Back, 14),
+        (FooterControl::Sync, 14),
+        (FooterControl::Proxy, 10),
+        (FooterControl::Help, 8),
+        (FooterControl::Quit, 8),
+    ];
+    const ALL_COMPACT: &[(FooterControl, u16)] = &[
+        (FooterControl::Back, 8),
+        (FooterControl::Sync, 8),
+        (FooterControl::Proxy, 7),
+        (FooterControl::Help, 5),
+        (FooterControl::Quit, 5),
+    ];
+    const ALL_TINY: &[(FooterControl, u16)] = &[
+        (FooterControl::Back, 6),
+        (FooterControl::Sync, 5),
+        (FooterControl::Help, 3),
+        (FooterControl::Quit, 3),
+    ];
+    let specs = match (view_mode, compact, area.width < 55) {
+        (ViewMode::Home, _, true) => HOME_TINY,
+        (ViewMode::Provider, _, true) => PROVIDER_TINY,
+        (ViewMode::AllEnabled, _, true) => ALL_TINY,
+        (ViewMode::Home, false, false) => HOME_WIDE,
+        (ViewMode::Home, true, false) => HOME_COMPACT,
+        (ViewMode::Provider, false, false) => PROVIDER_WIDE,
+        (ViewMode::Provider, true, false) => PROVIDER_COMPACT,
+        (ViewMode::AllEnabled, false, false) => ALL_WIDE,
+        (ViewMode::AllEnabled, true, false) => ALL_COMPACT,
     };
     let right = area.x.saturating_add(area.width);
     let mut x = area.x;
@@ -5059,8 +5484,10 @@ fn footer_controls(area: Rect, compact: bool, view_mode: ViewMode) -> Vec<(Foote
 }
 
 fn provider_detail_cards(area: Rect) -> (Rect, Rect) {
-    let showcase_height = if area.height >= 22 {
-        11
+    let showcase_height = if area.width < 38 && area.height >= 19 {
+        13
+    } else if area.height >= 24 {
+        12
     } else if area.height >= 16 {
         9
     } else {
@@ -5075,41 +5502,54 @@ fn provider_detail_cards(area: Rect) -> (Rect, Rect) {
 
 fn showcase_controls(area: Rect) -> Vec<(ShowcaseControl, Rect)> {
     let inner = panel_inner(area);
-    if inner.height < 7 {
+    if inner.height < 2 || inner.width < 8 {
         return vec![];
     }
-    let row1_y = inner.y.saturating_add(5);
-    let row2_y = inner.y.saturating_add(6);
-    let launch_x = inner.x.saturating_add(7);
-    let launch_w = 14;
-    let toggle_x = launch_x.saturating_add(launch_w).saturating_add(2);
-    let toggle_w = 18;
-    let default_x = inner.x.saturating_add(7);
-    let default_w = 14;
-    let onem_x = default_x.saturating_add(default_w).saturating_add(2);
-    let onem_w = 14;
-
-    vec![
-        (
-            ShowcaseControl::Launch,
-            Rect::new(launch_x, row1_y, launch_w, 1),
-        ),
-        (
-            ShowcaseControl::Toggle,
-            Rect::new(toggle_x, row1_y, toggle_w, 1),
-        ),
-        (
-            ShowcaseControl::Default,
-            Rect::new(default_x, row2_y, default_w, 1),
-        ),
-        (ShowcaseControl::OneM, Rect::new(onem_x, row2_y, onem_w, 1)),
-    ]
+    let controls = [
+        ShowcaseControl::Toggle,
+        ShowcaseControl::Default,
+        ShowcaseControl::OneM,
+        ShowcaseControl::Delete,
+    ];
+    if inner.width >= 38 && inner.height >= 2 {
+        let width = inner.width / 2;
+        let start_y = inner.y + inner.height.saturating_sub(2);
+        controls
+            .into_iter()
+            .enumerate()
+            .map(|(index, control)| {
+                let column = u16::try_from(index % 2).unwrap_or(0);
+                let row = u16::try_from(index / 2).unwrap_or(0);
+                let x = inner.x + column.saturating_mul(width);
+                let cell_width = if column == 0 {
+                    width
+                } else {
+                    inner.width.saturating_sub(width)
+                };
+                (control, Rect::new(x, start_y + row, cell_width, 1))
+            })
+            .collect()
+    } else {
+        let visible = usize::from(inner.height.min(4));
+        let start_y = inner.y + inner.height.saturating_sub(visible as u16);
+        controls
+            .into_iter()
+            .take(visible)
+            .enumerate()
+            .map(|(index, control)| {
+                (
+                    control,
+                    Rect::new(inner.x, start_y + index as u16, inner.width, 1),
+                )
+            })
+            .collect()
+    }
 }
 
 fn catalog_add_button_rect(search_area: Rect) -> Option<Rect> {
     let inner = panel_inner(search_area);
-    if inner.width >= 35 {
-        let btn_w = 17;
+    if inner.width >= 10 {
+        let btn_w = if inner.width >= 35 { 17 } else { 6 };
         let btn_x = inner.x + inner.width.saturating_sub(btn_w);
         Some(Rect::new(btn_x, inner.y, btn_w, 1))
     } else {
@@ -5119,55 +5559,35 @@ fn catalog_add_button_rect(search_area: Rect) -> Option<Rect> {
 
 fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
     let inner = panel_inner(area);
-    if inner.height < 4 {
+    if inner.height == 0 || inner.width < 8 {
         return vec![];
     }
-    let col_gap = 1;
-    let w1 = inner.width.saturating_sub(col_gap) / 2;
-    let w2 = inner.width.saturating_sub(w1 + col_gap);
-    let col1_x = inner.x;
-    let col2_x = inner.x + w1 + col_gap;
-
-    if inner.height >= 7 {
-        let r1_y = inner.y + inner.height.saturating_sub(3);
-        let r2_y = inner.y + inner.height.saturating_sub(2);
-        let r3_y = inner.y + inner.height.saturating_sub(1);
+    let y = inner.y + inner.height.saturating_sub(1);
+    if inner.width >= 28 {
+        let first_width = inner.width / 2;
         vec![
-            (DetailControl::AddModel, Rect::new(col1_x, r1_y, w1, 1)),
-            (DetailControl::FetchModels, Rect::new(col2_x, r1_y, w2, 1)),
-            (DetailControl::Manage, Rect::new(col1_x, r2_y, w1, 1)),
-            (DetailControl::SyncAll, Rect::new(col2_x, r2_y, w2, 1)),
-            (DetailControl::EnableAll, Rect::new(col1_x, r3_y, w1, 1)),
-            (DetailControl::Edit, Rect::new(col2_x, r3_y, w2, 1)),
-        ]
-    } else if inner.height >= 5 {
-        let r1_y = inner.y + inner.height.saturating_sub(2);
-        let r2_y = inner.y + inner.height.saturating_sub(1);
-        vec![
-            (DetailControl::AddModel, Rect::new(col1_x, r1_y, w1, 1)),
-            (DetailControl::FetchModels, Rect::new(col2_x, r1_y, w2, 1)),
-            (DetailControl::Manage, Rect::new(col1_x, r2_y, w1, 1)),
-            (DetailControl::SyncAll, Rect::new(col2_x, r2_y, w2, 1)),
+            (
+                DetailControl::FetchModels,
+                Rect::new(inner.x, y, first_width, 1),
+            ),
+            (
+                DetailControl::Edit,
+                Rect::new(
+                    inner.x.saturating_add(first_width),
+                    y,
+                    inner.width.saturating_sub(first_width),
+                    1,
+                ),
+            ),
         ]
     } else {
-        let r1_y = inner.y + inner.height.saturating_sub(1);
-        vec![
-            (DetailControl::Manage, Rect::new(col1_x, r1_y, w1, 1)),
-            (DetailControl::SyncAll, Rect::new(col2_x, r1_y, w2, 1)),
-        ]
+        vec![(DetailControl::Edit, Rect::new(inner.x, y, inner.width, 1))]
     }
 }
 
 fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
     for (control, rect) in detail_controls(area) {
         let (label, style) = match control {
-            DetailControl::AddModel => (
-                "[+ Add model (a)]",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(CONNECTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
             DetailControl::FetchModels => (
                 "[Fetch models (r)]",
                 Style::default()
@@ -5175,18 +5595,6 @@ fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
                     .bg(ROUTE)
                     .add_modifier(Modifier::BOLD),
             ),
-            DetailControl::Manage => (
-                "[Manage models (M)]",
-                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-            ),
-            DetailControl::SyncAll => (
-                "[Sync all → Claude (p)]",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(CONNECTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            DetailControl::EnableAll => ("[Enable all (A)]", Style::default().fg(CONNECTED)),
             DetailControl::Edit => ("[Edit route (E)]", Style::default().fg(WARNING)),
         };
         frame.render_widget(
@@ -5265,9 +5673,9 @@ fn modal_area(screen: Rect) -> Rect {
 
 fn modal_area_for(modal: &Modal, screen: Rect) -> Rect {
     match modal {
-        Modal::Route(_) => centered_rect(
-            96.min(screen.width.saturating_sub(2)),
-            30.min(screen.height.saturating_sub(2)),
+        Modal::Help(_) => centered_rect(
+            82.min(screen.width.saturating_sub(2)),
+            22.min(screen.height.saturating_sub(2)),
             screen,
         ),
         Modal::Proxy(_) => centered_rect(
@@ -5284,131 +5692,9 @@ fn modal_area_for(modal: &Modal, screen: Rect) -> Rect {
     }
 }
 
-fn route_search_area(area: Rect) -> Rect {
-    let inner = panel_inner(area);
-    Rect::new(inner.x, inner.y.saturating_add(4), inner.width, 1)
-}
-
-fn route_model_list_area(area: Rect) -> Rect {
-    let inner = panel_inner(area);
-    let y = inner.y.saturating_add(6);
-    let bottom = area.y.saturating_add(area.height).saturating_sub(6);
-    Rect::new(inner.x, y, inner.width, bottom.saturating_sub(y))
-}
-
-fn route_edit_area(area: Rect) -> Rect {
-    let inner = panel_inner(area);
-    Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 2)
-}
-
 fn route_editor_offset(editor: &RouteEditor, viewport_height: u16) -> usize {
     let visible = usize::from(viewport_height.max(1));
     editor.selected.saturating_add(1).saturating_sub(visible)
-}
-
-fn route_controls(area: Rect) -> Vec<(RouteControl, Rect)> {
-    let bottom = area.y.saturating_add(area.height);
-    let first = [
-        (RouteControl::Enable, "Enable"),
-        (RouteControl::OneM, "1M"),
-        (RouteControl::Default, "Default"),
-        (RouteControl::EnableAll, "Enable All"),
-        (RouteControl::DisableAll, "Clear"),
-        (RouteControl::Fetch, "Fetch"),
-        (RouteControl::Add, "Add"),
-    ];
-    let second = [
-        (RouteControl::Save, "Save (s)"),
-        (RouteControl::Apply, "Sync all"),
-        (RouteControl::Edit, "Edit route"),
-        (RouteControl::Cancel, "Cancel (Esc)"),
-    ];
-    button_row_rects(area, bottom.saturating_sub(3), &first)
-        .into_iter()
-        .chain(button_row_rects(area, bottom.saturating_sub(2), &second))
-        .collect()
-}
-
-fn button_row_rects(
-    area: Rect,
-    y: u16,
-    buttons: &[(RouteControl, &str)],
-) -> Vec<(RouteControl, Rect)> {
-    let gap = 2_u16;
-    let widths = buttons
-        .iter()
-        .map(|(_, label)| {
-            u16::try_from(label.len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(4)
-        })
-        .collect::<Vec<_>>();
-    let total = widths.iter().copied().sum::<u16>().saturating_add(
-        gap.saturating_mul(u16::try_from(buttons.len().saturating_sub(1)).unwrap_or(u16::MAX)),
-    );
-    let mut x = area.x.saturating_add(area.width.saturating_sub(total) / 2);
-    buttons
-        .iter()
-        .zip(widths)
-        .map(|((control, _), width)| {
-            let rect = Rect::new(x, y, width, 1);
-            x = x.saturating_add(width).saturating_add(gap);
-            (*control, rect)
-        })
-        .collect()
-}
-
-fn route_control_key(control: RouteControl) -> KeyEvent {
-    match control {
-        RouteControl::Enable => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        RouteControl::OneM => KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
-        RouteControl::Default => KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        RouteControl::EnableAll => KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
-        RouteControl::DisableAll => KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
-        RouteControl::Fetch => KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
-        RouteControl::Add => KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-        RouteControl::Save => KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
-        RouteControl::Apply => KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
-        RouteControl::Edit => KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE),
-        RouteControl::Cancel => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    }
-}
-
-fn draw_route_controls(frame: &mut ratatui::Frame, area: Rect) {
-    for (control, rect) in route_controls(area) {
-        let label = match control {
-            RouteControl::Enable => "Enable",
-            RouteControl::OneM => "1M",
-            RouteControl::Default => "Default",
-            RouteControl::EnableAll => "Enable All",
-            RouteControl::DisableAll => "Clear",
-            RouteControl::Fetch => "Fetch",
-            RouteControl::Add => "Add",
-            RouteControl::Save => "Save (s)",
-            RouteControl::Apply => "Sync all",
-            RouteControl::Edit => "Edit route",
-            RouteControl::Cancel => "Cancel (Esc)",
-        };
-        let style = match control {
-            RouteControl::Enable | RouteControl::Save => Style::default()
-                .fg(Color::Black)
-                .bg(ROUTE)
-                .add_modifier(Modifier::BOLD),
-            RouteControl::Apply => Style::default()
-                .fg(Color::Black)
-                .bg(CONNECTED)
-                .add_modifier(Modifier::BOLD),
-            RouteControl::EnableAll => Style::default().fg(CONNECTED),
-            RouteControl::DisableAll | RouteControl::Edit => Style::default().fg(WARNING),
-            _ => Style::default().fg(MUTED),
-        };
-        frame.render_widget(
-            Paragraph::new(format!("[{label}]"))
-                .alignment(Alignment::Center)
-                .style(style),
-            rect,
-        );
-    }
 }
 
 fn modal_button_rects(area: Rect, count: usize) -> Vec<Rect> {
@@ -5494,6 +5780,180 @@ fn detail(label: &str, value: &str) -> Line<'static> {
     ])
 }
 
+fn wrap_styled_segments(segments: Vec<(String, Style)>, max_width: u16) -> Vec<Line<'static>> {
+    let max_width = usize::from(max_width.max(1));
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut used = 0_usize;
+
+    for (text, style) in segments {
+        let mut chunk = String::new();
+        for ch in text.chars() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used > 0 && used.saturating_add(char_width) > max_width {
+                if !chunk.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut chunk), style));
+                }
+                lines.push(Line::from(std::mem::take(&mut spans)));
+                used = 0;
+            }
+            chunk.push(ch);
+            used = used.saturating_add(char_width);
+        }
+        if !chunk.is_empty() {
+            spans.push(Span::styled(chunk, style));
+        }
+    }
+    if !spans.is_empty() || lines.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+fn all_enabled_lines(provider_count: usize, model_count: usize, width: u16) -> Vec<Line<'static>> {
+    let active = model_count > 0;
+    let mut lines = wrap_styled_segments(
+        vec![
+            (
+                if active { " ● " } else { " ○ " }.into(),
+                Style::default().fg(if active { CONNECTED } else { MUTED }),
+            ),
+            (
+                "All Enabled / 全部启用".into(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            (
+                format!("  {model_count} models · {provider_count} providers"),
+                Style::default().fg(CONNECTED),
+            ),
+        ],
+        width,
+    );
+    lines.push(Line::raw(""));
+    lines
+}
+
+fn home_profile_lines(
+    id: &str,
+    profile: &Profile,
+    enabled_count: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let signal = if profile.enabled { " ● " } else { " ○ " };
+    let signal_color = if profile.enabled { CONNECTED } else { MUTED };
+    let mut lines = wrap_styled_segments(
+        vec![
+            (signal.into(), Style::default().fg(signal_color)),
+            (profile.name.clone(), bold),
+            (
+                format!("  [{}]", profile.api_format.label()),
+                Style::default().fg(ROUTE),
+            ),
+            (format!("  {id}"), Style::default().fg(MUTED)),
+        ],
+        width,
+    );
+
+    let summary = vec![
+        (
+            format!("     Default: {}", profile.default_model),
+            Style::default().fg(WARNING),
+        ),
+        (
+            if profile.enabled {
+                format!("   {enabled_count} enabled")
+            } else {
+                "   provider disabled".into()
+            },
+            Style::default().fg(if profile.enabled { CONNECTED } else { WARNING }),
+        ),
+    ];
+    if width >= 96
+        && UnicodeWidthStr::width(
+            format!(
+                " {} {}  [{}]  {}     Default: {}   {} enabled",
+                if profile.enabled { "●" } else { "○" },
+                profile.name,
+                profile.api_format.label(),
+                id,
+                profile.default_model,
+                enabled_count
+            )
+            .as_str(),
+        ) <= usize::from(width)
+    {
+        lines.clear();
+        lines.extend(wrap_styled_segments(
+            vec![
+                (signal.into(), Style::default().fg(signal_color)),
+                (profile.name.clone(), bold),
+                (
+                    format!("  [{}]", profile.api_format.label()),
+                    Style::default().fg(ROUTE),
+                ),
+                (format!("  {id}"), Style::default().fg(MUTED)),
+            ]
+            .into_iter()
+            .chain(summary.clone())
+            .collect(),
+            width,
+        ));
+    } else {
+        lines.extend(wrap_styled_segments(summary, width));
+    }
+    lines.extend(wrap_styled_segments(
+        vec![
+            ("     Endpoint: ".into(), Style::default().fg(MUTED)),
+            (profile.base_url.clone(), Style::default()),
+        ],
+        width,
+    ));
+    lines.extend(wrap_styled_segments(
+        vec![
+            ("     Credential: ".into(), Style::default().fg(MUTED)),
+            (profile.credential.masked(), Style::default().fg(MUTED)),
+        ],
+        width,
+    ));
+    lines.push(Line::raw(""));
+    lines
+}
+
+fn visible_variable_items(heights: &[usize], offset: usize, viewport_height: usize) -> usize {
+    let mut used = 0_usize;
+    heights
+        .iter()
+        .skip(offset)
+        .take_while(|height| {
+            let fits = used == 0 || used.saturating_add(**height) <= viewport_height;
+            if fits {
+                used = used.saturating_add(**height);
+            }
+            fits
+        })
+        .count()
+}
+
+fn clicked_variable_item(area: Rect, row: u16, offset: usize, heights: &[usize]) -> Option<usize> {
+    let inner = panel_inner(area);
+    if row < inner.y || row >= inner.y.saturating_add(inner.height) {
+        return None;
+    }
+    let target = usize::from(row.saturating_sub(inner.y));
+    let mut top = 0_usize;
+    for (index, height) in heights.iter().enumerate().skip(offset) {
+        if target < top.saturating_add(*height) {
+            return Some(index);
+        }
+        top = top.saturating_add(*height);
+        if top >= usize::from(inner.height) {
+            break;
+        }
+    }
+    None
+}
+
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
@@ -5537,6 +5997,7 @@ mod tests {
             cache: ModelCache::default(),
             cwd: "/tmp".into(),
             view_mode: ViewMode::Home,
+            home_all_selected: false,
             profile_idx: 0,
             model_idx: 0,
             profile_offset: 0,
@@ -5561,9 +6022,202 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("No providers configured yet"));
+        assert!(rendered.contains("All Enabled"));
+        assert!(rendered.contains("0 models"));
         assert!(rendered.contains("Routers"));
         assert!(rendered.contains("Enter"));
+    }
+
+    #[test]
+    fn renders_home_and_provider_at_minimal_terminal_size() {
+        let mut app = interactive_test_app();
+        let backend = TestBackend::new(36, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        app.enter_provider_view();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.focus = Focus::Details;
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+
+    #[test]
+    fn help_opens_on_the_current_view_and_switches_sections() {
+        let mut app = interactive_test_app();
+        app.view_mode = ViewMode::AllEnabled;
+        app.open_help();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Help(HelpModal {
+                section: HelpSection::AllEnabled,
+                ..
+            }))
+        ));
+
+        app.handle_modal(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Help(HelpModal {
+                section: HelpSection::Provider,
+                ..
+            }))
+        ));
+        app.handle_modal(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Help(HelpModal {
+                section: HelpSection::Home,
+                ..
+            }))
+        ));
+        app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn help_renders_in_full_and_narrow_terminals() {
+        let mut app = interactive_test_app();
+        app.view_mode = ViewMode::Provider;
+        app.open_help();
+
+        let backend = TestBackend::new(90, 26);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("1 Home"));
+        assert!(rendered.contains("Help · Provider"));
+        assert!(rendered.contains("Space / d / 1"));
+
+        let backend = TestBackend::new(36, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Help"));
+        assert!(rendered.contains("Provider"));
+    }
+
+    #[test]
+    fn all_enabled_is_the_first_home_row_and_excludes_disabled_providers() {
+        let mut app = interactive_test_app();
+        app.config.profiles.get_mut("two").unwrap().enabled = false;
+
+        let models = app.all_managed_models();
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().all(|entry| entry.profile_id == "one"));
+        assert_eq!(
+            app.home_profile_item_heights(Rect::new(0, 0, 120, 30))
+                .len(),
+            3
+        );
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.find("All Enabled").unwrap() < rendered.find("One").unwrap());
+        assert!(rendered.contains("2 models · 1 providers"));
+
+        app.home_all_selected = true;
+        app.enter_all_enabled_view();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("All enabled models"));
+        assert!(rendered.contains("model-a"));
+        assert!(!rendered.contains("Two  two"));
+    }
+
+    #[test]
+    fn disabled_provider_editor_marks_every_model_unavailable() {
+        let mut app = interactive_test_app();
+        app.config.profiles.get_mut("one").unwrap().enabled = false;
+        let mut editor = app.create_route_editor_for("one".into()).unwrap();
+
+        assert!(
+            editor
+                .catalog
+                .iter()
+                .all(|model| !editor.is_enabled(&model.id))
+        );
+        editor.toggle_selected();
+        assert!(editor.status.contains("Provider is disabled"));
+        assert!(
+            editor
+                .catalog
+                .iter()
+                .all(|model| !editor.is_enabled(&model.id))
+        );
+    }
+
+    #[test]
+    fn all_enabled_page_can_disable_and_reenable_the_same_model() {
+        let mut app = interactive_test_app();
+        app.home_all_selected = true;
+        app.enter_all_enabled_view();
+
+        let selected = app
+            .all_managed_models()
+            .into_iter()
+            .find(|entry| entry.profile_id == "one" && entry.model.id == "model-b")
+            .unwrap();
+        assert!(selected.enabled);
+        let disabled = app.toggled_global_model_profile(&selected).unwrap();
+        assert!(disabled.disabled_models.contains(&"model-b".into()));
+        assert!(!disabled.enabled_models.contains(&"model-b".into()));
+        app.config.profiles.insert("one".into(), disabled);
+
+        let selected = app
+            .all_managed_models()
+            .into_iter()
+            .find(|entry| entry.profile_id == "one" && entry.model.id == "model-b")
+            .unwrap();
+        assert!(!selected.enabled, "disabled model must remain visible");
+        let enabled = app.toggled_global_model_profile(&selected).unwrap();
+        assert!(!enabled.disabled_models.contains(&"model-b".into()));
+        assert!(enabled.enabled_models.contains(&"model-b".into()));
+    }
+
+    #[test]
+    fn aggregate_editor_uses_the_target_provider_catalog() {
+        let mut app = interactive_test_app();
+        app.home_all_selected = true;
+        app.enter_all_enabled_view();
+
+        let editor = app.create_route_editor_for("two".into()).unwrap();
+        assert_eq!(
+            editor
+                .catalog
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["model-a", "model-b"]
+        );
     }
 
     #[test]
@@ -5612,6 +6266,7 @@ mod tests {
             event: Some("test".into()),
         });
         app.launch_mode = LaunchMode::Resume;
+        app.enter_provider_view();
         let screen = Rect::new(0, 0, 120, 30);
         let footer = ui_areas(screen, app.focus, app.view_mode).footer;
         let new_button = footer_controls(footer, false, app.view_mode)
@@ -5687,7 +6342,7 @@ mod tests {
     }
 
     #[test]
-    fn homepage_exposes_enable_all_and_sync_controls() {
+    fn provider_page_keeps_global_sync_and_removes_duplicate_manager_controls() {
         let mut app = interactive_test_app();
         app.view_mode = ViewMode::Provider;
         app.focus = Focus::Details;
@@ -5701,8 +6356,8 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("Enable all"));
-        assert!(rendered.contains("Sync all → Claude"));
+        assert!(!rendered.contains("Manage models"));
+        assert!(!rendered.contains("Enable all"));
         assert!(rendered.contains("Claude /model"));
         assert!(
             footer_controls(Rect::new(0, 27, 120, 3), false, app.view_mode)
@@ -5785,6 +6440,7 @@ mod tests {
         let mut editor = RouteEditor {
             profile_id: "route".into(),
             original_profile: interactive_test_app().config.profiles["one"].clone(),
+            provider_enabled: true,
             catalog: models,
             enabled: BTreeSet::new(),
             disabled: BTreeSet::new(),
@@ -5833,6 +6489,60 @@ mod tests {
     }
 
     #[test]
+    fn model_form_can_save_a_model_without_enabling_it() {
+        let mut form = ModelForm::new();
+        form.fields[0].value = "parked-model".into();
+        form.fields[4].value = "false".into();
+
+        assert_eq!(form.to_model().id, "parked-model");
+        assert!(!form.enable_now());
+    }
+
+    #[test]
+    fn saving_a_disabled_model_keeps_it_visible_in_the_provider_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = interactive_test_app();
+        app.paths.config = dir.path().join("config.toml");
+        std::fs::write(&app.paths.config, toml::to_string(&app.config).unwrap()).unwrap();
+        app.enter_provider_view();
+
+        let mut form = ModelForm::new();
+        form.fields[0].value = "parked-model".into();
+        form.fields[4].value = "false".into();
+        app.modal = Some(Modal::Model(form));
+        app.handle_modal(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+
+        let profile = &app.config.profiles["one"];
+        assert!(
+            profile
+                .models
+                .iter()
+                .any(|model| model.id == "parked-model")
+        );
+        assert!(
+            profile
+                .disabled_models
+                .iter()
+                .any(|id| id == "parked-model")
+        );
+        assert!(!profile.enabled_models.iter().any(|id| id == "parked-model"));
+        let selected = app
+            .provider_editor
+            .as_ref()
+            .unwrap()
+            .selected_model()
+            .unwrap();
+        assert_eq!(selected.id, "parked-model");
+        assert!(
+            !app.provider_editor
+                .as_ref()
+                .unwrap()
+                .is_enabled("parked-model")
+        );
+    }
+
+    #[test]
     fn blank_manual_model_stays_invalid_with_1m_enabled() {
         let mut form = ModelForm::new();
         form.fields[3].value = "true".into();
@@ -5873,6 +6583,7 @@ mod tests {
         let editor = RouteEditor {
             profile_id: "one".into(),
             original_profile: profile.clone(),
+            provider_enabled: true,
             catalog: profile.models.clone(),
             enabled: BTreeSet::from(["model-b".into()]),
             disabled: BTreeSet::new(),
@@ -5981,6 +6692,7 @@ mod tests {
         let mut editor = RouteEditor {
             profile_id: "test".into(),
             original_profile: interactive_test_app().config.profiles["one"].clone(),
+            provider_enabled: true,
             catalog,
             enabled: BTreeSet::new(),
             disabled: BTreeSet::new(),
@@ -6045,12 +6757,12 @@ mod tests {
         let areas = ui_areas(screen, app.focus, app.view_mode);
         let panel = areas.profiles.unwrap();
 
-        // Clicking the currently selected profile (idx 0) drills down
+        // The virtual All Enabled row is first; click the first provider below it.
         app.handle_mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
-                column: panel.x + 2,
-                row: panel.y + 1,
+                column: panel.x + 8,
+                row: panel.y + 4,
                 modifiers: KeyModifiers::NONE,
             },
             screen,
@@ -6120,8 +6832,8 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(rendered.contains("Selected Model Showcase"));
-        assert!(rendered.contains("Provider Details"));
+        assert!(rendered.contains("Selected model"));
+        assert!(rendered.contains("Provider"));
         assert!(rendered.contains("One  →  model-a"));
         assert!(rendered.contains("model-b"));
     }
@@ -6175,28 +6887,28 @@ mod tests {
         .unwrap();
         assert!(app.config.profiles["one"].default_model.ends_with("[1m]"));
 
-        // Click Launch button
-        let launch_btn = controls
+        // Toggle is separate from deletion and keeps the catalog entry.
+        let toggle_btn = controls
             .iter()
-            .find(|(c, _)| *c == ShowcaseControl::Launch)
+            .find(|(c, _)| *c == ShowcaseControl::Toggle)
             .unwrap()
             .1;
-        let action = app
-            .handle_mouse(
-                MouseEvent {
-                    kind: MouseEventKind::Down(MouseButton::Left),
-                    column: launch_btn.x + 1,
-                    row: launch_btn.y,
-                    modifiers: KeyModifiers::NONE,
-                },
-                screen,
-            )
-            .unwrap();
-        assert_eq!(action, MouseAction::Launch);
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: toggle_btn.x + 1,
+                row: toggle_btn.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(!app.provider_editor.as_ref().unwrap().is_enabled("model-a"));
+        assert_eq!(app.config.profiles["one"].models.len(), 2);
     }
 
     #[test]
-    fn mouse_click_detail_controls_add_model_and_manager() {
+    fn mouse_click_catalog_add_and_detail_edit() {
         let mut app = interactive_test_app();
         app.enter_provider_view();
         let screen = Rect::new(0, 0, 120, 30);
@@ -6220,46 +6932,26 @@ mod tests {
         // Close modal
         app.modal = None;
 
-        // 2. Click Manage button in provider card
+        // 2. The details card only keeps provider-specific refresh/edit actions.
         let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
         let (_, provider_card) = provider_detail_cards(details);
-        let manage_btn = detail_controls(provider_card)
+        assert_eq!(detail_controls(provider_card).len(), 2);
+        let edit_btn = detail_controls(provider_card)
             .into_iter()
-            .find(|(c, _)| *c == DetailControl::Manage)
+            .find(|(c, _)| *c == DetailControl::Edit)
             .unwrap()
             .1;
         app.handle_mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
-                column: manage_btn.x + 1,
-                row: manage_btn.y,
+                column: edit_btn.x + 1,
+                row: edit_btn.y,
                 modifiers: KeyModifiers::NONE,
             },
             screen,
         )
         .unwrap();
-        assert!(matches!(app.modal, Some(Modal::Route(_))));
-
-        // Close modal
-        app.modal = None;
-
-        // 3. Click Add button in provider card
-        let add_model_btn = detail_controls(provider_card)
-            .into_iter()
-            .find(|(c, _)| *c == DetailControl::AddModel)
-            .unwrap()
-            .1;
-        app.handle_mouse(
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: add_model_btn.x + 1,
-                row: add_model_btn.y,
-                modifiers: KeyModifiers::NONE,
-            },
-            screen,
-        )
-        .unwrap();
-        assert!(matches!(app.modal, Some(Modal::Model(_))));
+        assert!(matches!(app.modal, Some(Modal::Profile(_))));
     }
 
     #[test]
@@ -6293,6 +6985,7 @@ mod tests {
         let mut single_editor = RouteEditor {
             profile_id: "single".into(),
             original_profile: app.config.profiles["one"].clone(),
+            provider_enabled: true,
             catalog: single_catalog,
             enabled: BTreeSet::new(),
             disabled: BTreeSet::new(),
@@ -6312,6 +7005,54 @@ mod tests {
         single_editor.toggle_selected();
         assert!(single_editor.is_enabled("only-model"));
         assert!(single_editor.status.contains("Enabled only-model"));
+    }
+
+    #[test]
+    fn disabling_a_model_persists_without_deleting_its_catalog_entry() {
+        let mut app = interactive_test_app();
+        let dir = tempfile::tempdir().unwrap();
+        app.paths.config = dir.path().join("config.toml");
+        std::fs::write(&app.paths.config, toml::to_string(&app.config).unwrap()).unwrap();
+        app.enter_provider_view();
+
+        let editor = app.provider_editor.as_mut().unwrap();
+        editor.selected = 1;
+        editor.toggle_selected();
+        app.commit_provider_editor().unwrap();
+
+        let profile = &app.config.profiles["one"];
+        assert_eq!(profile.models.len(), 2);
+        assert!(profile.models.iter().any(|model| model.id == "model-b"));
+        assert!(profile.disabled_models.iter().any(|id| id == "model-b"));
+        assert!(
+            !discovery::active_models(profile, &[])
+                .iter()
+                .any(|model| model.id == "model-b")
+        );
+
+        app.init_provider_editor();
+        assert!(!app.provider_editor.as_ref().unwrap().is_enabled("model-b"));
+    }
+
+    #[test]
+    fn narrow_layout_uses_one_provider_panel_and_wraps_profile_cards() {
+        let mut app = interactive_test_app();
+        app.config.profiles.get_mut("one").unwrap().base_url =
+            "https://gateway.example.com/a/very/long/path/that/must/wrap".into();
+        let narrow = Rect::new(0, 0, 44, 22);
+
+        app.enter_provider_view();
+        let model_view = ui_areas(narrow, Focus::Models, app.view_mode);
+        assert!(model_view.models.is_some());
+        assert!(model_view.details.is_none());
+        let details_view = ui_areas(narrow, Focus::Details, app.view_mode);
+        assert!(details_view.models.is_none());
+        assert!(details_view.details.is_some());
+
+        let profile = &app.config.profiles["one"];
+        let lines = home_profile_lines("one", profile, 2, 42);
+        assert!(lines.len() > 5);
+        assert!(lines.iter().all(|line| line.width() <= 42));
     }
 
     #[test]
@@ -6423,6 +7164,7 @@ mod tests {
         };
         let profile = |name: &str| Profile {
             name: name.into(),
+            enabled: true,
             base_url: "https://example.com".into(),
             api_format: ApiFormat::Anthropic,
             credential: Credential::None,
@@ -6431,6 +7173,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec!["model-b".into()],
+            disabled_models: vec![],
             models: vec![model("model-a"), model("model-b")],
         };
         let mut config = Config::default();
@@ -6447,6 +7190,7 @@ mod tests {
             cache: ModelCache::default(),
             cwd: "/tmp".into(),
             view_mode: ViewMode::Home,
+            home_all_selected: false,
             profile_idx: 0,
             model_idx: 0,
             profile_offset: 0,

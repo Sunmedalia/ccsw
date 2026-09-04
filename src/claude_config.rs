@@ -55,6 +55,9 @@ pub fn settings_path() -> Result<PathBuf> {
 }
 
 pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<ApplyResult> {
+    if !profile.enabled {
+        anyhow::bail!("cannot apply a disabled provider to Claude");
+    }
     let parent = path
         .parent()
         .context("Claude settings path has no parent")?;
@@ -152,6 +155,59 @@ pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<Ap
     })
 }
 
+pub fn clear(path: &Path) -> Result<ApplyResult> {
+    let parent = path
+        .parent()
+        .context("Claude settings path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let lock_path = path.with_extension("json.ccsw.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock.lock_exclusive()?;
+    let mut root = if path.exists() {
+        serde_json::from_slice::<Value>(&fs::read(path)?)
+            .with_context(|| format!("failed to parse {}", path.display()))?
+            .as_object()
+            .cloned()
+            .context("Claude settings must contain a JSON object")?
+    } else {
+        Map::new()
+    };
+    if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
+        for key in MANAGED_ENV_KEYS {
+            env.remove(*key);
+        }
+    }
+    root.remove("model");
+    root.remove("modelPicker");
+
+    let backup = if path.exists() {
+        let backup = path.with_extension("json.ccsw-backup");
+        fs::copy(path, &backup)?;
+        set_private(&backup)?;
+        Some(backup)
+    } else {
+        None
+    };
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.write_all(serde_json::to_string_pretty(&Value::Object(root))?.as_bytes())?;
+    temp.write_all(b"\n")?;
+    temp.as_file().sync_all()?;
+    set_private(temp.path())?;
+    temp.persist(path).map_err(|error| error.error)?;
+    set_private(path)?;
+    FileExt::unlock(&lock).ok();
+    Ok(ApplyResult {
+        path: path.to_path_buf(),
+        backup,
+        model_count: 0,
+    })
+}
+
 pub fn apply_all(
     path: &Path,
     paths: &AppPaths,
@@ -199,6 +255,7 @@ mod tests {
     fn profile() -> Profile {
         Profile {
             name: "Route".into(),
+            enabled: true,
             base_url: "https://gateway.example".into(),
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::Bearer {
@@ -212,6 +269,7 @@ mod tests {
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec!["model-b".into()],
+            disabled_models: vec![],
             models: vec![],
         }
     }
@@ -242,5 +300,25 @@ mod tests {
         assert_eq!(value["modelPicker"]["options"].as_array().unwrap().len(), 2);
         assert_eq!(result.model_count, 2);
         assert!(result.backup.unwrap().exists());
+    }
+
+    #[test]
+    fn clear_removes_managed_models_and_preserves_unrelated_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"theme":"dark","model":"route::model-a","modelPicker":{"replaceBuiltInOptions":true,"options":[{"model":"route::model-a"}]},"env":{"KEEP_ME":"yes","ANTHROPIC_BASE_URL":"http://localhost"}}"#,
+        )
+        .unwrap();
+
+        let result = clear(&path).unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["env"]["KEEP_ME"], "yes");
+        assert!(value.get("model").is_none());
+        assert!(value.get("modelPicker").is_none());
+        assert!(value["env"].get("ANTHROPIC_BASE_URL").is_none());
+        assert_eq!(result.model_count, 0);
     }
 }
