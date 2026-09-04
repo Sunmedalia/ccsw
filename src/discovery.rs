@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::Path,
@@ -135,6 +135,74 @@ pub fn active_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelE
         .collect()
 }
 
+fn canonical_id(id: &str) -> String {
+    if id.to_ascii_lowercase().ends_with("[1m]") {
+        id[..id.len().saturating_sub(4)].to_owned()
+    } else {
+        id.to_owned()
+    }
+}
+
+pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelEntry> {
+    let disc_map: BTreeMap<String, ModelEntry> = discovered
+        .iter()
+        .cloned()
+        .map(|model| (canonical_id(&model.id), model))
+        .collect();
+
+    let manual_map: BTreeMap<String, ModelEntry> = profile
+        .models
+        .iter()
+        .cloned()
+        .map(|m| (canonical_id(&m.id), m))
+        .collect();
+
+    let mut added_ids = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    let mut add_id = |id: &str| {
+        let base = canonical_id(id);
+        if !base.is_empty() && seen.insert(base.clone()) {
+            added_ids.push((id.to_owned(), base));
+        }
+    };
+
+    if !profile.default_model.is_empty() {
+        add_id(&profile.default_model);
+    }
+    for model in &profile.models {
+        add_id(&model.id);
+    }
+    for en in &profile.enabled_models {
+        add_id(en);
+    }
+    for (_, alias) in profile.aliases.iter() {
+        add_id(alias);
+    }
+    if let Some(sub) = &profile.subagent_model {
+        add_id(sub);
+    }
+    for fb in &profile.fallback_models {
+        add_id(fb);
+    }
+
+    let mut result = Vec::new();
+    for (orig_id, base) in added_ids {
+        if let Some(m) = manual_map.get(&base) {
+            result.push(m.clone());
+        } else if let Some(disc) = disc_map.get(&base) {
+            result.push(disc.clone());
+        } else {
+            result.push(ModelEntry {
+                id: orig_id,
+                label: None,
+                description: None,
+            });
+        }
+    }
+    result
+}
+
 pub fn load_cache(path: &Path) -> ModelCache {
     fs::read(path)
         .ok()
@@ -264,5 +332,41 @@ mod tests {
         let active = active_models(&profile, &discovered);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, "model-a");
+    }
+
+    #[test]
+    fn configured_models_only_include_added_and_profile_models() {
+        let profile = Profile {
+            name: "test".into(),
+            base_url: "https://example.com".into(),
+            api_format: crate::config::ApiFormat::Anthropic,
+            credential: Credential::None,
+            default_model: "model-a".into(),
+            aliases: Default::default(),
+            subagent_model: None,
+            fallback_models: vec![],
+            enabled_models: vec!["model-c".into()],
+            models: vec![ModelEntry {
+                id: "manual-x".into(),
+                label: Some("Manual X".into()),
+                description: None,
+            }],
+        };
+        let discovered = ["model-a", "model-b", "model-c", "model-d", "model-e"]
+            .into_iter()
+            .map(|id| ModelEntry {
+                id: id.into(),
+                label: Some(format!("Discovered {id}")),
+                description: None,
+            })
+            .collect::<Vec<_>>();
+
+        // configured_models includes: default_model (model-a), enabled_models (model-c), profile.models (manual-x)
+        // It does NOT include unselected remote models: model-b, model-d, model-e!
+        let configured = configured_models(&profile, &discovered);
+        let ids: Vec<&str> = configured.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["model-a", "manual-x", "model-c"]);
+        assert_eq!(configured[0].label.as_deref(), Some("Discovered model-a"));
+        assert_eq!(configured[1].label.as_deref(), Some("Manual X"));
     }
 }

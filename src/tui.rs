@@ -168,6 +168,10 @@ struct ModelForm {
     selected: usize,
     api_models: Vec<ModelEntry>,
     api_query: String,
+    api_query_cursor: usize,
+    api_scroll: usize,
+    api_selected: usize,
+    focus_api_search: bool,
     api_status: String,
 }
 
@@ -639,7 +643,7 @@ impl App {
             .get(&id)
             .map(|cached| cached.models.as_slice())
             .unwrap_or_default();
-        discovery::merged_models(profile, discovered)
+        discovery::configured_models(profile, discovered)
     }
 
     fn all_enabled_model_count(&self) -> usize {
@@ -1085,10 +1089,38 @@ impl App {
         let area = modal_area_for(modal, screen);
         match mouse.kind {
             MouseEventKind::ScrollUp => {
+                if let Some(Modal::Model(form)) = self.modal.as_mut() {
+                    let inner = panel_inner(area);
+                    let content_area = Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
+                    let (_, api_area) = model_form_areas(content_area);
+                    let visible_height =
+                        usize::from(panel_inner(api_area).height.saturating_sub(2));
+                    form.scroll_api_list(false, 3, visible_height);
+                    return Ok(());
+                }
                 self.handle_modal(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))?;
                 return Ok(());
             }
             MouseEventKind::ScrollDown => {
+                if let Some(Modal::Model(form)) = self.modal.as_mut() {
+                    let inner = panel_inner(area);
+                    let content_area = Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
+                    let (_, api_area) = model_form_areas(content_area);
+                    let visible_height =
+                        usize::from(panel_inner(api_area).height.saturating_sub(2));
+                    form.scroll_api_list(true, 3, visible_height);
+                    return Ok(());
+                }
                 self.handle_modal(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
                 return Ok(());
             }
@@ -1226,6 +1258,7 @@ impl App {
                 );
                 let (form_area, api_area) = model_form_areas(content_area);
                 if contains(form_area, mouse.column, mouse.row) {
+                    form.focus_api_search = false;
                     let form_inner = panel_inner(form_area);
                     let clicked_field = contains(form_inner, mouse.column, mouse.row)
                         .then(|| usize::from(mouse.row.saturating_sub(form_inner.y)));
@@ -1239,9 +1272,15 @@ impl App {
                     }
                 } else if contains(api_area, mouse.column, mouse.row) {
                     let api_inner = panel_inner(api_area);
-                    if mouse.row >= api_inner.y && mouse.row < api_inner.y + api_inner.height {
-                        let clicked_row = usize::from(mouse.row.saturating_sub(api_inner.y));
-                        form.pick_api_model(clicked_row);
+                    if mouse.row == api_inner.y {
+                        form.focus_api_search = true;
+                    } else if mouse.row >= api_inner.y.saturating_add(2) {
+                        let list_row =
+                            usize::from(mouse.row.saturating_sub(api_inner.y.saturating_add(2)));
+                        let item_idx = form.api_scroll + list_row;
+                        form.api_selected = item_idx;
+                        form.pick_api_model(item_idx);
+                        form.focus_api_search = false;
                     }
                 }
             }
@@ -1419,7 +1458,11 @@ impl App {
                 );
                 if let Some(Modal::Model(form)) = &mut self.modal {
                     form.api_models = models;
-                    form.api_status = format!("✓ 从 API 获取到 {count} 个模型，点击即可填入");
+                    form.api_scroll = 0;
+                    form.api_selected = 0;
+                    form.focus_api_search = true;
+                    form.api_status =
+                        format!("✓ 从 API 获取到 {count} 个模型 (输入搜索 / 点击填入)");
                 }
             }
             Err(e) => {
@@ -2229,6 +2272,97 @@ impl App {
                     self.fetch_api_models_for_form();
                     return Ok(());
                 }
+
+                if key.code == KeyCode::Tab {
+                    form.focus_api_search = !form.focus_api_search;
+                    return Ok(());
+                }
+
+                if form.focus_api_search {
+                    match key.code {
+                        KeyCode::Esc => {
+                            if !form.api_query.is_empty() {
+                                form.api_query.clear();
+                                form.api_query_cursor = 0;
+                                form.api_scroll = 0;
+                                form.api_selected = 0;
+                            } else {
+                                form.focus_api_search = false;
+                            }
+                            return Ok(());
+                        }
+                        KeyCode::Down => {
+                            form.move_api_selection(true, 12);
+                            return Ok(());
+                        }
+                        KeyCode::Up => {
+                            form.move_api_selection(false, 12);
+                            return Ok(());
+                        }
+                        KeyCode::PageDown => {
+                            form.scroll_api_list(true, 8, 12);
+                            return Ok(());
+                        }
+                        KeyCode::PageUp => {
+                            form.scroll_api_list(false, 8, 12);
+                            return Ok(());
+                        }
+                        KeyCode::Enter => {
+                            form.pick_api_model(form.api_selected);
+                            form.focus_api_search = false;
+                            return Ok(());
+                        }
+                        KeyCode::Backspace => {
+                            let chars: Vec<char> = form.api_query.chars().collect();
+                            if form.api_query_cursor > 0 && !chars.is_empty() {
+                                let mut new_s = String::new();
+                                for (i, &ch) in chars.iter().enumerate() {
+                                    if i != form.api_query_cursor - 1 {
+                                        new_s.push(ch);
+                                    }
+                                }
+                                form.api_query = new_s;
+                                form.api_query_cursor = form.api_query_cursor.saturating_sub(1);
+                                form.api_scroll = 0;
+                                form.api_selected = 0;
+                            }
+                            return Ok(());
+                        }
+                        KeyCode::Left => {
+                            form.api_query_cursor = form.api_query_cursor.saturating_sub(1);
+                            return Ok(());
+                        }
+                        KeyCode::Right => {
+                            let len = form.api_query.chars().count();
+                            if form.api_query_cursor < len {
+                                form.api_query_cursor += 1;
+                            }
+                            return Ok(());
+                        }
+                        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let chars: Vec<char> = form.api_query.chars().collect();
+                            let mut new_s = String::new();
+                            let mut inserted = false;
+                            for (i, &ch) in chars.iter().enumerate() {
+                                if i == form.api_query_cursor {
+                                    new_s.push(c);
+                                    inserted = true;
+                                }
+                                new_s.push(ch);
+                            }
+                            if !inserted {
+                                new_s.push(c);
+                            }
+                            form.api_query = new_s;
+                            form.api_query_cursor += 1;
+                            form.api_scroll = 0;
+                            form.api_selected = 0;
+                            return Ok(());
+                        }
+                        _ => return Ok(()),
+                    }
+                }
+
                 let outcome = handle_form_key(&mut form.fields, &mut form.selected, key);
                 if outcome == FormOutcome::Close {
                     return Ok(());
@@ -3517,7 +3651,7 @@ impl ModelForm {
     fn with_api_models(api_models: Vec<ModelEntry>) -> Self {
         let count = api_models.len();
         let api_status = if count > 0 {
-            format!("已加载缓存的 {count} 个 API 模型 (点击右侧直接填入)")
+            format!("已加载缓存的 {count} 个 API 模型 (输入关键词过滤 / 点击填入)")
         } else {
             "点击下方 [Fetch API] 按钮可实时从网关获取可用模型".into()
         };
@@ -3531,6 +3665,10 @@ impl ModelForm {
             selected: 0,
             api_models,
             api_query: String::new(),
+            api_query_cursor: 0,
+            api_scroll: 0,
+            api_selected: 0,
+            focus_api_search: false,
             api_status,
         }
     }
@@ -3545,8 +3683,54 @@ impl ModelForm {
                     || m.label
                         .as_deref()
                         .is_some_and(|l| l.to_lowercase().contains(&q))
+                    || m.description
+                        .as_deref()
+                        .is_some_and(|d| d.to_lowercase().contains(&q))
             })
             .collect()
+    }
+
+    fn scroll_api_list(&mut self, down: bool, delta: usize, visible_height: usize) {
+        let total = self.filtered_api_models().len();
+        if total == 0 {
+            self.api_scroll = 0;
+            self.api_selected = 0;
+            return;
+        }
+        let max_scroll = total.saturating_sub(visible_height.max(1));
+        if down {
+            self.api_scroll = (self.api_scroll + delta).min(max_scroll);
+        } else {
+            self.api_scroll = self.api_scroll.saturating_sub(delta);
+        }
+        if self.api_selected < self.api_scroll {
+            self.api_selected = self.api_scroll;
+        } else if self.api_selected >= self.api_scroll + visible_height.max(1) {
+            self.api_selected = self.api_scroll + visible_height.max(1) - 1;
+        }
+    }
+
+    fn move_api_selection(&mut self, down: bool, visible_height: usize) {
+        let total = self.filtered_api_models().len();
+        if total == 0 {
+            self.api_scroll = 0;
+            self.api_selected = 0;
+            return;
+        }
+        if down {
+            if self.api_selected + 1 < total {
+                self.api_selected += 1;
+            }
+        } else {
+            self.api_selected = self.api_selected.saturating_sub(1);
+        }
+        let h = visible_height.max(1);
+        if self.api_selected >= self.api_scroll + h {
+            self.api_scroll = self.api_selected + 1 - h;
+        }
+        if self.api_selected < self.api_scroll {
+            self.api_scroll = self.api_selected;
+        }
     }
 
     fn pick_api_model(&mut self, index: usize) {
@@ -4134,7 +4318,7 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         panel(
-            " 添加模型 (Add Model) · 支持手动输入或从 API 候选列表直接选择 ",
+            " 添加模型 (Add Model) · 支持手动输入或从右侧 API 候选列表直接点选 ",
             true,
         ),
         area,
@@ -4148,20 +4332,24 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
     );
     let (form_area, api_area) = model_form_areas(content_area);
 
-    frame.render_widget(panel(" 模型信息 (Model Info) ", true), form_area);
+    frame.render_widget(
+        panel(" 模型信息 (Model Info) ", !form.focus_api_search),
+        form_area,
+    );
     let form_inner = panel_inner(form_area);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Length(1); form.fields.len()])
         .split(form_inner);
     for (index, field) in form.fields.iter().enumerate() {
+        let is_current = index == form.selected && !form.focus_api_search;
         let shown = if field.toggle {
             if field.value == "true" {
                 "[● ON 1M 长上下文]".into()
             } else {
                 "[○ OFF 标准上下文]".into()
             }
-        } else if index == form.selected {
+        } else if is_current {
             let chars: Vec<char> = field.value.chars().collect();
             let cursor = field.cursor.min(chars.len());
             let mut s = String::new();
@@ -4181,7 +4369,7 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
         let line = Line::from(vec![
             Span::styled(
                 format!("{:>13}  ", field.label),
-                Style::default().fg(if index == form.selected { ROUTE } else { MUTED }),
+                Style::default().fg(if is_current { ROUTE } else { MUTED }),
             ),
             Span::styled(
                 shown,
@@ -4191,7 +4379,7 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
                     } else {
                         Color::Reset
                     })
-                    .add_modifier(if index == form.selected {
+                    .add_modifier(if is_current {
                         Modifier::REVERSED
                     } else {
                         Modifier::empty()
@@ -4204,8 +4392,14 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
     }
 
     let api_count = form.api_models.len();
-    let api_title = format!(" ⟳ 网关 API 可选模型 ({api_count}) ");
-    frame.render_widget(panel(&api_title, false), api_area);
+    let filtered = form.filtered_api_models();
+    let filtered_count = filtered.len();
+    let api_title = if form.api_query.is_empty() {
+        format!(" ⟳ 网关 API 可选模型 ({api_count}) ")
+    } else {
+        format!(" ⟳ 网关 API 可选模型 ({filtered_count}/{api_count}) ")
+    };
+    frame.render_widget(panel(&api_title, form.focus_api_search), api_area);
     let api_inner = panel_inner(api_area);
     if form.api_models.is_empty() {
         let msg = vec![
@@ -4228,30 +4422,117 @@ fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &ModelForm) {
         ];
         frame.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), api_inner);
     } else {
-        let items: Vec<ListItem> = form
-            .filtered_api_models()
-            .iter()
-            .take(usize::from(api_inner.height))
-            .map(|model| {
-                let mut spans = vec![
-                    Span::styled("● ", Style::default().fg(CONNECTED)),
-                    Span::styled(
-                        &model.id,
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ];
-                if let Some(label) = &model.label {
-                    spans.push(Span::styled(
-                        format!(" ({label})"),
-                        Style::default().fg(MUTED),
-                    ));
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .split(api_inner);
+
+        let search_text = if form.focus_api_search {
+            let chars: Vec<char> = form.api_query.chars().collect();
+            let cursor = form.api_query_cursor.min(chars.len());
+            let mut s = String::new();
+            for (i, &ch) in chars.iter().enumerate() {
+                if i == cursor {
+                    s.push('▌');
                 }
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
-        frame.render_widget(List::new(items), api_inner);
+                s.push(ch);
+            }
+            if cursor >= chars.len() {
+                s.push('▌');
+            }
+            s
+        } else if form.api_query.is_empty() {
+            "点击此处或按 Tab 搜索过滤模型...".into()
+        } else {
+            form.api_query.clone()
+        };
+
+        let search_line = Line::from(vec![
+            Span::styled(
+                " 🔍 搜索: ",
+                Style::default().fg(if form.focus_api_search { ROUTE } else { MUTED }),
+            ),
+            Span::styled(
+                search_text,
+                Style::default()
+                    .fg(if form.focus_api_search {
+                        Color::White
+                    } else {
+                        MUTED
+                    })
+                    .add_modifier(if form.focus_api_search {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(search_line), chunks[0]);
+
+        let div_text = "─".repeat(usize::from(chunks[1].width));
+        frame.render_widget(
+            Paragraph::new(div_text).style(Style::default().fg(Color::DarkGray)),
+            chunks[1],
+        );
+
+        let list_area = chunks[2];
+        let list_height = usize::from(list_area.height);
+
+        if filtered.is_empty() {
+            let empty_msg = vec![
+                Line::raw(""),
+                Line::styled(
+                    format!(" 未找到匹配 \"{}\" 的模型", form.api_query),
+                    Style::default().fg(WARNING),
+                ),
+                Line::styled(" 按 Esc 清除搜索关键词", Style::default().fg(MUTED)),
+            ];
+            frame.render_widget(Paragraph::new(empty_msg), list_area);
+        } else {
+            let visible_items: Vec<ListItem> = filtered
+                .iter()
+                .enumerate()
+                .skip(form.api_scroll)
+                .take(list_height)
+                .map(|(idx, model)| {
+                    let is_active = form.focus_api_search && idx == form.api_selected;
+                    let mut spans = vec![
+                        Span::styled(
+                            if is_active { "▶ " } else { "● " },
+                            Style::default().fg(if is_active { WARNING } else { CONNECTED }),
+                        ),
+                        Span::styled(
+                            &model.id,
+                            Style::default()
+                                .fg(if is_active { WARNING } else { Color::White })
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ];
+                    if let Some(label) = &model.label {
+                        spans.push(Span::styled(
+                            format!(" ({label})"),
+                            Style::default().fg(MUTED),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            frame.render_widget(List::new(visible_items), list_area);
+
+            if filtered_count > list_height {
+                draw_scrollbar(
+                    frame,
+                    list_area,
+                    filtered_count,
+                    form.api_scroll,
+                    list_height,
+                );
+            }
+        }
     }
 }
 
@@ -6067,6 +6348,71 @@ mod tests {
         let model = form.to_model();
         assert_eq!(model.id, "deepseek-v4-flash[1m]");
         assert!(model.label.unwrap().contains("1M"));
+    }
+
+    #[test]
+    fn model_form_search_and_scrolling() {
+        let api_models = (0..20)
+            .map(|i| ModelEntry {
+                id: format!("model-{i:02}"),
+                label: Some(format!("Model {i}")),
+                description: None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut form = ModelForm::with_api_models(api_models);
+        assert_eq!(form.filtered_api_models().len(), 20);
+        assert_eq!(form.api_scroll, 0);
+        assert_eq!(form.api_selected, 0);
+        assert!(!form.focus_api_search);
+
+        // Scroll down in list
+        form.scroll_api_list(true, 5, 10);
+        assert_eq!(form.api_scroll, 5);
+
+        // Scroll up in list
+        form.scroll_api_list(false, 3, 10);
+        assert_eq!(form.api_scroll, 2);
+
+        // Move selection down
+        form.move_api_selection(true, 10);
+        assert_eq!(form.api_selected, 6);
+
+        // Move selection up
+        form.move_api_selection(false, 10);
+        assert_eq!(form.api_selected, 5);
+
+        // Search query filtering
+        form.api_query = "model-1".into();
+        let filtered = form.filtered_api_models();
+        assert_eq!(filtered.len(), 10); // model-10 .. model-19
+        assert_eq!(filtered[0].id, "model-10");
+    }
+
+    #[test]
+    fn provider_catalog_only_shows_added_models_not_unselected_gateway_models() {
+        let mut app = interactive_test_app();
+        // Insert cached discovered models from remote router (e.g. 10 models)
+        let discovered = (0..10)
+            .map(|i| ModelEntry {
+                id: format!("gateway-model-{i}"),
+                label: Some(format!("Gateway Model {i}")),
+                description: None,
+            })
+            .collect();
+        app.cache.profiles.insert(
+            "one".into(),
+            CachedModels {
+                fetched_at: 1000,
+                models: discovered,
+            },
+        );
+
+        // Profile "one" only has "model-a" and "model-b"
+        let catalog = app.catalog_models();
+        let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["model-a", "model-b"]);
+        assert!(!ids.contains(&"gateway-model-0"));
     }
 
     fn interactive_test_app() -> App {
