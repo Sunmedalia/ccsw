@@ -394,9 +394,7 @@ impl App {
                             }
                             KeyCode::Char('n') => self.new_profile(),
                             KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
-                            KeyCode::Char('d') | KeyCode::Delete
-                                if self.selected_profile().is_some() =>
-                            {
+                            KeyCode::Char('x') if self.selected_profile().is_some() => {
                                 self.modal = Some(Modal::DeleteProfile);
                             }
                             KeyCode::Char('r') | KeyCode::Char('t') => self.refresh_models(),
@@ -668,7 +666,7 @@ impl App {
                                     KeyCode::Char('a') if self.selected_profile().is_some() => {
                                         self.open_add_model_modal();
                                     }
-                                    KeyCode::Char('x') | KeyCode::Delete => {
+                                    KeyCode::Char('x') => {
                                         self.delete_selected_model();
                                     }
                                     KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
@@ -1485,7 +1483,7 @@ impl App {
             if let Some(name) = self.selected_profile().map(|profile| profile.name.clone()) {
                 self.status_error = false;
                 self.status = if self.view_mode == ViewMode::Home {
-                    format!("Selected {name} · Enter 进入详情 · e 编辑 · d 删除 · r 测速")
+                    format!("Selected {name} · Enter 进入详情 · e 编辑 · x 删除 · r 测速")
                 } else {
                     format!("Selected {name} · Enter to choose a model")
                 };
@@ -3739,7 +3737,7 @@ fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)
             ("↑↓ / j k", "选择 All Enabled 或厂商"),
             ("Enter / Click", "打开当前选中项"),
             ("Space", "启用/禁用厂商，并同步 Claude /model"),
-            ("n / e / d", "新建 / 编辑 / 删除厂商"),
+            ("n / e / x", "新建 / 编辑 / 删除厂商"),
             ("r / t", "测试连接并刷新模型目录"),
             ("m / R / N", "切换模式 / 恢复会话 / 新建会话"),
             ("p / P", "同步全部模型 / 管理后台代理"),
@@ -3760,7 +3758,7 @@ fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)
             ("Enter / R / N", "运行选中模型 / 恢复 / 新建会话"),
             ("m", "切换 Resume / New 启动模式"),
             ("A / C", "启用筛选结果 / 清空非必要启用项"),
-            ("a / x / Delete", "添加模型 / 删除自定义模型"),
+            ("a / x", "添加模型 / 删除自定义模型"),
             ("E / r / p / P", "编辑厂商 / 刷新 / 同步 / 代理"),
         ],
         HelpSection::Forms => &[
