@@ -16,7 +16,7 @@ CCSW 是 Claude Code 的多厂商、多模型配置管理器。它负责维护 E
 
 ### 下载 Release
 
-当前提供 macOS Apple Silicon 与 Linux x86_64 二进制：
+当前提供 macOS Apple Silicon、Linux x86_64 与 Windows x64 二进制：
 
 ```sh
 # macOS Apple Silicon
@@ -29,6 +29,20 @@ chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
 ```
 
+### Windows（PowerShell）
+
+```powershell
+Invoke-WebRequest https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip -OutFile ccsw.zip
+Expand-Archive ccsw.zip -DestinationPath "$env:LOCALAPPDATA\Programs\ccsw" -Force
+& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe"
+```
+
+可将 `%LOCALAPPDATA%\Programs\ccsw` 添加到用户 `Path`，之后在 Windows Terminal 中运行 `ccsw`。无需管理员权限。
+
+配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`；`CCSW_CONFIG` 和 XDG 路径覆盖仍然有效。Claude 设置默认使用 `%USERPROFILE%\.claude\settings.json`，优先遵循 `CLAUDE_CONFIG_DIR`。
+
+代理面板按 `P` 打开，按 `e` 修改端口；启用登录自启会在当前用户 Startup 目录创建 `CCSW Proxy.lnk`。关闭 TUI 不会停止后台代理，使用面板 Stop 或 `ccsw proxy stop` 停止。移动可执行文件后，需要禁用并重新启用登录自启。更新前先停止旧代理，再覆盖程序文件。
+
 ### 从源码安装
 
 需要 Rust 1.88+：
@@ -39,7 +53,7 @@ cd ccsw
 cargo install --path .
 ```
 
-CCSW 支持 macOS 与 Linux，需要 Claude Code 2.1.242 或更高版本。
+CCSW 支持 macOS、Linux 与 Windows 10/11 x64，需要 Claude Code 2.1.242 或更高版本。
 
 ## 快速开始
 
@@ -222,7 +236,7 @@ ccsw proxy start
 ccsw proxy start --listen 127.0.0.1:19021
 ccsw proxy status
 ccsw proxy stop
-ccsw proxy install     # 安装 launchd / systemd user 开机服务
+ccsw proxy install     # 安装当前用户登录自启（launchd / systemd / Windows Startup）
 ccsw proxy uninstall
 ```
 
@@ -267,6 +281,6 @@ cargo test --locked --all-targets
 cargo build --locked --release
 ```
 
-CI 在 Ubuntu 与 macOS 上执行相同检查，并生成平台二进制。
+CI 在 Ubuntu、macOS 与 Windows 上执行相同检查，并生成平台二进制。
 
 TUI 按状态、事件、页面、表单、模型规则、布局和后台任务拆分在 `src/tui/`；CLI 与 TUI 共用 `src/sync.rs` 的同步服务。回归测试包含真实事件序列、延迟本地 API、同步失败恢复、并发编辑及 120×36 到 40×12 的布局检查。

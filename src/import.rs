@@ -24,10 +24,7 @@ impl ImportCandidate {
 }
 
 pub fn detect() -> Result<Option<ImportCandidate>> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
-    let source = home.join(".claude/settings.json");
+    let source = crate::claude_config::settings_path()?;
     if !source.exists() {
         return Ok(None);
     }

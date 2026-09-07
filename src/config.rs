@@ -311,25 +311,11 @@ pub struct AppPaths {
 
 impl AppPaths {
     pub fn discover() -> Result<Self> {
-        let home = env::var_os("HOME")
+        let (config_dir, state_dir, cache_dir) = crate::platform::directories()?;
+        let config = env::var_os("CCSW_CONFIG")
             .map(PathBuf::from)
-            .context("HOME is not set")?;
-        let config = if let Some(path) = env::var_os("CCSW_CONFIG") {
-            PathBuf::from(path)
-        } else {
-            env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".config"))
-                .join("ccsw/config.toml")
-        };
-        let state_dir = env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/state"))
-            .join("ccsw");
-        let cache = env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cache"))
-            .join("ccsw/models.json");
+            .unwrap_or_else(|| config_dir.join("config.toml"));
+        let cache = cache_dir.join("models.json");
         Ok(Self {
             config,
             state_dir,

@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::{fs, process::Command};
 
 #[test]
@@ -63,6 +61,7 @@ value = "anthropic-upstream-secret"
         command
             .env("CCSW_CONFIG", &config)
             .env("HOME", temp.path())
+            .env("USERPROFILE", temp.path())
             .env("XDG_STATE_HOME", temp.path().join("state"))
             .env("XDG_CACHE_HOME", temp.path().join("cache"));
     };
@@ -122,6 +121,7 @@ fn separate_user_state_can_use_distinct_ports_without_stopping_each_other() {
             Command::new(&self.binary)
                 .args(args)
                 .env("HOME", self.root.path())
+                .env("USERPROFILE", self.root.path())
                 .env("CCSW_CONFIG", self.root.path().join("config.toml"))
                 .env("XDG_STATE_HOME", self.root.path().join("state"))
                 .env("XDG_CACHE_HOME", self.root.path().join("cache"))
@@ -175,4 +175,72 @@ fn separate_user_state_can_use_distinct_ports_without_stopping_each_other() {
     let still_running = first.command(&["proxy", "status"]);
     assert!(String::from_utf8_lossy(&still_running.stdout).starts_with("running"));
     assert!(String::from_utf8_lossy(&still_running.stdout).contains(&first_address));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_defaults_without_home_and_authenticated_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("用户 space");
+    fs::create_dir_all(&root).unwrap();
+    let command = |args: &[&str]| {
+        let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("ccsw"));
+        cmd.args(args)
+            .env_remove("HOME")
+            .env_remove("CCSW_CONFIG")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("XDG_CACHE_HOME")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("USERPROFILE", &root)
+            .env("APPDATA", root.join("roaming"))
+            .env("LOCALAPPDATA", root.join("local"));
+        cmd
+    };
+    let config = command(&["config", "path"]).output().unwrap();
+    assert!(config.status.success());
+    assert_eq!(
+        String::from_utf8(config.stdout).unwrap().trim(),
+        root.join("roaming/ccsw/config.toml").display().to_string()
+    );
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port().to_string();
+    drop(socket);
+    assert!(
+        command(&["proxy", "port", &port])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let registry = root.join("local/ccsw/state/proxy.json");
+    // The same entry point used by the login shortcut must outlive its launcher.
+    let started = command(&[
+        "internal",
+        "proxy-start",
+        "--registry",
+        registry.to_str().unwrap(),
+    ])
+    .output()
+    .unwrap();
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let response = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("http://127.0.0.1:{port}/internal/shutdown"))
+        .bearer_auth("wrong-token")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    let stop = command(&["proxy", "stop"]).output().unwrap();
+    assert!(
+        stop.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
 }
