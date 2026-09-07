@@ -687,6 +687,25 @@ impl App {
             return Ok(());
         };
         let area = modal_area_for(modal, screen);
+        if matches!(modal, Modal::Proxy(manager) if manager.port_field.is_some()) {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                let buttons = modal_button_rects(area, 2);
+                if let Some(index) = buttons
+                    .iter()
+                    .position(|rect| contains(*rect, mouse.column, mouse.row))
+                {
+                    self.handle_modal(KeyEvent::new(
+                        if index == 0 {
+                            KeyCode::Enter
+                        } else {
+                            KeyCode::Esc
+                        },
+                        KeyModifiers::NONE,
+                    ))?;
+                }
+            }
+            return Ok(());
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if let Some(Modal::Model(form)) = self.modal.as_mut() {
@@ -1024,6 +1043,25 @@ impl App {
                 _ => {}
             },
             Modal::Proxy(manager) => {
+                if let Some(port) = &mut manager.port_field {
+                    if !self.background.proxy_running {
+                        match handle_form_key(std::slice::from_mut(port), &mut 0, key) {
+                            FormOutcome::Close => {
+                                manager.port_field = None;
+                                manager.error = false;
+                                manager.message = "Port edit cancelled".into();
+                            }
+                            FormOutcome::Submit => {
+                                self.modal = Some(modal);
+                                self.start_proxy_action(ProxyControl::Port);
+                                return Ok(());
+                            }
+                            FormOutcome::Stay => {}
+                        }
+                    }
+                    self.modal = Some(modal);
+                    return Ok(());
+                }
                 let control = match key.code {
                     KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => return Ok(()),
                     KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
@@ -1040,10 +1078,18 @@ impl App {
                     KeyCode::Char('r') => Some(ProxyControl::Refresh),
                     KeyCode::Char('i') => Some(ProxyControl::EnableAtLogin),
                     KeyCode::Char('u') => Some(ProxyControl::DisableAtLogin),
+                    KeyCode::Char('e') => Some(ProxyControl::Port),
                     _ => None,
                 };
                 if let Some(control) = control {
                     manager.selected = proxy_control_index(control);
+                    if control == ProxyControl::Port {
+                        if !self.background.proxy_running {
+                            manager.edit_port();
+                        }
+                        self.modal = Some(modal);
+                        return Ok(());
+                    }
                     if control == ProxyControl::Close {
                         return Ok(());
                     }

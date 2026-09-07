@@ -1,10 +1,11 @@
 use super::*;
 
 impl ProxyManager {
-    pub(super) const CONTROLS: [ProxyControl; 6] = [
+    pub(super) const CONTROLS: [ProxyControl; 7] = [
         ProxyControl::Start,
         ProxyControl::Stop,
         ProxyControl::Refresh,
+        ProxyControl::Port,
         ProxyControl::EnableAtLogin,
         ProxyControl::DisableAtLogin,
         ProxyControl::Close,
@@ -13,6 +14,8 @@ impl ProxyManager {
     pub(super) fn empty() -> Self {
         Self {
             instance: uuid::Uuid::new_v4(),
+            port_field: None,
+            port_changed: false,
             runtime: None,
             service: None,
             selected: 0,
@@ -36,11 +39,45 @@ impl ProxyManager {
         }
     }
 
+    pub(super) fn edit_port(&mut self) {
+        let port = self
+            .runtime
+            .as_ref()
+            .and_then(|status| status.listen.parse::<std::net::SocketAddr>().ok())
+            .map(|address| address.port())
+            .unwrap_or(17321);
+        self.port_field = Some(field("Port", &port.to_string()));
+        self.message =
+            "Stop this proxy first. Save the port, then sync with p on the main screen.".into();
+        self.error = false;
+    }
+
+    fn save_port(&mut self, paths: &AppPaths) -> Result<String> {
+        let value = self
+            .port_field
+            .as_ref()
+            .context("open the port editor first")?
+            .value
+            .trim();
+        let port: u16 = value
+            .parse()
+            .context("port must be a number between 1 and 65535")?;
+        let status = proxy::set_port(paths, port)?;
+        self.port_field = None;
+        self.port_changed = true;
+        Ok(format!(
+            "Saved {}. Close this panel and press p to start and sync Claude.",
+            status.listen
+        ))
+    }
+
     pub(super) fn activate(&mut self, paths: &AppPaths, control: ProxyControl) -> bool {
         if control == ProxyControl::Close {
             return true;
         }
+        self.port_changed = false;
         let result = match control {
+            ProxyControl::Port => self.save_port(paths),
             ProxyControl::Start => proxy::start(paths, None)
                 .map(|status| format!("Proxy started at {}", status.listen)),
             ProxyControl::Stop => proxy::stop(paths).map(|()| "Proxy stopped".into()),
@@ -990,7 +1027,31 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
 }
 
 pub(super) fn draw_proxy_manager(frame: &mut ratatui::Frame, area: Rect, manager: &ProxyManager) {
-    frame.render_widget(panel(" Proxy control · P ", true), area);
+    if let Some(port) = &manager.port_field {
+        draw_form(
+            frame,
+            area,
+            " Proxy listen port · Enter save / Esc cancel ",
+            std::slice::from_ref(port),
+            0,
+        );
+        let inner = panel_inner(area);
+        let message = Rect::new(
+            inner.x,
+            inner.y.saturating_add(2),
+            inner.width,
+            inner.height.saturating_sub(4),
+        );
+        frame.render_widget(
+            Paragraph::new(manager.message.as_str())
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(if manager.error { ERROR } else { MUTED })),
+            message,
+        );
+        draw_modal_buttons(frame, area, &["Save port", "Cancel"]);
+        return;
+    }
+    frame.render_widget(panel(" Proxy control · e edit port ", true), area);
     let inner = panel_inner(area);
     let running = manager
         .runtime
@@ -1106,6 +1167,7 @@ pub(super) fn proxy_controls(area: Rect) -> Vec<(ProxyControl, Rect)> {
         (ProxyControl::Start, "Start"),
         (ProxyControl::Stop, "Stop"),
         (ProxyControl::Refresh, "Refresh"),
+        (ProxyControl::Port, "Port (e)"),
     ];
     let second = [
         (ProxyControl::EnableAtLogin, "Enable at login"),
@@ -1167,6 +1229,7 @@ pub(super) fn proxy_control_index(control: ProxyControl) -> usize {
 
 pub(super) fn proxy_control_key(control: ProxyControl) -> KeyEvent {
     let code = match control {
+        ProxyControl::Port => KeyCode::Char('e'),
         ProxyControl::Start => KeyCode::Char('s'),
         ProxyControl::Stop => KeyCode::Char('x'),
         ProxyControl::Refresh => KeyCode::Char('r'),
@@ -1188,6 +1251,7 @@ pub(super) fn draw_proxy_controls(frame: &mut ratatui::Frame, area: Rect, manage
         .is_some_and(|status| status.installed);
     for (control, rect) in proxy_controls(area) {
         let label = match control {
+            ProxyControl::Port => "Port (e)",
             ProxyControl::Start => "Start",
             ProxyControl::Stop => "Stop",
             ProxyControl::Refresh => "Refresh",

@@ -228,6 +228,27 @@ ccsw proxy uninstall
 
 默认地址是 `127.0.0.1:17321`；指定过自定义监听地址后，停止并重启会保留该地址。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
 
+### 修改本地代理端口 / 多系统用户
+
+root 与普通用户使用各自的配置和代理 Token，但同一台机器的监听端口是共用的。可以让 root 使用 `127.0.0.1:17321`，普通用户使用 `127.0.0.1:17322`，更多用户依次选择其他空闲端口。
+
+TUI 中按 `P` 打开 Proxy：
+
+1. 如果当前用户的代理正在运行，按 `x`（Stop）停止。
+2. 按 `e` 或点击 `Port (e)`，输入端口，按 `Enter` / `Ctrl+S` 保存；`Esc` 取消。
+3. 关闭 Proxy 面板，按主界面的 `p` 启动代理并同步 Claude 到新地址。
+
+命令行也支持：
+
+```sh
+# 在需要更改端口的那个用户身份下执行
+ccsw proxy stop            # 如果该用户的代理正在运行
+ccsw proxy port 17322      # 保存新端口，要求 1–65535 且未被占用
+ccsw apply --profile local # 换成自己的厂商 ID；启动代理并更新 Claude 地址
+```
+
+已有的 `ccsw proxy start --listen 127.0.0.1:17322` 仍然可用。端口保存在当前用户状态目录的 `proxy.json` 中，重启时保留。这里修改的是本地 Proxy 的 Listen，不是厂商 API 的 Base URL。已经运行的 Claude 需要重新启动以读取更新后的地址。端口冲突时会报错并保留原监听配置，不会停止其他用户的代理。
+
 ## 数据与安全
 
 - 配置：`~/.config/ccsw/config.toml`

@@ -57,6 +57,7 @@ pub(super) enum ShowcaseControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProxyControl {
+    Port,
     Start,
     Stop,
     Refresh,
@@ -150,6 +151,8 @@ impl HelpModal {
 
 #[derive(Clone)]
 pub(super) struct ProxyManager {
+    pub(super) port_field: Option<FormField>,
+    pub(super) port_changed: bool,
     pub(super) instance: uuid::Uuid,
     pub(super) runtime: Option<proxy::ProxyStatus>,
     pub(super) service: Option<proxy::ProxyServiceStatus>,

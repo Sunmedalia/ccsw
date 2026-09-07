@@ -283,6 +283,13 @@ impl App {
                 }
                 Completion::Proxy(manager) => {
                     self.background.proxy_running = false;
+                    if manager.port_changed {
+                        if self.background.connected {
+                            self.background.status = sync::Status::Pending;
+                        }
+                        self.status_error = false;
+                        self.status = manager.message.clone();
+                    }
                     self.proxy_status = manager.runtime.clone();
                     if let Some(Modal::Proxy(current)) = &mut self.modal
                         && current.instance == manager.instance

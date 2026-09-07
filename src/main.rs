@@ -67,6 +67,8 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum ProxyCommand {
+    /// Set this user's local proxy port (stop the proxy first)
+    Port { port: u16 },
     /// Start the local proxy in the background
     Start {
         #[arg(long)]
@@ -121,6 +123,13 @@ fn main() -> Result<()> {
 
 fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
     match command {
+        ProxyCommand::Port { port } => {
+            let status = proxy::set_port(paths, port)?;
+            println!(
+                "Saved proxy listen address: {}. Start the proxy, then sync with p or ccsw apply --profile <id>.",
+                status.listen
+            );
+        }
         ProxyCommand::Start { listen } => {
             let status = proxy::start(paths, listen.as_deref())?;
             println!(

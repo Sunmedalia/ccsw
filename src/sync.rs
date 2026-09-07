@@ -116,6 +116,9 @@ pub fn inspect(paths: &AppPaths, settings: &Path) -> Result<Status> {
         if !matches(binding, &value) {
             return Ok(Status::Paused);
         }
+        if binding.endpoint.is_some() && !proxy::owns_settings(paths, &value)? {
+            return Ok(Status::Pending);
+        }
         return Ok(
             if binding.revision == revision(&config::load(&paths.config)?)? {
                 Status::Synced
@@ -326,8 +329,14 @@ default_model = "model-z"
                             stream
                                 .set_read_timeout(Some(Duration::from_secs(1)))
                                 .unwrap();
-                            let mut request = [0; 4096];
-                            let _ = stream.read(&mut request);
+                            let mut request = Vec::new();
+                            let mut chunk = [0; 1024];
+                            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                                match stream.read(&mut chunk) {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(count) => request.extend_from_slice(&chunk[..count]),
+                                }
+                            }
                             let body = r#"{"name":"ccsw-proxy"}"#;
                             let _ = write!(
                                 stream,
@@ -585,5 +594,24 @@ default_model = "model-z"
         fs::create_dir_all(settings.parent().unwrap()).unwrap();
         fs::write(&settings, "{}").unwrap();
         assert_eq!(identity(&settings).unwrap(), before);
+    }
+    #[test]
+    fn changed_proxy_port_is_pending_even_without_model_edits() {
+        let fixture = Fixture::new();
+        apply(&fixture.paths, &fixture.settings, Some("one"), true).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        proxy::set_port(&fixture.paths, port).unwrap();
+        assert_eq!(
+            inspect(&fixture.paths, &fixture.settings).unwrap(),
+            Status::Pending
+        );
+        assert!(
+            fixture.value()["env"]["ANTHROPIC_BASE_URL"]
+                .as_str()
+                .unwrap()
+                .contains("/r/")
+        );
     }
 }

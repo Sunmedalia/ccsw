@@ -400,6 +400,8 @@ fn provider_page_keeps_global_sync_and_removes_duplicate_manager_controls() {
 fn proxy_manager_renders_and_supports_keyboard_and_mouse_navigation() {
     let mut app = interactive_test_app();
     app.modal = Some(Modal::Proxy(ProxyManager {
+        port_field: None,
+        port_changed: false,
         instance: uuid::Uuid::new_v4(),
         runtime: Some(proxy::ProxyStatus {
             running: true,
@@ -1505,4 +1507,80 @@ fn render_matrix_covers_pages_forms_and_errors() {
             }
         }
     }
+}
+
+#[test]
+fn proxy_port_editor_supports_keyboard_mouse_and_validation() {
+    let (_temp, mut app) = persisted_app();
+    app.modal = Some(Modal::Proxy(ProxyManager::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+        .unwrap();
+    for ch in "17322".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+    assert!(
+        matches!(&app.modal, Some(Modal::Proxy(manager)) if manager.port_field.as_ref().unwrap().value == "17322")
+    );
+    for (width, height) in [(40, 12), (60, 18), (120, 36)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("17322"));
+        assert!(text.contains("Save port"));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(&app.modal, Some(Modal::Proxy(manager)) if manager.port_field.is_none()));
+    let screen = Rect::new(0, 0, 80, 24);
+    let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
+    let (_, rect) = proxy_controls(area)
+        .into_iter()
+        .find(|(control, _)| *control == ProxyControl::Port)
+        .unwrap();
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Proxy(manager)) = &mut app.modal else {
+        unreachable!()
+    };
+    manager.port_field.as_mut().unwrap().value = "70000".into();
+    manager.activate(&app.paths, ProxyControl::Port);
+    assert!(manager.error);
+    assert!(manager.port_field.is_some());
+    assert!(manager.message.contains("65535"));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    manager.port_field.as_mut().unwrap().value = port.to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while app.background.proxy_running && std::time::Instant::now() < deadline {
+        app.poll_background();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!app.background.proxy_running);
+    assert!(
+        matches!(&app.modal, Some(Modal::Proxy(manager)) if manager.port_field.is_none() && manager.port_changed && !manager.error)
+    );
+    assert_eq!(
+        app.proxy_status.as_ref().unwrap().listen,
+        format!("127.0.0.1:{port}")
+    );
 }

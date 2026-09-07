@@ -271,7 +271,58 @@ pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
+fn lifecycle_lock(paths: &AppPaths) -> Result<fs::File> {
+    fs::create_dir_all(&paths.state_dir)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(paths.state_dir.join("proxy.lifecycle.lock"))?;
+    file.lock_exclusive()?;
+    Ok(file)
+}
+
+fn available_listener(address: SocketAddr) -> Result<std::net::TcpListener> {
+    if !address.ip().is_loopback() || address.port() == 0 {
+        bail!("use a loopback address and a port between 1 and 65535");
+    }
+    std::net::TcpListener::bind(address).with_context(|| format!("cannot listen on {address}; the port may be in use by another user or process. Choose another port in Proxy > Port (e)"))
+}
+
+/// Change this user's saved listen port without touching another user's process.
+/// A running daemon retains its bound socket, so it must be stopped first.
+pub fn set_port(paths: &AppPaths, port: u16) -> Result<ProxyStatus> {
+    let _lifecycle = lifecycle_lock(paths)?;
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    let daemon = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&proxy_paths.daemon_lock)?;
+    daemon
+        .try_lock_exclusive()
+        .context("stop this user's proxy before changing its port (Stop / x)")?;
+    let registry = load_or_default_registry(&proxy_paths, None)?;
+    let mut address: SocketAddr = registry
+        .listen
+        .parse()
+        .context("saved proxy listen address is invalid")?;
+    address.set_port(port);
+    let _probe = available_listener(address)?;
+    let listen = address.to_string();
+    update_registry(&proxy_paths, Some(&listen), |_| ())?;
+    Ok(ProxyStatus {
+        running: false,
+        listen,
+        routes: registry.routes.len(),
+        pid: None,
+    })
+}
+
 pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
+    let _lifecycle = lifecycle_lock(paths)?;
     let proxy_paths = ProxyPaths::from_app(paths)?;
     if let Ok(status) = status(paths)
         && status.running
@@ -294,6 +345,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     if !socket.ip().is_loopback() {
         bail!("CCSW proxy only accepts loopback listen addresses");
     }
+    let probe = available_listener(socket)?;
     update_registry(&proxy_paths, Some(address), |_| ())?;
     let parent = proxy_paths
         .registry
@@ -339,6 +391,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
             });
         }
     }
+    drop(probe);
     command.spawn().context("failed to start CCSW proxy")?;
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
@@ -400,6 +453,7 @@ pub fn service_status() -> Result<ProxyServiceStatus> {
 }
 
 pub fn stop(paths: &AppPaths) -> Result<()> {
+    let _lifecycle = lifecycle_lock(paths)?;
     let proxy_paths = ProxyPaths::from_app(paths)?;
     if !status(paths)?.running {
         fs::remove_file(&proxy_paths.pid).ok();
@@ -2281,5 +2335,43 @@ enabled_models = ["b"]
         .unwrap();
         assert!(resolve_profile(&target, Some("one::a")).is_err());
         assert!(visible_route_models(&target).unwrap().is_empty());
+    }
+    #[test]
+    fn port_configuration_checks_availability_and_preserves_registry_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            cache: temp.path().join("cache.json"),
+            state_dir: temp.path().join("state"),
+        };
+        let available = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = available.local_addr().unwrap().port();
+        drop(available);
+        assert_eq!(
+            set_port(&paths, port).unwrap().listen,
+            format!("127.0.0.1:{port}")
+        );
+        let registry = paths.state_dir.join("proxy.json");
+        let before = fs::read(&registry).unwrap();
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let error = set_port(&paths, busy.local_addr().unwrap().port()).unwrap_err();
+        assert!(format!("{error:#}").contains("another user or process"));
+        assert!(set_port(&paths, 0).is_err());
+        assert_eq!(fs::read(&registry).unwrap(), before);
+        let daemon = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(paths.state_dir.join("proxy.daemon.lock"))
+            .unwrap();
+        daemon.lock_exclusive().unwrap();
+        assert!(
+            set_port(&paths, port)
+                .unwrap_err()
+                .to_string()
+                .contains("stop this user's proxy")
+        );
+        assert_eq!(fs::read(&registry).unwrap(), before);
     }
 }
