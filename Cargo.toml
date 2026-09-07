@@ -1,9 +1,9 @@
 [package]
 name = "ccsw"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
-description = "A conflict-free Claude Code profile and model switcher"
+description = "A Claude Code provider, model, and proxy configuration manager"
 license = "MIT"
 
 [dependencies]

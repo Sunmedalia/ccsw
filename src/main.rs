@@ -3,21 +3,16 @@ mod config;
 mod discovery;
 mod import;
 mod proxy;
-mod runner;
-mod state;
+mod sync;
 mod tui;
 
-use std::{ffi::OsString, path::PathBuf, process::Command};
+use std::{path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use semver::Version;
 
-use crate::{
-    config::AppPaths,
-    runner::{LaunchRequest, SessionMode},
-    state::{ProjectState, SessionRecord},
-};
+use crate::config::AppPaths;
 
 const MIN_CLAUDE_VERSION: &str = "2.1.242";
 
@@ -25,21 +20,15 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 #[command(
     name = "ccsw",
     version,
-    about = "Route Claude Code through isolated model profiles"
+    about = "Manage Claude Code providers, models, and proxy settings"
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Arguments forwarded to Claude when launching from the TUI
-    #[arg(last = true)]
-    claude_args: Vec<OsString>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Launch Claude directly with a named profile
-    Run(RunArgs),
     /// Diagnose Claude, configuration, and gateway connectivity
     Doctor,
     /// Persist a profile and its enabled models to Claude's global settings
@@ -70,20 +59,6 @@ enum Commands {
     },
 }
 
-#[derive(Args)]
-struct RunArgs {
-    #[arg(long)]
-    profile: String,
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(long, conflicts_with = "resume")]
-    new: bool,
-    #[arg(long)]
-    resume: Option<String>,
-    #[arg(last = true)]
-    claude_args: Vec<OsString>,
-}
-
 #[derive(Subcommand)]
 enum ConfigCommand {
     /// Print the active config path
@@ -109,10 +84,6 @@ enum ProxyCommand {
 
 #[derive(Subcommand)]
 enum InternalCommand {
-    CaptureSession {
-        #[arg(long)]
-        path: PathBuf,
-    },
     ProxyServe {
         #[arg(long)]
         registry: PathBuf,
@@ -130,9 +101,8 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            tui::run(paths, config, cli.claude_args, import)
+            tui::run(paths, config, import)
         }
-        Some(Commands::Run(args)) => run_direct(paths, args),
         Some(Commands::Doctor) => doctor(&paths),
         Some(Commands::Apply { profile }) => apply_to_claude(&paths, &profile),
         Some(Commands::Proxy { command }) => proxy_command(&paths, command),
@@ -143,9 +113,6 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Import { yes }) => import_existing(&paths, yes),
-        Some(Commands::Internal {
-            command: InternalCommand::CaptureSession { path },
-        }) => runner::capture_session(&path),
         Some(Commands::Internal {
             command: InternalCommand::ProxyServe { registry },
         }) => tokio::runtime::Runtime::new()?.block_on(proxy::serve(registry)),
@@ -199,9 +166,8 @@ fn apply_to_claude(paths: &AppPaths, profile_id: &str) -> Result<()> {
     if !profile.enabled {
         bail!("profile '{profile_id}' is disabled");
     }
-    let cache = discovery::load_cache(&paths.cache);
     let settings = claude_config::settings_path()?;
-    let result = claude_config::apply_all(&settings, paths, &config, &cache, profile_id)?;
+    let result = sync::apply(paths, &settings, Some(profile_id), true)?;
     println!(
         "Synced {} models from all profiles to {} (default profile: '{profile_id}')",
         result.model_count,
@@ -209,70 +175,6 @@ fn apply_to_claude(paths: &AppPaths, profile_id: &str) -> Result<()> {
     );
     if let Some(backup) = result.backup {
         println!("Previous settings backed up to {}", backup.display());
-    }
-    Ok(())
-}
-
-fn run_direct(paths: AppPaths, args: RunArgs) -> Result<()> {
-    let config = config::load(&paths.config)?;
-    let profile = config
-        .profiles
-        .get(&args.profile)
-        .with_context(|| format!("profile '{}' does not exist", args.profile))?;
-    if !profile.enabled {
-        bail!("profile '{}' is disabled", args.profile);
-    }
-    let model_id = args.model.as_deref().unwrap_or(&profile.default_model);
-    let cache = discovery::load_cache(&paths.cache);
-    let discovered = cache
-        .profiles
-        .get(&args.profile)
-        .map(|cached| cached.models.as_slice())
-        .unwrap_or_default();
-    let models = discovery::active_models(profile, discovered);
-    if !models.iter().any(|model| model.id == model_id) {
-        bail!(
-            "model '{model_id}' is not configured for profile '{}'",
-            args.profile
-        );
-    }
-    let mode = args
-        .resume
-        .map(SessionMode::Resume)
-        .unwrap_or(SessionMode::New);
-    let routed = proxy::routed_profile(&paths, &args.profile, profile)?;
-    let result = runner::launch(
-        &paths,
-        LaunchRequest {
-            profile: &routed,
-            model_id,
-            models: &models,
-            mode,
-            forwarded_args: args.claude_args,
-        },
-    )?;
-    let cwd = state::canonical_project(&std::env::current_dir()?);
-    state::update(&paths.state, |state| {
-        state.projects.insert(
-            cwd.clone(),
-            ProjectState {
-                profile_id: args.profile.clone(),
-                model_id: result.capture.model_id.clone(),
-            },
-        );
-        state.sessions.insert(
-            result.capture.session_id.clone(),
-            SessionRecord {
-                session_id: result.capture.session_id.clone(),
-                cwd,
-                profile_id: args.profile,
-                model_id: result.capture.model_id.clone(),
-                updated_at: state::now_epoch(),
-            },
-        );
-    })?;
-    if !result.status.success() {
-        bail!("Claude exited with {}", result.status);
     }
     Ok(())
 }

@@ -303,7 +303,8 @@ pub fn update_cache(path: &Path, edit: impl FnOnce(&mut ModelCache)) -> Result<M
         .write(true)
         .truncate(false)
         .open(lock_path)?;
-    lock.lock_exclusive()?;
+    lock.try_lock_exclusive()
+        .context("model cache is busy in another CCSW instance; retry fetching")?;
     let mut latest = load_cache(path);
     edit(&mut latest);
     save_cache(path, &latest)?;

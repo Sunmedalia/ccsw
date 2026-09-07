@@ -284,10 +284,6 @@ impl Profile {
         }
         Ok(())
     }
-
-    pub fn manual_model(&self, id: &str) -> Option<&ModelEntry> {
-        self.models.iter().find(|model| model.id == id)
-    }
 }
 
 fn canonical_context_model(id: &str) -> &str {
@@ -309,9 +305,8 @@ pub fn mask_secret(value: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     pub config: PathBuf,
-    pub state: PathBuf,
+    pub state_dir: PathBuf,
     pub cache: PathBuf,
-    pub runtime_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -327,23 +322,18 @@ impl AppPaths {
                 .unwrap_or_else(|| home.join(".config"))
                 .join("ccsw/config.toml")
         };
-        let state = env::var_os("XDG_STATE_HOME")
+        let state_dir = env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/state"))
-            .join("ccsw/state.json");
+            .join("ccsw");
         let cache = env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".cache"))
             .join("ccsw/models.json");
-        let runtime_dir = cache
-            .parent()
-            .expect("cache always has a parent")
-            .join("runtime");
         Ok(Self {
             config,
-            state,
+            state_dir,
             cache,
-            runtime_dir,
         })
     }
 }
@@ -422,6 +412,19 @@ fn migrate_v1(raw: &mut toml::Value) -> Result<()> {
 }
 
 pub fn update(path: &Path, edit: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
+    update_locked(path, edit, true)
+}
+
+/// Interactive edits fail promptly on contention so the terminal remains usable.
+pub fn try_update(path: &Path, edit: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
+    update_locked(path, edit, false)
+}
+
+fn update_locked(
+    path: &Path,
+    edit: impl FnOnce(&mut Config) -> Result<()>,
+    wait: bool,
+) -> Result<Config> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -432,7 +435,12 @@ pub fn update(path: &Path, edit: impl FnOnce(&mut Config) -> Result<()>) -> Resu
         .write(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock.lock_exclusive()?;
+    if wait {
+        lock.lock_exclusive()?;
+    } else {
+        lock.try_lock_exclusive()
+            .context("configuration is busy in another CCSW instance; retry saving")?;
+    }
     let mut latest = load(path)?;
     edit(&mut latest)?;
     latest.version = CONFIG_VERSION;
@@ -443,6 +451,73 @@ pub fn update(path: &Path, edit: impl FnOnce(&mut Config) -> Result<()>) -> Resu
     write_unlocked(path, &latest)?;
     FileExt::unlock(&lock).ok();
     Ok(latest)
+}
+
+/// Merge an edit against the latest profile without overwriting independent changes.
+/// Arrays are atomic fields; conflicting edits must be retried from a fresh view.
+pub fn merge_profile(original: &Profile, edited: &Profile, latest: &Profile) -> Result<Profile> {
+    fn merge(
+        old: &serde_json::Value,
+        new: &serde_json::Value,
+        live: &serde_json::Value,
+        field: &str,
+    ) -> Result<serde_json::Value> {
+        if old == new {
+            return Ok(live.clone());
+        }
+        if old == live || new == live {
+            return Ok(new.clone());
+        }
+        if let (Some(old), Some(new), Some(live)) =
+            (old.as_object(), new.as_object(), live.as_object())
+        {
+            let keys = old
+                .keys()
+                .chain(new.keys())
+                .chain(live.keys())
+                .collect::<BTreeSet<_>>();
+            let mut result = serde_json::Map::new();
+            for key in keys {
+                let value = merge(
+                    old.get(key).unwrap_or(&serde_json::Value::Null),
+                    new.get(key).unwrap_or(&serde_json::Value::Null),
+                    live.get(key).unwrap_or(&serde_json::Value::Null),
+                    &format!("{field}.{key}"),
+                )?;
+                if !value.is_null() {
+                    result.insert(key.clone(), value);
+                }
+            }
+            return Ok(result.into());
+        }
+        bail!("{field} changed in another CCSW instance; reopen the editor and retry");
+    }
+    let merged = merge(
+        &serde_json::to_value(original)?,
+        &serde_json::to_value(edited)?,
+        &serde_json::to_value(latest)?,
+        "profile",
+    )?;
+    let profile: Profile = serde_json::from_value(merged)?;
+    profile.validate()?;
+    Ok(profile)
+}
+
+pub fn update_profile(
+    path: &Path,
+    id: &str,
+    original: &Profile,
+    edited: &Profile,
+) -> Result<Config> {
+    try_update(path, |latest| {
+        let current = latest
+            .profiles
+            .get(id)
+            .context("provider was removed in another CCSW instance")?;
+        let merged = merge_profile(original, edited, current)?;
+        latest.profiles.insert(id.to_owned(), merged);
+        Ok(())
+    })
 }
 
 fn write_unlocked(path: &Path, config: &Config) -> Result<()> {
@@ -647,5 +722,36 @@ value = "secret"
         let loaded = load(&path).unwrap();
         assert!(loaded.profiles.contains_key("a"));
         assert!(loaded.profiles.contains_key("b"));
+    }
+    #[test]
+    fn three_way_merge_preserves_independent_fields_and_rejects_conflicts() {
+        let original = profile();
+        let mut edited = original.clone();
+        edited.default_model = "new-model".into();
+        let mut latest = original.clone();
+        latest.base_url = "https://changed.example".into();
+        latest.aliases.haiku = Some("worker".into());
+        let merged = merge_profile(&original, &edited, &latest).unwrap();
+        assert_eq!(merged.default_model, "new-model");
+        assert_eq!(merged.base_url, latest.base_url);
+        assert_eq!(merged.aliases.haiku, latest.aliases.haiku);
+        latest.default_model = "another-model".into();
+        assert!(merge_profile(&original, &edited, &latest).is_err());
+    }
+    #[test]
+    fn interactive_update_reports_busy_without_waiting_for_the_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path.with_extension("toml.lock"))
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        let error = try_update(&path, |_| Ok(())).unwrap_err();
+        assert!(error.to_string().contains("configuration is busy"));
+        assert!(!path.exists());
     }
 }

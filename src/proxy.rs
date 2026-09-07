@@ -57,12 +57,6 @@ struct Registry {
     routes: BTreeMap<String, RouteTarget>,
 }
 
-#[derive(Debug, Clone)]
-pub struct LocalRoute {
-    pub base_url: String,
-    pub token: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyStatus {
     pub running: bool,
@@ -89,7 +83,7 @@ struct ProxyPaths {
 
 impl ProxyPaths {
     fn from_app(paths: &AppPaths) -> Result<Self> {
-        let directory = paths.state.parent().context("state path has no parent")?;
+        let directory = &paths.state_dir;
         Ok(Self {
             registry: directory.join("proxy.json"),
             registry_lock: directory.join("proxy.json.lock"),
@@ -98,41 +92,6 @@ impl ProxyPaths {
             log: directory.join("proxy.log"),
         })
     }
-}
-
-pub fn ensure_route(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Result<LocalRoute> {
-    if !profile.enabled {
-        bail!("profile '{profile_id}' is disabled");
-    }
-    if !profile.api_format.is_openai() {
-        bail!("ensure_route only accepts OpenAI-compatible profiles");
-    }
-    let proxy_paths = ProxyPaths::from_app(paths)?;
-    let route_id = update_registry(&proxy_paths, None, |registry| {
-        if let Some((id, _)) = registry.routes.iter().find(|(_, target)| {
-            target.config_path == paths.config
-                && target.profile_id.as_deref() == Some(profile_id)
-                && target.models.is_empty()
-        }) {
-            return id.clone();
-        }
-        let id = Uuid::new_v4().simple().to_string();
-        registry.routes.insert(
-            id.clone(),
-            RouteTarget {
-                config_path: paths.config.clone(),
-                profile_id: Some(profile_id.to_owned()),
-                models: BTreeMap::new(),
-            },
-        );
-        id
-    })?;
-    start(paths, None)?;
-    let registry = load_registry(&proxy_paths)?;
-    Ok(LocalRoute {
-        base_url: format!("http://{}/r/{route_id}", registry.listen),
-        token: registry.local_token,
-    })
 }
 
 pub fn aggregate_model_id(profile_id: &str, model_id: &str) -> String {
@@ -236,10 +195,7 @@ pub fn aggregate_profile(
         })?;
     start(paths, None)?;
     let registry = load_registry(&proxy_paths)?;
-    let expose = |model: &str| {
-        resolve_aggregate_model_id(&targets, default_profile_id, model)
-            .unwrap_or_else(|| aggregate_model_id(default_profile_id, model))
-    };
+    let expose = |model: &str| resolve_aggregate_model_id(&targets, default_profile_id, model);
     let mut routed = default_profile.clone();
     routed.name = "CCSW · all providers".into();
     routed.api_format = ApiFormat::Anthropic;
@@ -254,20 +210,51 @@ pub fn aggregate_profile(
         &mut routed.aliases.haiku,
         &mut routed.aliases.fable,
         &mut routed.subagent_model,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        *model = expose(model);
+    ] {
+        *model = model.as_deref().and_then(expose);
     }
     routed.fallback_models = routed
         .fallback_models
         .iter()
-        .map(|model| expose(model))
+        .filter_map(|model| expose(model))
         .collect();
     routed.enabled_models = models.iter().map(|model| model.id.clone()).collect();
     routed.models = models.clone();
     Ok((routed, models))
+}
+
+pub struct AggregateCheckpoint(Vec<(String, RouteTarget)>);
+
+pub fn aggregate_checkpoint(paths: &AppPaths) -> Result<AggregateCheckpoint> {
+    let registry = load_or_default_registry(&ProxyPaths::from_app(paths)?, None)?;
+    Ok(AggregateCheckpoint(
+        registry
+            .routes
+            .into_iter()
+            .filter(|(_, route)| route.config_path == paths.config && route.profile_id.is_none())
+            .collect(),
+    ))
+}
+
+pub fn restore_aggregate(paths: &AppPaths, checkpoint: AggregateCheckpoint) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        registry
+            .routes
+            .retain(|_, route| route.config_path != paths.config || route.profile_id.is_some());
+        registry.routes.extend(checkpoint.0);
+    })
+}
+
+pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
+    let registry = load_or_default_registry(&ProxyPaths::from_app(paths)?, None)?;
+    let endpoint = value["env"]["ANTHROPIC_BASE_URL"].as_str();
+    let token = value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str();
+    Ok(token == Some(registry.local_token.as_str())
+        && registry.routes.iter().any(|(id, route)| {
+            route.profile_id.is_none()
+                && route.config_path == paths.config
+                && endpoint == Some(format!("http://{}/r/{id}", registry.listen).as_str())
+        }))
 }
 
 pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
@@ -282,21 +269,6 @@ pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
         }
     })?;
     Ok(())
-}
-
-pub fn routed_profile(paths: &AppPaths, profile_id: &str, profile: &Profile) -> Result<Profile> {
-    if !profile.enabled {
-        bail!("profile '{profile_id}' is disabled");
-    }
-    if !profile.api_format.is_openai() {
-        return Ok(profile.clone());
-    }
-    let local = ensure_route(paths, profile_id, profile)?;
-    let mut routed = profile.clone();
-    routed.api_format = ApiFormat::Anthropic;
-    routed.base_url = local.base_url;
-    routed.credential = Credential::Bearer { value: local.token };
-    Ok(routed)
 }
 
 pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
@@ -314,7 +286,8 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         }
         return Ok(status);
     }
-    let address = listen.unwrap_or(DEFAULT_LISTEN);
+    let saved = load_or_default_registry(&proxy_paths, None)?;
+    let address = listen.unwrap_or(&saved.listen);
     let socket: SocketAddr = address
         .parse()
         .with_context(|| format!("invalid proxy listen address {address}"))?;
@@ -490,7 +463,8 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
             .status();
         let status = Command::new("launchctl")
             .args(["bootstrap", &domain, path.to_string_lossy().as_ref()])
-            .status()?;
+            .output()?
+            .status;
         if !status.success() {
             bail!("launchctl could not install {}", path.display());
         }
@@ -511,7 +485,8 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
         )?;
         let status = Command::new("systemctl")
             .args(["--user", "enable", "--now", "ccsw-proxy.service"])
-            .status()?;
+            .output()?
+            .status;
         if !status.success() {
             bail!("systemctl could not install {}", path.display());
         }
@@ -758,7 +733,48 @@ fn resolve_profile(
     if target.profile_id.is_some() && !profile.api_format.is_openai() {
         bail!("profile '{profile_id}' is not an OpenAI route");
     }
-    Ok((profile, model_id.to_owned()))
+    let active = crate::discovery::active_models(&profile, &[]);
+    let effective = active.into_iter().find(|model| {
+        config::canonical_model_id(&model.id) == config::canonical_model_id(model_id)
+    });
+    if !model_id.is_empty() && effective.is_none() {
+        bail!("model '{model_id}' is disabled or no longer configured");
+    }
+    let effective = effective.map(|model| model.id).unwrap_or_default();
+    Ok((profile, effective))
+}
+
+fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
+    let config = config::load(&target.config_path)?;
+    let active: BTreeMap<_, std::collections::BTreeSet<String>> = config
+        .profiles
+        .iter()
+        .map(|(id, profile)| {
+            (
+                id.as_str(),
+                crate::discovery::active_models(profile, &[])
+                    .into_iter()
+                    .map(|model| config::canonical_model_id(&model.id).to_owned())
+                    .collect(),
+            )
+        })
+        .collect();
+    if let Some(id) = &target.profile_id {
+        return Ok(active
+            .get(id.as_str())
+            .map(|models| models.iter().cloned().collect())
+            .unwrap_or_default());
+    }
+    Ok(target
+        .models
+        .iter()
+        .filter(|(_, model)| {
+            active
+                .get(model.profile_id.as_str())
+                .is_some_and(|models| models.contains(config::canonical_model_id(&model.model_id)))
+        })
+        .map(|(id, _)| id.clone())
+        .collect())
 }
 
 async fn models(
@@ -768,17 +784,9 @@ async fn models(
 ) -> Response {
     match authenticated_target(&state, &route, &headers) {
         Ok((target, _)) => {
-            let ids = if target.profile_id.is_none() {
-                target.models.keys().cloned().collect::<Vec<_>>()
-            } else {
-                match resolve_profile(&target, None) {
-                    Ok((profile, _)) => profile
-                        .models
-                        .iter()
-                        .map(|model| strip_1m(&model.id).to_owned())
-                        .collect(),
-                    Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
-                }
+            let ids = match visible_route_models(&target) {
+                Ok(ids) => ids,
+                Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
             };
             Json(json!({
                 "data": ids.into_iter().map(|id| json!({"id":id, "object":"model"})).collect::<Vec<_>>()
@@ -1856,9 +1864,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths {
             config: temp.path().join("config.toml"),
-            state: temp.path().join("state/state.json"),
+            state_dir: temp.path().join("state"),
             cache: temp.path().join("cache/models.json"),
-            runtime_dir: temp.path().join("cache/runtime"),
         };
         let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
         update_registry(&proxy_paths, None, |registry| {
@@ -2039,9 +2046,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let app_paths = AppPaths {
             config: temp.path().join("config.toml"),
-            state: temp.path().join("state/state.json"),
+            state_dir: temp.path().join("state"),
             cache: temp.path().join("cache/models.json"),
-            runtime_dir: temp.path().join("cache/runtime"),
         };
         let profile = Profile {
             name: "OpenAI".into(),
@@ -2146,9 +2152,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let app_paths = AppPaths {
             config: temp.path().join("config.toml"),
-            state: temp.path().join("state/state.json"),
+            state_dir: temp.path().join("state"),
             cache: temp.path().join("cache/models.json"),
-            runtime_dir: temp.path().join("cache/runtime"),
         };
         let profile = Profile {
             name: "Anthropic compatible".into(),
@@ -2227,5 +2232,54 @@ mod tests {
         assert!(!upstream_request.contains(&registry.local_token));
         server.abort();
         upstream_task.join().unwrap();
+    }
+    #[test]
+    fn stale_registry_cannot_expose_or_resolve_disabled_models() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+[profiles.one]
+name = "One"
+base_url = "https://example.invalid"
+default_model = "a"
+enabled_models = ["b"]
+"#,
+        )
+        .unwrap();
+        let target = RouteTarget {
+            config_path: path.clone(),
+            profile_id: None,
+            models: ["a", "b"]
+                .into_iter()
+                .map(|id| {
+                    (
+                        format!("one::{id}"),
+                        AggregateModelTarget {
+                            profile_id: "one".into(),
+                            model_id: id.into(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        assert_eq!(visible_route_models(&target).unwrap().len(), 2);
+        config::update(&path, |config| {
+            let profile = config.profiles.get_mut("one").unwrap();
+            profile.enabled_models.clear();
+            profile.disabled_models.push("b".into());
+            Ok(())
+        })
+        .unwrap();
+        assert!(resolve_profile(&target, Some("one::b")).is_err());
+        assert_eq!(visible_route_models(&target).unwrap(), ["one::a"]);
+        config::update(&path, |config| {
+            config.profiles.get_mut("one").unwrap().enabled = false;
+            Ok(())
+        })
+        .unwrap();
+        assert!(resolve_profile(&target, Some("one::a")).is_err());
+        assert!(visible_route_models(&target).unwrap().is_empty());
     }
 }

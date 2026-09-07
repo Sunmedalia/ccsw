@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CCSW 是 Claude Code 的多厂商、多模型终端管理器。每次启动的 Claude 进程都使用独立的 Endpoint、凭据和模型映射，因此不同终端不会互相覆盖配置。
+CCSW 是 Claude Code 的多厂商、多模型配置管理器。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
 
 它提供三个核心能力：
 
@@ -51,9 +51,9 @@ ccsw          # 打开 TUI
 首次使用时：
 
 1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和默认模型。
-2. 进入厂商详情，按 `r` 获取模型目录。
-3. 用 `Space` 启用需要的模型；禁用只暂停模型，不会删除模型。
-4. 按 `Enter` 直接启动 Claude，或按 `p` 将全部启用模型同步到 Claude `/model`。
+2. 进入厂商详情，按 `r` 获取 API 模型目录；按 `a` 从候选列表添加模型，也可以手动填写模型 ID。
+3. 用 `Space` 启用需要的已配置模型；禁用只暂停模型，不会删除模型。
+4. 按 `p` 将全部启用模型同步到 Claude `/model`，退出 CCSW 后运行 `claude`。
 
 首次运行若检测到 `~/.claude/settings.json`，CCSW 会显示脱敏导入预览。也可以手动执行：
 
@@ -64,9 +64,9 @@ ccsw import --yes
 
 ## TUI 导航
 
-界面会随终端尺寸调整。宽窗口并排显示模型与详情；窄窗口改为单面板，并让厂商信息自动换行。任何主页面按 `?` 都会打开当前场景对应的 Help：
+界面采用统一英文标签，会随终端尺寸调整。100 列及以上并排显示模型与详情；窄窗口改为单面板，并让厂商信息自动换行。最低可用尺寸为 40×12，小于该尺寸时显示调整提示，仍可按 `q` 或 `Ctrl+C` 退出。表单会滚动以保持当前字段和文本光标可见；凭据始终遮蔽显示。任何主页面按 `?` 都会打开当前场景对应的 Help：
 
-- `←/→` 或 `Tab`：切换 Home、All Enabled、Provider、Forms 分区。
+- `←/→` 或 `Tab`：切换 Home、All Models、Provider、Forms 分区。
 - `↑/↓`：滚动当前帮助内容。
 - `1`–`4`：直接打开对应分区。
 - `Esc`、`q`、`?` 或 `Enter`：关闭 Help。
@@ -75,22 +75,22 @@ ccsw import --yes
 
 ### Home · 厂商首页
 
-首页第一行是 **All Enabled**，其后是所有厂商。
+首页第一行是 **All Models**，其后是所有厂商。
 
 | 按键 | 操作 |
 | --- | --- |
-| `↑/↓`、`j/k` | 选择 All Enabled 或厂商 |
+| `↑/↓`、`j/k` | 选择 All Models 或厂商 |
 | `Enter`、鼠标单击 | 打开选中项 |
-| `Space` | 启用/禁用当前厂商，并同步 Claude `/model` |
+| `Space` | 启用/禁用当前厂商；接入后自动同步 Claude `/model` |
 | `n` / `e` / `x` | 新建 / 编辑 / 删除厂商 |
 | `r`、`t` | 测试连接并刷新模型目录 |
-| `m` / `R` / `N` | 切换启动模式 / 恢复会话 / 新建会话 |
+| `A` | 启用选中厂商中的全部已配置模型；All Models 行不执行此操作 |
 | `p` / `P` | 同步全部模型 / 打开代理管理器 |
 | `?` / `q` | 帮助 / 退出 |
 
-禁用厂商后，它的配置、模型和代理路由立即失效；其模型也会从 All Enabled 与 Claude `/model` 中移除。重新启用厂商会恢复其模型状态。
+禁用厂商后，其模型会从 All Models 中移除，代理立即拒绝该厂商的请求；接入后也会自动更新 Claude `/model`。重新启用厂商会完整保留此前的模型启用、禁用状态，包括显式禁用的默认模型。
 
-### All Enabled · 全部模型
+### All Models · 全部模型
 
 该页面聚合所有已启用厂商的已配置模型。已禁用模型仍会保留在列表中，方便再次启用。
 
@@ -98,13 +98,14 @@ ccsw import --yes
 | --- | --- |
 | `↑/↓`、`j/k` | 跨厂商选择模型 |
 | `PgUp/PgDn`、`Home/End` | 翻页或跳转首尾 |
-| `Space` | 启用/禁用模型，并实时同步 Claude `/model` |
-| `Enter` | 打开模型所属厂商 |
+| `Space` | 启用/禁用模型；接入后自动同步 Claude `/model` |
+| `Enter` | 打开已选模型所属厂商 |
+| 鼠标单击 | 第一次选中模型，再次单击已选模型时打开所属厂商 |
 | `Esc` | 返回首页 |
 
 ### Provider · 厂商与模型
 
-厂商详情页直接展示完整模型目录、搜索框和当前模型信息，不再需要额外的模型管理弹窗。
+厂商详情页展示已配置模型、搜索框和当前模型信息。API 发现结果保存在缓存中，可在添加模型表单中选择；发现模型不会自动添加或启用。
 
 | 按键 | 操作 |
 | --- | --- |
@@ -112,7 +113,6 @@ ccsw import --yes
 | `/` | 搜索模型；搜索中按 `Esc` 清空或退出搜索 |
 | `Space` | 启用/禁用模型 |
 | `d` / `1` | 设为默认模型 / 切换 `[1m]` 上下文 |
-| `Enter` / `R` / `N` | 运行选中模型 / 恢复会话 / 新建会话 |
 | `A` / `C` | 启用筛选结果 / 清空非必要启用项 |
 | `a` | 添加自定义模型，并选择是否立即启用 |
 | `x` | 删除自定义模型；网关模型不能删除 |
@@ -123,12 +123,16 @@ ccsw import --yes
 | 按键 | 操作 |
 | --- | --- |
 | `↑/↓`、`Tab/Shift+Tab` | 切换字段 |
-| `Enter` | 确认选项或进入下一字段；最后一项直接保存 |
+| `Enter` | 确认当前字段并进入下一项；最后一项直接保存 |
 | `←/→`、`Home/End` | 移动文本光标 |
 | `Backspace/Delete`、`Ctrl+U` | 删除字符 / 清空字段 |
 | `Space`、`←/→` | 切换开关或选项 |
 | `Ctrl+F`、`Ctrl+R` | 在自定义模型表单中，从厂商 API 刷新可选模型 |
 | `Ctrl+S` / `Esc` | 保存 / 取消 |
+
+模型表单中，`Tab`/`Shift+Tab` 会依次遍历字段和 API 搜索面板；窄窗口按焦点显示面板。搜索时按 `Esc` 先清空搜索，再退出搜索，最后关闭表单。`Ctrl+S` 在搜索面板中也能保存。
+
+模型刷新、代理管理和同步在后台执行，等待时仍可导航。重复刷新同一厂商会合并提示；过期请求不会覆盖新表单或已修改的厂商配置。
 
 ## 模型状态规则
 
@@ -142,27 +146,21 @@ CCSW 将“模型存在”和“模型启用”分开处理：
 
 ## Claude `/model` 同步
 
-| 操作 | 是否修改 `~/.claude/settings.json` |
-| --- | --- |
-| TUI 中启动 Claude、`ccsw run` | 否。使用子进程环境、`--model` 和临时 `--settings` |
-| 按 `p`、执行 `ccsw apply` | 是。先备份，再聚合所有已启用厂商和模型 |
-| 在 Home 切换厂商 | 是。实时移除或恢复该厂商模型 |
-| 在 All Enabled 切换模型 | 是。实时更新模型选择器 |
+CCSW 不启动 Claude，也不接管 Claude 的会话参数。同步采用“首次手动接入，之后自动更新”：
 
-Claude 原生 `/model` 中按 `Enter` 可能写入 Claude 的全局默认模型，但不会改变 CCSW 以 `--model` 启动的实例。只想修改当前会话时，在 Claude 的模型选择器中按 `s`。
+- 首次编辑只保存 CCSW 配置。按 `p` 或执行 `ccsw apply --profile <id>` 成功后，建立与当前 Claude settings 文件的接入记录。
+- 接入后，在任何页面修改厂商、模型启用状态、默认模型、角色或上下文规格，都会自动同步；连续修改会合并到最新状态。
+- 自动同步沿用上次明确选择的默认厂商，不随浏览位置变化。厂商或默认模型不可用时，选择可用项；全部禁用时清空 CCSW 管理的模型，保留接入记录。
+- 写入 Claude 前会备份 settings，并保留无关配置。同步失败时，本地修改仍然保存，按 `p` 重试；重新打开 TUI 时会检查未同步修改。
+- 如果 Claude 的 Endpoint 或 Token 已被其他工具切换，自动同步暂停，按 `p` 才重新接入。
+
+底部状态为 `Not connected`、`Pending`、`Syncing`、`Synced`、`Failed` 或 `Paused`。接入记录绑定 CCSW 配置路径和 Claude settings 路径，并在重启后保留。
+
+同步完成后，从普通终端运行 `claude`，再使用原生 `/model` 选择 CCSW 管理的模型。在 `/model` 中按 `Enter` 可能写入 Claude 的全局默认模型；只想修改当前会话时按 `s`。
 
 ## 命令行
 
 ```sh
-# 直接启动指定厂商和模型
-ccsw run --profile local --model claude-sonnet-4-6
-
-# 恢复指定会话，并向 Claude 透传参数
-ccsw run --profile local --resume SESSION_UUID -- --permission-mode plan
-
-# 启动 TUI，并向之后启动的 Claude 透传参数
-ccsw -- --permission-mode plan --add-dir ../shared
-
 # 同步全部已启用模型；local 的默认模型作为 Claude 初始默认值
 ccsw apply --profile local
 
@@ -170,8 +168,6 @@ ccsw config path
 ccsw doctor
 ccsw proxy status
 ```
-
-CCSW 自己管理 `--model`、`--resume`、`--continue`、`--session-id` 和 `--fallback-model`，不要把这些选项放在透传参数中。一个外部 `--settings` 可以透传，CCSW 会保留其内容并加入会话跟踪 Hook 与当前模型选择器。
 
 ## 配置
 
@@ -230,15 +226,16 @@ ccsw proxy install     # 安装 launchd / systemd user 开机服务
 ccsw proxy uninstall
 ```
 
-默认地址是 `127.0.0.1:17321`。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
+默认地址是 `127.0.0.1:17321`；指定过自定义监听地址后，停止并重启会保留该地址。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
 
 ## 数据与安全
 
 - 配置：`~/.config/ccsw/config.toml`
-- 会话状态：`~/.local/state/ccsw/state.json`
 - 模型缓存：`~/.cache/ccsw/models.json`
+- 代理状态与日志：`~/.local/state/ccsw/`
+- 同步接入记录：`~/.local/state/ccsw/sync-state.json`（仅包含路径、默认厂商、变更标记和本地代理认证信息，不保存上游凭据）
 
-配置包含明文上游 Token，Unix 下强制使用 `0600` 权限。Token 不会写入状态、缓存或运行日志。配置、状态和缓存使用原子替换，配置与状态写入带文件锁，因此多个 CCSW 实例可以并行运行。
+配置包含明文上游 Token，Unix 下强制使用 `0600` 权限。Token 不会写入缓存或运行日志。配置和缓存使用原子替换并带文件锁。编辑会合并其他实例对独立字段的修改；同字段冲突会要求重新打开编辑器。文件正在被其他实例写入时，TUI 会提示重试，不会一直等待文件锁。
 
 ## 开发
 
@@ -250,3 +247,5 @@ cargo build --locked --release
 ```
 
 CI 在 Ubuntu 与 macOS 上执行相同检查，并生成平台二进制。
+
+TUI 按状态、事件、页面、表单、模型规则、布局和后台任务拆分在 `src/tui/`；CLI 与 TUI 共用 `src/sync.rs` 的同步服务。回归测试包含真实事件序列、延迟本地 API、同步失败恢复、并发编辑及 120×36 到 40×12 的布局检查。
