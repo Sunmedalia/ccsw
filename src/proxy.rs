@@ -742,7 +742,10 @@ async fn shutdown_signal() {
         }
     }
     #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await.ok();
+    if tokio::signal::ctrl_c().await.is_err() {
+        // A detached Windows daemon has no console; wait for authenticated shutdown.
+        std::future::pending::<()>().await;
+    }
 }
 
 async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Response {
