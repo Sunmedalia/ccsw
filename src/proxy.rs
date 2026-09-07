@@ -414,7 +414,7 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
     let url = format!("http://{}/health", registry.listen);
     let running = reqwest::blocking::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_millis(350))
+        .timeout(Duration::from_secs(2))
         .build()?
         .get(url)
         .bearer_auth(&registry.local_token)
