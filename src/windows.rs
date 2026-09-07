@@ -54,7 +54,11 @@ $s.Save()
 
 pub fn install(executable: &Path, registry: &Path) -> Result<PathBuf> {
     let path = startup_path()?;
-    shortcut(&path, executable, registry)?;
+    shortcut(
+        &path,
+        &std::path::absolute(executable)?,
+        &std::path::absolute(registry)?,
+    )?;
     Ok(path)
 }
 
@@ -133,7 +137,12 @@ $s.Arguments
             exe.as_path(),
             "{text:?}"
         );
-        assert!(text.contains(&registry.display().to_string()));
+        let arguments = text.lines().nth(1).unwrap();
+        let saved_registry = arguments
+            .strip_prefix("internal proxy-start --registry \"")
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap();
+        assert_eq!(Path::new(saved_registry), registry.as_path(), "{text:?}");
         fs::remove_file(link).unwrap();
     }
 }
