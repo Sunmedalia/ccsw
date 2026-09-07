@@ -200,8 +200,8 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
     let config = command(&["config", "path"]).output().unwrap();
     assert!(config.status.success());
     assert_eq!(
-        String::from_utf8(config.stdout).unwrap().trim(),
-        root.join("roaming/ccsw/config.toml").display().to_string()
+        std::path::Path::new(String::from_utf8(config.stdout).unwrap().trim()),
+        root.join("roaming/ccsw/config.toml")
     );
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = socket.local_addr().unwrap().port().to_string();

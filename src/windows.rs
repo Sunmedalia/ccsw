@@ -18,9 +18,26 @@ use std::{
     process::Command,
 };
 
-pub fn background(command: &mut Command) {
+pub fn background(command: &mut Command) -> Result<()> {
+    use ::windows::Win32::{
+        Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation},
+        System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
+    };
+    // Inherited parent pipes must not survive in the daemon: otherwise callers
+    // capturing CLI output wait for the daemon to exit before seeing EOF.
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: only handle flags change; ownership stays with the standard IO.
+        unsafe {
+            if let Ok(handle) = GetStdHandle(id) {
+                if !handle.is_invalid() {
+                    SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))?;
+                }
+            }
+        }
+    }
     use std::os::windows::process::CommandExt;
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    Ok(())
 }
 
 pub fn startup_path() -> Result<PathBuf> {

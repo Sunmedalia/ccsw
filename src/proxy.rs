@@ -379,7 +379,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         command.env_remove(name);
     }
     #[cfg(windows)]
-    crate::windows::background(&mut command);
+    crate::windows::background(&mut command)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
