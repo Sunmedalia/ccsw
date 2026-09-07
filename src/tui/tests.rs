@@ -283,7 +283,7 @@ fn aggregate_editor_uses_the_target_provider_catalog() {
 
 #[test]
 fn mouse_wheel_and_click_navigate_lists() {
-    let mut app = interactive_test_app();
+    let (_temp, mut app) = persisted_app();
     let screen = Rect::new(0, 0, 120, 30);
     let areas = ui_areas(screen, app.focus, app.view_mode);
     let profiles = areas.profiles.unwrap();
