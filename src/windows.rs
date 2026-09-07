@@ -28,10 +28,10 @@ pub fn background(command: &mut Command) -> Result<()> {
     for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         // SAFETY: only handle flags change; ownership stays with the standard IO.
         unsafe {
-            if let Ok(handle) = GetStdHandle(id) {
-                if !handle.is_invalid() {
-                    SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))?;
-                }
+            if let Ok(handle) = GetStdHandle(id)
+                && !handle.is_invalid()
+            {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))?;
             }
         }
     }
