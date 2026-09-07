@@ -128,7 +128,11 @@ $s.Arguments
             .unwrap();
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
-        assert!(text.contains(&exe.display().to_string()));
+        assert_eq!(
+            Path::new(text.lines().next().unwrap().trim_start_matches('\u{feff}')),
+            exe.as_path(),
+            "{text:?}"
+        );
         assert!(text.contains(&registry.display().to_string()));
         fs::remove_file(link).unwrap();
     }
