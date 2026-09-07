@@ -244,3 +244,43 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
         String::from_utf8_lossy(&stop.stderr)
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_login_install_and_uninstall_use_isolated_startup_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let command = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+            .args(args)
+            .env("USERPROFILE", root.path())
+            .env("APPDATA", root.path().join("roaming"))
+            .env("LOCALAPPDATA", root.path().join("local"))
+            .env("CCSW_CONFIG", root.path().join("config.toml"))
+            .env("XDG_STATE_HOME", root.path().join("custom 用户 state"))
+            .output()
+            .unwrap()
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    drop(listener);
+    assert!(command(&["proxy", "port", &port]).status.success());
+    let installed = command(&["proxy", "install"]);
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let shortcut = root
+        .path()
+        .join("roaming/Microsoft/Windows/Start Menu/Programs/Startup/CCSW Proxy.lnk");
+    assert!(shortcut.exists());
+    let removed = command(&["proxy", "uninstall"]);
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(!shortcut.exists());
+    assert!(command(&["proxy", "uninstall"]).status.success());
+    assert!(!command(&["proxy", "stop"]).status.success());
+}
