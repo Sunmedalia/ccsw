@@ -2,9 +2,12 @@ mod claude_config;
 mod config;
 mod discovery;
 mod import;
+mod platform;
 mod proxy;
 mod sync;
 mod tui;
+#[cfg(windows)]
+mod windows;
 
 use std::{path::PathBuf, process::Command};
 
@@ -78,14 +81,19 @@ enum ProxyCommand {
     Status,
     /// Stop the local proxy
     Stop,
-    /// Install a launchd/systemd user service
+    /// Enable the proxy at user login
     Install,
-    /// Remove the launchd/systemd user service
+    /// Disable the proxy at user login
     Uninstall,
 }
 
 #[derive(Subcommand)]
 enum InternalCommand {
+    #[cfg(windows)]
+    ProxyStart {
+        #[arg(long)]
+        registry: PathBuf,
+    },
     ProxyServe {
         #[arg(long)]
         registry: PathBuf,
@@ -115,6 +123,17 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Import { yes }) => import_existing(&paths, yes),
+        #[cfg(windows)]
+        Some(Commands::Internal {
+            command: InternalCommand::ProxyStart { registry },
+        }) => {
+            let mut paths = paths;
+            paths.state_dir = registry
+                .parent()
+                .context("registry has no parent")?
+                .to_path_buf();
+            proxy::start(&paths, None).map(|_| ())
+        }
         Some(Commands::Internal {
             command: InternalCommand::ProxyServe { registry },
         }) => tokio::runtime::Runtime::new()?.block_on(proxy::serve(registry)),

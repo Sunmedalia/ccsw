@@ -378,6 +378,8 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     ] {
         command.env_remove(name);
     }
+    #[cfg(windows)]
+    crate::windows::background(&mut command)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -411,7 +413,8 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
     let registry = load_or_default_registry(&proxy_paths, None)?;
     let url = format!("http://{}/health", registry.listen);
     let running = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(350))
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
         .build()?
         .get(url)
         .bearer_auth(&registry.local_token)
@@ -430,9 +433,8 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
 }
 
 pub fn service_status() -> Result<ProxyServiceStatus> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
+    #[cfg(not(windows))]
+    let home = crate::platform::home()?;
     #[cfg(target_os = "macos")]
     let (manager, path) = (
         "launchd",
@@ -443,7 +445,9 @@ pub fn service_status() -> Result<ProxyServiceStatus> {
         "systemd user",
         home.join(".config/systemd/user/ccsw-proxy.service"),
     );
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    let (manager, path) = ("Windows Startup", crate::windows::startup_path()?);
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let (manager, path) = ("unsupported", home.join(".ccsw-proxy-service"));
     Ok(ProxyServiceStatus {
         installed: path.exists(),
@@ -459,6 +463,7 @@ pub fn stop(paths: &AppPaths) -> Result<()> {
         fs::remove_file(&proxy_paths.pid).ok();
         bail!("CCSW proxy is not running");
     }
+    #[cfg(unix)]
     let pid: i32 = fs::read_to_string(&proxy_paths.pid)
         .context("CCSW proxy is not running")?
         .trim()
@@ -473,6 +478,18 @@ pub fn stop(paths: &AppPaths) -> Result<()> {
                 return Err(error).context("failed to stop CCSW proxy");
             }
         }
+    }
+    #[cfg(windows)]
+    {
+        let registry = load_registry(&proxy_paths)?;
+        reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()?
+            .post(format!("http://{}/internal/shutdown", registry.listen))
+            .bearer_auth(&registry.local_token)
+            .send()?
+            .error_for_status()?;
     }
     for _ in 0..30 {
         std::thread::sleep(Duration::from_millis(50));
@@ -489,9 +506,8 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     stop(paths)?;
     let executable = std::env::current_exe()?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
+    #[cfg(not(windows))]
+    let home = crate::platform::home()?;
     #[cfg(target_os = "macos")]
     {
         let directory = home.join("Library/LaunchAgents");
@@ -546,15 +562,22 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
         }
         Ok(path)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        let path = crate::windows::install(&executable, &proxy_paths.registry)?;
+        start(paths, None)?;
+        Ok(path)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     bail!("proxy service installation is supported on macOS and Linux");
 }
 
 #[allow(clippy::needless_return)]
 pub fn uninstall() -> Result<Option<PathBuf>> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
+    #[cfg(windows)]
+    return crate::windows::uninstall();
+    #[cfg(not(windows))]
+    let home = crate::platform::home()?;
     #[cfg(target_os = "macos")]
     {
         let path = home.join("Library/LaunchAgents/com.ccsw.proxy.plist");
@@ -644,6 +667,8 @@ fn update_registry<T>(
 
 #[derive(Clone)]
 struct ServerState {
+    #[cfg(windows)]
+    shutdown: std::sync::Arc<tokio::sync::Notify>,
     registry: PathBuf,
     client: Client,
 }
@@ -675,7 +700,11 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("failed to bind {address}"))?;
+    #[cfg(windows)]
+    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let state = ServerState {
+        #[cfg(windows)]
+        shutdown: shutdown.clone(),
         registry: registry_path,
         client: Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -686,10 +715,17 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         .route("/r/{route}/v1/messages", post(messages))
         .route("/r/{route}/v1/messages/count_tokens", post(count_tokens))
         .route("/r/{route}/v1/models", get(models))
-        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(state);
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
+    #[cfg(windows)]
+    let app = app.route("/internal/shutdown", post(shutdown_request));
+    let app = app.with_state(state);
     let result = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            #[cfg(windows)]
+            tokio::select! { _ = shutdown.notified() => {}, _ = shutdown_signal() => {} }
+            #[cfg(not(windows))]
+            shutdown_signal().await;
+        })
         .await;
     fs::remove_file(&proxy_paths.pid).ok();
     result.context("proxy server failed")
@@ -706,7 +742,10 @@ async fn shutdown_signal() {
         }
     }
     #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await.ok();
+    if tokio::signal::ctrl_c().await.is_err() {
+        // A detached Windows daemon has no console; wait for authenticated shutdown.
+        std::future::pending::<()>().await;
+    }
 }
 
 async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -725,6 +764,15 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
         );
     }
     Json(json!({"name":"ccsw-proxy","status":"ok"})).into_response()
+}
+
+#[cfg(windows)]
+async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
+    let response = health(State(state.clone()), headers).await;
+    if response.status().is_success() {
+        state.shutdown.notify_one();
+    }
+    response
 }
 
 fn registry_from_path(path: &Path) -> Result<Registry> {

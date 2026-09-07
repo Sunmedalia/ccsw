@@ -50,8 +50,7 @@ pub fn settings_path() -> Result<PathBuf> {
     if let Some(directory) = env::var_os("CLAUDE_CONFIG_DIR") {
         return Ok(PathBuf::from(directory).join("settings.json"));
     }
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".claude/settings.json"))
+    Ok(crate::platform::home()?.join(".claude/settings.json"))
 }
 
 pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<ApplyResult> {
