@@ -6,6 +6,7 @@ mod platform;
 mod proxy;
 mod sync;
 mod tui;
+mod uninstall;
 #[cfg(windows)]
 mod windows;
 
@@ -32,6 +33,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Remove this user's CCSW configuration and startup entry (binary retained)
+    Uninstall {
+        /// Execute the displayed cleanup plan
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
+        /// Preview cleanup without changing files (the default)
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Diagnose Claude, configuration, and gateway connectivity
     Doctor,
     /// Persist a profile and its enabled models to Claude's global settings
@@ -103,7 +113,21 @@ enum InternalCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = AppPaths::discover()?;
+    if let Some(Commands::Uninstall { yes, .. }) = &cli.command {
+        return uninstall::run(&paths, *yes);
+    }
+    let _session = if matches!(
+        cli.command,
+        Some(Commands::Internal {
+            command: InternalCommand::ProxyServe { .. }
+        })
+    ) {
+        None
+    } else {
+        Some(uninstall::session(&paths)?)
+    };
     match cli.command {
+        Some(Commands::Uninstall { .. }) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;
             let import = if config.profiles.is_empty() {

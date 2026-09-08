@@ -11,6 +11,17 @@ permissions:
   contents: read
 
 jobs:
+  uninstall-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -f tests/docker/Dockerfile -t ccsw-uninstall-safety .
+      - name: Uninstall safety as root
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec ccsw-uninstall-safety
+      - name: Uninstall safety as ordinary user
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --user 10001:10001 ccsw-uninstall-safety
+
   security-audit:
     runs-on: ubuntu-latest
     permissions:
@@ -70,7 +81,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, security-audit]
+    needs: [build, security-audit, uninstall-safety]
     runs-on: ubuntu-latest
     permissions:
       contents: write

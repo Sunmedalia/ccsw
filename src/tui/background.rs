@@ -436,6 +436,8 @@ mod tests {
                 profile: Box::new(profile.clone()),
                 form: Some(old_instance),
                 result: Ok(vec![ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "stale-form-model".into(),
                     label: None,
                     description: None,
@@ -458,6 +460,8 @@ mod tests {
                 profile: Box::new(profile),
                 form: None,
                 result: Ok(vec![ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "wrong-endpoint-model".into(),
                     label: None,
                     description: None,

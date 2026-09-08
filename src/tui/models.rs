@@ -172,10 +172,14 @@ pub(super) fn normalize_model_catalog(models: Vec<ModelEntry>) -> Vec<ModelEntry
                 .to_owned()
         });
         let entry = normalized.entry(id.clone()).or_insert_with(|| ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id,
             label: None,
             description: None,
         });
+        entry.max_output_tokens = entry.max_output_tokens.or(model.max_output_tokens);
+        entry.context_window = entry.context_window.or(model.context_window);
         if entry.label.is_none() {
             entry.label = label;
         }

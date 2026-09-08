@@ -24,6 +24,8 @@ struct State {
 }
 #[derive(Serialize, Deserialize)]
 struct Binding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed: Option<Value>,
     config: PathBuf,
     settings: PathBuf,
     preferred: Option<String>,
@@ -98,6 +100,13 @@ fn revision(config: &Config) -> Result<u64> {
     Ok(hash.finish())
 }
 fn matches(binding: &Binding, value: &Value) -> bool {
+    if binding
+        .managed
+        .as_ref()
+        .is_some_and(|saved| !claude_config::managed_conflicts(saved, value).is_empty())
+    {
+        return false;
+    }
     binding.endpoint.as_deref() == value["env"]["ANTHROPIC_BASE_URL"].as_str()
         && binding.token.as_deref() == value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str()
         && (binding.endpoint.is_some()
@@ -113,7 +122,7 @@ pub fn inspect(paths: &AppPaths, settings: &Path) -> Result<Status> {
         .iter()
         .find(|entry| entry.config == config_path && entry.settings == settings_path)
     {
-        if !matches(binding, &value) {
+        if binding.managed.is_none() || !matches(binding, &value) {
             return Ok(Status::Paused);
         }
         if binding.endpoint.is_some() && !proxy::owns_settings(paths, &value)? {
@@ -128,7 +137,7 @@ pub fn inspect(paths: &AppPaths, settings: &Path) -> Result<Status> {
         );
     }
     Ok(if proxy::owns_settings(paths, &value)? {
-        Status::Pending
+        Status::Paused
     } else {
         Status::NotConnected
     })
@@ -158,6 +167,17 @@ pub fn apply(
         .position(|entry| entry.config == config_path && entry.settings == settings_path);
     let value = read_settings(settings)?;
     if !explicit {
+        if let Some(saved) = index.and_then(|i| state.entries[i].managed.as_ref()) {
+            let conflicts = claude_config::managed_conflicts(saved, &value);
+            if !conflicts.is_empty() {
+                bail!(
+                    "Claude managed fields changed externally: {}; press p to reconnect",
+                    conflicts.join(", ")
+                );
+            }
+        } else {
+            bail!("legacy connection has no field snapshot; press p once to establish ownership");
+        }
         let owned = if let Some(index) = index {
             matches(&state.entries[index], &value)
         } else {
@@ -217,11 +237,17 @@ pub fn apply(
             profile.default_model = active[0].id.clone();
         }
     }
+    let expected = if explicit {
+        None
+    } else {
+        index.and_then(|i| state.entries[i].managed.as_ref())
+    };
     let checkpoint = proxy::aggregate_checkpoint(paths)?;
     let result = if let Some(id) = &chosen {
-        claude_config::apply_all(settings, paths, &effective, &cache, id)
+        claude_config::apply_all(settings, paths, &effective, &cache, id, expected)
     } else {
-        proxy::clear_aggregate_models(paths).and_then(|()| claude_config::clear(settings))
+        proxy::clear_aggregate_models(paths)
+            .and_then(|()| claude_config::clear_expected(settings, expected))
     };
     let result = match result {
         Ok(result) => result,
@@ -236,6 +262,7 @@ pub fn apply(
     };
     let applied = read_settings(settings)?;
     let binding = Binding {
+        managed: Some(claude_config::managed_snapshot(&applied)),
         config: config_path,
         settings: settings_path,
         preferred: preferred
@@ -379,6 +406,30 @@ default_model = "model-z"
                 server.join().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn external_model_edit_pauses_sync_without_exposing_values() {
+        let fixture = Fixture::new();
+        apply(&fixture.paths, &fixture.settings, Some("one"), true).unwrap();
+        let mut value = fixture.value();
+        value["model"] = json!("user-selected-private-model");
+        fs::write(&fixture.settings, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            inspect(&fixture.paths, &fixture.settings).unwrap(),
+            Status::Paused
+        );
+        let error = apply(&fixture.paths, &fixture.settings, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("model"));
+        assert!(!error.contains("user-selected-private-model"));
+        assert_eq!(fixture.value(), value);
+        apply(&fixture.paths, &fixture.settings, Some("one"), true).unwrap();
+        assert_eq!(
+            inspect(&fixture.paths, &fixture.settings).unwrap(),
+            Status::Synced
+        );
     }
 
     #[test]
@@ -534,9 +585,10 @@ default_model = "model-z"
         fs::remove_file(fixture.paths.state_dir.join("sync-state.json")).unwrap();
         assert_eq!(
             inspect(&fixture.paths, &fixture.settings).unwrap(),
-            Status::Pending
+            Status::Paused
         );
-        apply(&fixture.paths, &fixture.settings, None, false).unwrap();
+        assert!(apply(&fixture.paths, &fixture.settings, None, false).is_err());
+        apply(&fixture.paths, &fixture.settings, Some("two"), true).unwrap();
         assert_eq!(
             inspect(&fixture.paths, &fixture.settings).unwrap(),
             Status::Synced

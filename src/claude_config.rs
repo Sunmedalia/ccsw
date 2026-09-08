@@ -53,7 +53,16 @@ pub fn settings_path() -> Result<PathBuf> {
     Ok(crate::platform::home()?.join(".claude/settings.json"))
 }
 
+#[cfg(test)]
 pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<ApplyResult> {
+    apply_expected(path, profile, models, None)
+}
+fn apply_expected(
+    path: &Path,
+    profile: &Profile,
+    models: &[ModelEntry],
+    expected: Option<&Value>,
+) -> Result<ApplyResult> {
     if !profile.enabled {
         anyhow::bail!("cannot apply a disabled provider to Claude");
     }
@@ -78,6 +87,7 @@ pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<Ap
     } else {
         Map::new()
     };
+    verify_expected(expected, &Value::Object(root.clone()))?;
 
     let env = root
         .entry("env")
@@ -154,7 +164,82 @@ pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<Ap
     })
 }
 
+fn verify_expected(expected: Option<&Value>, value: &Value) -> Result<()> {
+    if let Some(expected) = expected {
+        let conflicts = managed_conflicts(expected, value);
+        if !conflicts.is_empty() {
+            anyhow::bail!(
+                "Claude fields changed before write: {}; press p to reconnect",
+                conflicts.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Exact snapshot of present managed fields. Missing and explicit null differ.
+pub(crate) fn managed_snapshot(value: &Value) -> Value {
+    let mut snapshot = Map::new();
+    let mut env = Map::new();
+    for key in MANAGED_ENV_KEYS {
+        if let Some(v) = value.get("env").and_then(|e| e.get(*key)) {
+            env.insert((*key).into(), v.clone());
+        }
+    }
+    snapshot.insert("env".into(), Value::Object(env));
+    for key in ["model", "modelPicker"] {
+        if let Some(v) = value.get(key) {
+            snapshot.insert(key.into(), v.clone());
+        }
+    }
+    Value::Object(snapshot)
+}
+
+pub(crate) fn managed_conflicts(snapshot: &Value, current: &Value) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    for key in MANAGED_ENV_KEYS {
+        if snapshot["env"].get(*key) != current.get("env").and_then(|e| e.get(*key)) {
+            conflicts.push(format!("env.{key}"));
+        }
+    }
+    for key in ["model", "modelPicker"] {
+        if snapshot.get(key) != current.get(key) {
+            conflicts.push(key.into());
+        }
+    }
+    conflicts
+}
+
+/// Called only after endpoint/token ownership is established. Legacy connections
+/// without a snapshot authorize removing the connection fields, not model fields.
+pub(crate) fn remove_managed(value: &mut Value, snapshot: Option<&Value>) {
+    if let Some(env) = value.get_mut("env").and_then(Value::as_object_mut) {
+        for key in MANAGED_ENV_KEYS {
+            let removable = match snapshot {
+                Some(saved) => {
+                    saved["env"].get(*key).is_some() && saved["env"].get(*key) == env.get(*key)
+                }
+                None => matches!(*key, "ANTHROPIC_BASE_URL" | "ANTHROPIC_AUTH_TOKEN"),
+            };
+            if removable {
+                env.remove(*key);
+            }
+        }
+    }
+    if let (Some(root), Some(saved)) = (value.as_object_mut(), snapshot) {
+        for key in ["model", "modelPicker"] {
+            if saved.get(key).is_some() && saved.get(key) == root.get(key) {
+                root.remove(key);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 pub fn clear(path: &Path) -> Result<ApplyResult> {
+    clear_expected(path, None)
+}
+pub fn clear_expected(path: &Path, expected: Option<&Value>) -> Result<ApplyResult> {
     let parent = path
         .parent()
         .context("Claude settings path has no parent")?;
@@ -176,6 +261,7 @@ pub fn clear(path: &Path) -> Result<ApplyResult> {
     } else {
         Map::new()
     };
+    verify_expected(expected, &Value::Object(root.clone()))?;
     if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
         for key in MANAGED_ENV_KEYS {
             env.remove(*key);
@@ -213,6 +299,7 @@ pub fn apply_all(
     config: &Config,
     cache: &ModelCache,
     default_profile_id: &str,
+    expected: Option<&Value>,
 ) -> Result<ApplyResult> {
     let models_by_profile = config
         .profiles
@@ -231,7 +318,7 @@ pub fn apply_all(
         .collect::<BTreeMap<_, _>>();
     let (profile, models) =
         proxy::aggregate_profile(paths, config, &models_by_profile, default_profile_id)?;
-    apply(path, &profile, &models)
+    apply_expected(path, &profile, &models, expected)
 }
 
 fn model_picker_row(model: &ModelEntry) -> Value {
@@ -274,6 +361,27 @@ mod tests {
     }
 
     #[test]
+    fn detach_preserves_changes_and_distinguishes_absent_from_null() {
+        let mut value = json!({"model":"ccsw-model","modelPicker":{"options":[]},"env":{"ANTHROPIC_BASE_URL":"http://localhost","ANTHROPIC_AUTH_TOKEN":"secret","ANTHROPIC_MODEL":null,"KEEP":"yes"}});
+        let saved = managed_snapshot(&value);
+        value["model"] = json!("custom");
+        value["env"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ANTHROPIC_MODEL");
+        assert_eq!(
+            managed_conflicts(&saved, &value),
+            vec!["env.ANTHROPIC_MODEL", "model"]
+        );
+        remove_managed(&mut value, Some(&saved));
+        assert_eq!(value, json!({"model":"custom","env":{"KEEP":"yes"}}));
+        let mut legacy = json!({"model":"custom","env":{"ANTHROPIC_BASE_URL":"http://localhost","ANTHROPIC_AUTH_TOKEN":"secret","ANTHROPIC_DEFAULT_OPUS_MODEL":"keep"}});
+        remove_managed(&mut legacy, None);
+        assert_eq!(legacy["model"], "custom");
+        assert_eq!(legacy["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "keep");
+    }
+
+    #[test]
     fn apply_preserves_unrelated_settings_and_replaces_managed_route() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("settings.json");
@@ -285,6 +393,8 @@ mod tests {
         let models = ["model-a", "model-b"]
             .into_iter()
             .map(|id| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: id.into(),
                 label: None,
                 description: None,

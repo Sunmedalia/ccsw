@@ -295,6 +295,12 @@ impl App {
                         KeyCode::Char('x') => {
                             self.delete_selected_model();
                         }
+                        KeyCode::Char('e')
+                            if self.focus == Focus::Models
+                                && self.view_mode == ViewMode::Provider =>
+                        {
+                            self.edit_model()
+                        }
                         KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
                         KeyCode::Char('r') | KeyCode::Char('t') => {
                             self.refresh_models();
@@ -1224,6 +1230,8 @@ impl App {
                     let base_id = canonical_model_id(form.fields[0].value.trim());
                     if base_id.trim().is_empty() {
                         self.set_error("Model id cannot be empty");
+                    } else if let Err(error) = form.validate_tokens() {
+                        self.set_error(error.to_string());
                     } else if let Some(profile_id) = self.selected_profile_id() {
                         let model = form.to_model();
                         let saved_model = model.clone();
@@ -1237,9 +1245,11 @@ impl App {
                         {
                             let profile = &mut edited;
                             let saved_base = canonical_model_id(&saved_model.id);
-                            profile
-                                .models
-                                .retain(|entry| canonical_model_id(&entry.id) != saved_base);
+                            let old_base = form.original_model_id.as_deref().unwrap_or(&saved_base);
+                            profile.models.retain(|entry| {
+                                canonical_model_id(&entry.id) != saved_base
+                                    && canonical_model_id(&entry.id) != old_base
+                            });
                             profile.models.push(saved_model.clone());
                             for reference in std::iter::once(&mut profile.default_model)
                                 .chain(
@@ -1255,16 +1265,20 @@ impl App {
                                 )
                                 .chain(profile.fallback_models.iter_mut())
                             {
-                                if canonical_model_id(reference) == saved_base {
+                                if canonical_model_id(reference) == saved_base
+                                    || canonical_model_id(reference) == old_base
+                                {
                                     *reference = saved_model.id.clone();
                                 }
                             }
-                            profile
-                                .enabled_models
-                                .retain(|id| canonical_model_id(id) != saved_base);
-                            profile
-                                .disabled_models
-                                .retain(|id| canonical_model_id(id) != saved_base);
+                            profile.enabled_models.retain(|id| {
+                                canonical_model_id(id) != saved_base
+                                    && canonical_model_id(id) != old_base
+                            });
+                            profile.disabled_models.retain(|id| {
+                                canonical_model_id(id) != saved_base
+                                    && canonical_model_id(id) != old_base
+                            });
                             if enable_now {
                                 if !profile.required_model_ids().contains(&saved_model.id) {
                                     profile.enabled_models.push(saved_model.id.clone());

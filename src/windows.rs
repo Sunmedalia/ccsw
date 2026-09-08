@@ -129,6 +129,16 @@ pub fn install(executable: &Path, registry: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub(crate) fn startup_registry(path: &Path) -> Result<PathBuf> {
+    let (_, arguments) = read_shortcut(path)?;
+    let registry = arguments
+        .trim()
+        .strip_prefix("internal proxy-start --registry \"")
+        .and_then(|s| s.strip_suffix('"'))
+        .context("invalid CCSW startup shortcut")?;
+    Ok(PathBuf::from(registry))
+}
+
 pub fn uninstall() -> Result<Option<PathBuf>> {
     let path = startup_path()?;
     if !path.exists() {

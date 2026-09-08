@@ -94,6 +94,8 @@ fn imported_models(
     deduplicate_model_entries(ids.into_iter().map(|id| {
         let label = alias_label(env, &id);
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id,
             label,
             description: None,

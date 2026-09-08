@@ -87,6 +87,8 @@ pub fn parse_models(value: &Value) -> Result<Vec<ModelEntry>> {
             .and_then(Value::as_str)
             .map(str::to_owned);
         models.push(ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: id.to_owned(),
             label,
             description,
@@ -131,6 +133,8 @@ pub fn merged_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelE
     for model in &profile.models {
         let canonical = canonical_model_id(&model.id).to_owned();
         let entry = models.entry(canonical).or_insert_with(|| model.clone());
+        entry.max_output_tokens = model.max_output_tokens;
+        entry.context_window = model.context_window;
         if model.label.is_some() {
             entry.label.clone_from(&model.label);
         }
@@ -143,6 +147,8 @@ pub fn merged_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelE
         models
             .entry(canonical.clone())
             .or_insert_with(|| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: canonical,
                 label: None,
                 description: None,
@@ -260,6 +266,8 @@ pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<Mo
             result.push(disc.clone());
         } else {
             result.push(ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: orig_id,
                 label: None,
                 description: None,
@@ -405,6 +413,8 @@ mod tests {
         let discovered = ["model-a", "model-b", "model-c"]
             .into_iter()
             .map(|id| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -449,11 +459,15 @@ mod tests {
             disabled_models: vec![],
             models: vec![
                 ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "model-b[1m]".into(),
                     label: Some("Model B · 1M".into()),
                     description: None,
                 },
                 ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "model-c[1m]".into(),
                     label: Some("Model C · 1M".into()),
                     description: None,
@@ -463,6 +477,8 @@ mod tests {
         let discovered = ["model-a", "model-b", "model-c"]
             .into_iter()
             .map(|id| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -496,11 +512,15 @@ mod tests {
             disabled_models: vec![],
             models: vec![
                 ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "model-a[1m]".into(),
                     label: Some("Model A · 1M".into()),
                     description: None,
                 },
                 ModelEntry {
+                    max_output_tokens: None,
+                    context_window: None,
                     id: "model-b".into(),
                     label: Some("Model B".into()),
                     description: None,
@@ -510,6 +530,8 @@ mod tests {
         let discovered = ["model-a[1m]", "model-a", "model-b", "model-b[1m]"]
             .into_iter()
             .map(|id| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -543,6 +565,8 @@ mod tests {
             enabled_models: vec!["model-c".into()],
             disabled_models: vec![],
             models: vec![ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: "manual-x".into(),
                 label: Some("Manual X".into()),
                 description: None,
@@ -551,6 +575,8 @@ mod tests {
         let discovered = ["model-a", "model-b", "model-c", "model-d", "model-e"]
             .into_iter()
             .map(|id| ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: id.into(),
                 label: Some(format!("Discovered {id}")),
                 description: None,

@@ -12,6 +12,10 @@ CCSW 是 Claude Code 的多厂商、多模型配置管理器。它负责维护 E
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
+> 本文对应 main 分支。模型 Token 参数、模型表单 `Alt+1` 和完整卸载功能尚未包含在 v0.1.4 中；使用这些功能请从源码安装。
+
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+
 ## 安装
 
 ### 下载 Release
@@ -66,8 +70,9 @@ ccsw          # 打开 TUI
 
 1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和默认模型。
 2. 进入厂商详情，按 `r` 获取 API 模型目录；按 `a` 从候选列表添加模型，也可以手动填写模型 ID。
-3. 用 `Space` 启用需要的已配置模型；禁用只暂停模型，不会删除模型。
-4. 按 `p` 将全部启用模型同步到 Claude `/model`，退出 CCSW 后运行 `claude`。
+3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
+4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
+5. 在终端运行 `claude`，使用 `/model` 选择模型。退出 CCSW 不会停止代理。
 
 首次运行若检测到 `~/.claude/settings.json`，CCSW 会显示脱敏导入预览。也可以手动执行：
 
@@ -130,7 +135,8 @@ ccsw import --yes
 | `A` / `C` | 启用筛选结果 / 清空非必要启用项 |
 | `a` | 添加自定义模型，并选择是否立即启用 |
 | `x` | 删除自定义模型；网关模型不能删除 |
-| `E` / `r` / `p` / `P` | 编辑厂商 / 刷新目录 / 同步 / 代理 |
+| `e` / `E` | 编辑当前模型 / 编辑厂商 |
+| `r` / `p` / `P` | 刷新目录 / 同步 / 代理 |
 
 ### Forms · 表单
 
@@ -142,6 +148,7 @@ ccsw import --yes
 | `Backspace/Delete`、`Ctrl+U` | 删除字符 / 清空字段 |
 | `Space`、`←/→` | 切换开关或选项 |
 | `Ctrl+F`、`Ctrl+R` | 在自定义模型表单中，从厂商 API 刷新可选模型 |
+| `Alt+1` | 在模型表单任意字段或 API 搜索中切换 1M 标记 |
 | `Ctrl+S` / `Esc` | 保存 / 取消 |
 
 模型表单中，`Tab`/`Shift+Tab` 会依次遍历字段和 API 搜索面板；窄窗口按焦点显示面板。搜索时按 `Esc` 先清空搜索，再退出搜索，最后关闭表单。`Ctrl+S` 在搜索面板中也能保存。
@@ -158,6 +165,17 @@ CCSW 将“模型存在”和“模型启用”分开处理：
 - `disabled_models` 记录显式禁用项，因此重启后不会被默认模型或角色引用意外重新启用。
 - `model-a` 与 `model-a[1m]` 是同一个目录模型；`[1m]` 只表示上下文规格，导入和发现时不会生成重复项。
 
+## 模型 Token 参数
+
+在厂商页面的模型区域选中模型，按 `e` 编辑模型（`E` 编辑厂商），按 `Ctrl+S` 保存。在添加或编辑模型窗口内，按 `Alt+1` 可直接切换 `1M context`，无需移动到开关字段；普通数字 `1` 仍用于输入。Provider 模型列表内继续使用 `1` 切换。可配置以下参数：
+
+- `Max output tokens`：最大输出上限。留空不限制；填写 `8192` 时，Claude 请求 `16384` 会下调到 `8192`，请求 `4096` 保持不变；请求没有提供上限时使用此值。
+- `Context window`：上下文容量记录，用于展示和检查最大输出不超过容量。不裁剪对话，也不改变 Claude 自动压缩行为；`1M context` 仍是独立的模型标记。
+
+两个字段只接受正整数。例如模型配置可以包含 `max_output_tokens = 8192`、`context_window = 32768`。已接入的配置保存后自动同步；限制由代理在解析出实际模型后应用，覆盖 Anthropic、Chat Completions 和 Responses。若上限与请求的 thinking budget 冲突，代理报错而不会擅自更改推理参数。
+
+`1M context` 为模型 ID 添加 `[1m]` 标记，不会提升上游模型的实际容量；请按服务商支持情况启用。
+
 ## Claude `/model` 同步
 
 CCSW 不启动 Claude，也不接管 Claude 的会话参数。同步采用“首次手动接入，之后自动更新”：
@@ -166,7 +184,8 @@ CCSW 不启动 Claude，也不接管 Claude 的会话参数。同步采用“首
 - 接入后，在任何页面修改厂商、模型启用状态、默认模型、角色或上下文规格，都会自动同步；连续修改会合并到最新状态。
 - 自动同步沿用上次明确选择的默认厂商，不随浏览位置变化。厂商或默认模型不可用时，选择可用项；全部禁用时清空 CCSW 管理的模型，保留接入记录。
 - 写入 Claude 前会备份 settings，并保留无关配置。同步失败时，本地修改仍然保存，按 `p` 重试；重新打开 TUI 时会检查未同步修改。
-- 如果 Claude 的 Endpoint 或 Token 已被其他工具切换，自动同步暂停，按 `p` 才重新接入。
+- 同步记录上次写入的受管字段快照。如果地址、Token、默认模型或其他受管字段被手动修改或被其他工具修改，自动同步暂停。确认需要 CCSW 重新管理后，按 `p` 重新接入。
+- 没有快照的旧连接升级后需按 `p` 一次建立快照。
 
 底部状态为 `Not connected`、`Pending`、`Syncing`、`Synced`、`Failed` 或 `Paused`。接入记录绑定 CCSW 配置路径和 Claude settings 路径，并在重启后保留。
 
@@ -185,7 +204,7 @@ ccsw proxy status
 
 ## 配置
 
-默认配置路径为 `~/.config/ccsw/config.toml`，可以用 `CCSW_CONFIG` 或 `XDG_CONFIG_HOME` 覆盖。
+macOS / Linux 默认配置路径为 `~/.config/ccsw/config.toml`，Windows 为 `%APPDATA%\ccsw\config.toml`。支持 `CCSW_CONFIG` 或 `XDG_CONFIG_HOME` 覆盖；执行 `ccsw config path` 查看实际路径。
 
 ```toml
 version = 2
@@ -214,6 +233,9 @@ haiku = "claude-haiku-4-5"
 id = "claude-sonnet-4-6"
 label = "Sonnet 4.6"
 description = "Daily coding"
+# 可选；根据上游模型能力填写，删除这两行即不设置
+max_output_tokens = 8192
+context_window = 32768
 ```
 
 `api_format` 支持 `anthropic`、`openai-chat` 和 `openai-responses`。Endpoint 可以填写服务根地址、带 `/v1` 的地址或完整生成端点，CCSW 会规范化路径并保留查询参数。
@@ -242,6 +264,12 @@ ccsw proxy uninstall
 
 默认地址是 `127.0.0.1:17321`；指定过自定义监听地址后，停止并重启会保留该地址。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
 
+### 请求处理与停止
+
+代理使用连接 10 秒、响应头 120 秒、流式空闲 180 秒和非流式总时限 600 秒的限制。单个 SSE 事件上限 1 MiB，非流式响应上限 32 MiB；错误体最多读取 16 KiB、展示 4 KiB。流式文本按完整事件解析 UTF-8，异常断流会报告错误，不自动重试生成请求。
+
+所有平台的 Stop 都通过私有 token 认证的关闭接口执行，停止成功前等待 daemon 锁释放，不再按 PID 文件杀进程。旧版 Unix 代理需要先使用原版本的 Stop 停止。
+
 ### 修改本地代理端口 / 多系统用户
 
 root 与普通用户使用各自的配置和代理 Token，但同一台机器的监听端口是共用的。可以让 root 使用 `127.0.0.1:17321`，普通用户使用 `127.0.0.1:17322`，更多用户依次选择其他空闲端口。
@@ -265,12 +293,27 @@ ccsw apply --profile local # 换成自己的厂商 ID；启动代理并更新 Cl
 
 ## 数据与安全
 
+以下为 macOS / Linux 默认路径；Windows 路径见安装说明，XDG 环境变量可覆盖默认目录。
+
 - 配置：`~/.config/ccsw/config.toml`
 - 模型缓存：`~/.cache/ccsw/models.json`
 - 代理状态与日志：`~/.local/state/ccsw/`
-- 同步接入记录：`~/.local/state/ccsw/sync-state.json`（仅包含路径、默认厂商、变更标记和本地代理认证信息，不保存上游凭据）
+- 同步接入记录：`~/.local/state/ccsw/sync-state.json`（包含路径、默认厂商、变更标记及上次写入的受管字段快照，含本地代理认证信息，不保存上游凭据）
 
 配置包含明文上游 Token，Unix 下强制使用 `0600` 权限。Token 不会写入缓存或运行日志。配置和缓存使用原子替换并带文件锁。编辑会合并其他实例对独立字段的修改；同字段冲突会要求重新打开编辑器。文件正在被其他实例写入时，TUI 会提示重试，不会一直等待文件锁。
+
+## 卸载与配置清理
+
+```sh
+ccsw uninstall --dry-run  # 只查看清理清单，不修改文件；不带参数也是预览
+ccsw uninstall --yes      # 停止当前用户代理、禁用自启并清理已确认归属的配置
+```
+
+执行前先关闭其他 CCSW 窗口。卸载逐项清理当前路径对应的配置、缓存、代理注册表、日志、PID、同步状态和锁文件；只移除空的应用目录，不递归删除目录，也不扫描其他用户。程序文件保留，可在配置清理成功后手动删除安装位置的 `ccsw` / `ccsw.exe`。
+
+Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当 Claude 的地址和 token 仍能确认属于本 CCSW 配置时，才清理对应备份，并按同步快照逐字段移除仍与上次写入一致的受管设置；已经切换到其他服务的 Claude 设置及备份原样保留。历史同步记录中登记的设置路径也会检查。没有快照的旧连接仅清除可确认归属的地址和 Token，保留未验证的模型字段。
+
+为防止误删，卸载拒绝 HOME 外的自定义路径、符号链接、Windows reparse point、Unix 硬链接、跨用户文件、共享状态、损坏的配置和无法确认归属的自启项。此时会报错并要求先处理这些路径，不会扩大删除范围。`--yes` 不会绕过这些检查。旧版代理若不支持认证停止接口，需要先用旧版 `ccsw proxy stop` 停止。自启管理器失败或运行中的代理无法停止时保留配置；中途磁盘 I/O 失败会明确报告未完成，可修复后重试。
 
 ## 开发
 
@@ -281,6 +324,18 @@ cargo test --locked --all-targets
 cargo build --locked --release
 ```
 
-CI 在 Ubuntu、macOS 与 Windows 上执行相同检查，并生成平台二进制。
+CI 在 Pull Request、版本标签推送或手动触发时运行：在 Ubuntu、macOS 与 Windows 上执行相同检查并生成平台二进制，同时执行依赖安全审计和 Docker 安全回归。版本标签通过全部发布门禁后生成 Release；普通 main 推送不会自动运行当前工作流。
 
 TUI 按状态、事件、页面、表单、模型规则、布局和后台任务拆分在 `src/tui/`；CLI 与 TUI 共用 `src/sync.rs` 的同步服务。回归测试包含真实事件序列、延迟本地 API、同步失败恢复、并发编辑及 120×36 到 40×12 的布局检查。
+
+### Docker 安全回归
+
+```sh
+docker build -f tests/docker/Dockerfile -t ccsw-uninstall-safety .
+docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec ccsw-uninstall-safety
+docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --user 10001:10001 ccsw-uninstall-safety
+```
+
+镜像内先执行 Rustfmt、Clippy 和 Rust 测试；卸载场景在独立临时 HOME 中运行，不挂载宿主机 HOME，也不挂载 Docker socket。检查覆盖预览、完整清理、重复卸载、中文路径、文件/目录链接、损坏文件、锁竞争、自启失败、伪造 PID、其他代理存活及无关文件内容不变。Linux Docker 测试不替代 Windows/macOS 自启管理器实机验证，也不构成对恶意同权限进程并发篡改或硬件故障的绝对保证。
+
+详细覆盖范围和实测平台见 [Docker 测试记录](tests/docker/RESULTS.md)。

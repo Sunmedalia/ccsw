@@ -155,6 +155,10 @@ impl RoleModels {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -163,6 +167,17 @@ pub struct ModelEntry {
 }
 
 impl ModelEntry {
+    pub fn validate(&self) -> Result<()> {
+        if self.max_output_tokens == Some(0) || self.context_window == Some(0) {
+            bail!("token limits must be positive integers");
+        }
+        if let (Some(output), Some(context)) = (self.max_output_tokens, self.context_window)
+            && output > context
+        {
+            bail!("max output tokens cannot exceed context window");
+        }
+        Ok(())
+    }
     pub fn label(&self) -> &str {
         self.label.as_deref().unwrap_or(&self.id)
     }
@@ -198,8 +213,14 @@ pub(crate) fn deduplicate_model_entries(
                     if preferred.description.is_none() {
                         preferred.description = existing.description.take();
                     }
+                    preferred.max_output_tokens =
+                        existing.max_output_tokens.or(preferred.max_output_tokens);
+                    preferred.context_window = existing.context_window.or(preferred.context_window);
                     *existing = preferred;
                 } else {
+                    existing.max_output_tokens =
+                        existing.max_output_tokens.or(model.max_output_tokens);
+                    existing.context_window = existing.context_window.or(model.context_window);
                     if existing.label.is_none() {
                         existing.label = model.label;
                     }
@@ -223,6 +244,9 @@ impl Profile {
     }
 
     pub fn validate(&self) -> Result<()> {
+        for model in &self.models {
+            model.validate()?;
+        }
         if self.name.trim().is_empty() {
             bail!("profile name cannot be empty");
         }
@@ -564,6 +588,8 @@ mod tests {
             enabled_models: vec!["claude-sonnet".into()],
             disabled_models: vec!["claude-opus".into()],
             models: vec![ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: "claude-sonnet".into(),
                 label: Some("Sonnet".into()),
                 description: None,

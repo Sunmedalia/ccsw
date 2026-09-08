@@ -532,7 +532,7 @@ impl App {
         editor: &RouteEditor,
         profile: &Profile,
     ) {
-        frame.render_widget(panel(" Selected model ", true), area);
+        frame.render_widget(panel(" Selected model · e edit ", true), area);
         let inner = panel_inner(area);
         if inner.width == 0 || inner.height == 0 {
             return;
@@ -563,6 +563,17 @@ impl App {
             .map(|(role, _)| role);
 
         let lines = vec![
+            Line::from(format!(
+                " Output cap: {} · Context: {}",
+                model
+                    .max_output_tokens
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "unset".into()),
+                model
+                    .context_window
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "unset".into())
+            )),
             Line::from(vec![
                 Span::styled(" Model: ", Style::default().fg(MUTED)),
                 Span::styled(

@@ -170,6 +170,8 @@ impl App {
             let model = &editor.catalog[idx];
             let effective = editor.effective_id(&model.id);
             Some(ModelEntry {
+                max_output_tokens: model.max_output_tokens,
+                context_window: model.context_window,
                 id: effective,
                 label: model.label.clone(),
                 description: model.description.clone(),
@@ -337,6 +339,44 @@ impl App {
             search_active: false,
             status: "Space toggle · 1 context · d default".into(),
         })
+    }
+
+    pub(super) fn edit_model(&mut self) {
+        let Some(model) = self.selected_model() else {
+            return;
+        };
+        let enabled = self
+            .provider_editor
+            .as_ref()
+            .is_none_or(|editor| editor.is_enabled(&canonical_model_id(&model.id)));
+        self.open_add_model_modal();
+        if let Some(Modal::Model(form)) = &mut self.modal {
+            form.original_model_id = Some(canonical_model_id(&model.id));
+            form.fields[4].value = enabled.to_string();
+            for (index, value) in [
+                (0, canonical_model_id(&model.id)),
+                (1, model.label.unwrap_or_default()),
+                (2, model.description.unwrap_or_default()),
+                (3, has_1m_suffix(&model.id).to_string()),
+                (
+                    5,
+                    model
+                        .max_output_tokens
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                ),
+                (
+                    6,
+                    model
+                        .context_window
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                ),
+            ] {
+                form.fields[index].value = value;
+                form.fields[index].cursor = form.fields[index].char_count();
+            }
+        }
     }
 
     pub(super) fn open_add_model_modal(&mut self) {

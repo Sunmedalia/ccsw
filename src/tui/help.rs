@@ -35,6 +35,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
                 "Enable filtered models / clear non-essential enabled models",
             ),
             ("a / x", "Add model / delete custom model"),
+            ("e", "Edit selected model and token limits"),
             ("E / r / p / P", "Edit provider / fetch / sync / proxy"),
         ],
         HelpSection::Forms => &[
@@ -52,6 +53,10 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             (
                 "Ctrl+F / Ctrl+R",
                 "Model form: fetch available models from the provider API",
+            ),
+            (
+                "Alt+1",
+                "Model form: toggle 1M context from any field or search",
             ),
             ("Ctrl+S", "Save changes"),
             ("Esc", "Cancel; clear active model search first"),

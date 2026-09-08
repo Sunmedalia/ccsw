@@ -1,3 +1,4 @@
+mod transport;
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, OpenOptions},
@@ -7,6 +8,7 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
+use transport::*;
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -150,6 +152,8 @@ pub fn aggregate_profile(
                 },
             );
             models.push(ModelEntry {
+                max_output_tokens: None,
+                context_window: None,
                 id: exposed,
                 label: Some(format!("{} · {}", profile.name, model.label())),
                 description: Some(format!(
@@ -463,37 +467,16 @@ pub fn stop(paths: &AppPaths) -> Result<()> {
         fs::remove_file(&proxy_paths.pid).ok();
         bail!("CCSW proxy is not running");
     }
-    #[cfg(unix)]
-    let pid: i32 = fs::read_to_string(&proxy_paths.pid)
-        .context("CCSW proxy is not running")?
-        .trim()
-        .parse()
-        .context("proxy PID file is invalid")?;
-    #[cfg(unix)]
-    {
-        // SAFETY: kill is called with a PID read from CCSW's private state file.
-        if unsafe { libc::kill(pid, libc::SIGTERM) } == -1 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error).context("failed to stop CCSW proxy");
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        let registry = load_registry(&proxy_paths)?;
-        reqwest::blocking::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()?
-            .post(format!("http://{}/internal/shutdown", registry.listen))
-            .bearer_auth(&registry.local_token)
-            .send()?
-            .error_for_status()?;
-    }
+    shutdown_authenticated(paths).context("proxy does not support authenticated shutdown; stop the older daemon with its original CCSW version")?;
+    let daemon = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&proxy_paths.daemon_lock)?;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_millis(50));
-        if !status(paths)?.running {
+        if FileExt::try_lock_exclusive(&daemon).is_ok() && !status(paths)?.running {
             fs::remove_file(&proxy_paths.pid).ok();
             return Ok(());
         }
@@ -608,7 +591,7 @@ pub fn uninstall() -> Result<Option<PathBuf>> {
 }
 
 #[cfg(target_os = "macos")]
-fn xml_escape(value: &str) -> String {
+pub(crate) fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -667,7 +650,6 @@ fn update_registry<T>(
 
 #[derive(Clone)]
 struct ServerState {
-    #[cfg(windows)]
     shutdown: std::sync::Arc<tokio::sync::Notify>,
     registry: PathBuf,
     client: Client,
@@ -700,10 +682,8 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("failed to bind {address}"))?;
-    #[cfg(windows)]
     let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let state = ServerState {
-        #[cfg(windows)]
         shutdown: shutdown.clone(),
         registry: registry_path,
         client: Client::builder()
@@ -716,15 +696,11 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         .route("/r/{route}/v1/messages/count_tokens", post(count_tokens))
         .route("/r/{route}/v1/models", get(models))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
-    #[cfg(windows)]
     let app = app.route("/internal/shutdown", post(shutdown_request));
     let app = app.with_state(state);
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            #[cfg(windows)]
             tokio::select! { _ = shutdown.notified() => {}, _ = shutdown_signal() => {} }
-            #[cfg(not(windows))]
-            shutdown_signal().await;
         })
         .await;
     fs::remove_file(&proxy_paths.pid).ok();
@@ -766,7 +742,6 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
     Json(json!({"name":"ccsw-proxy","status":"ok"})).into_response()
 }
 
-#[cfg(windows)]
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
     let response = health(State(state.clone()), headers).await;
     if response.status().is_success() {
@@ -938,6 +913,10 @@ async fn messages(
     if target.profile_id.is_none() {
         body["model"] = Value::String(strip_1m(&upstream_model).to_owned());
     }
+    if let Err(error) = apply_model_limits(&profile, &upstream_model, &mut body) {
+        return anthropic_error(StatusCode::BAD_REQUEST, error);
+    }
+    let deadline = tokio::time::Instant::now() + TOTAL_TIMEOUT;
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let anthropic = profile.api_format == ApiFormat::Anthropic;
     let upstream_body = match translate_request(&body, profile.api_format) {
@@ -974,21 +953,22 @@ async fn messages(
         Credential::ApiKey { value } => request.header("api-key", value),
         Credential::None => request,
     };
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(error) => {
+    let response = match tokio::time::timeout(HEADER_TIMEOUT, request.send()).await {
+        Ok(Ok(response)) => response,
+        error => {
             return anthropic_error(
                 StatusCode::BAD_GATEWAY,
-                anyhow::anyhow!("upstream request failed: {error}"),
+                anyhow::anyhow!("upstream request failed or response headers timed out: {error:?}"),
             );
         }
     };
-    if anthropic {
-        return passthrough_response(response);
-    }
     let status = response.status();
     if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
+        let bytes = tokio::time::timeout_at(deadline, read_body(response, ERROR_LIMIT, true)).await;
+        let text = match bytes {
+            Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+            _ => "could not read upstream error within limits".into(),
+        };
         let text = truncate_utf8(&text, MAX_ERROR_BODY);
         return anthropic_error(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -996,17 +976,29 @@ async fn messages(
         );
     }
     if stream {
+        if anthropic {
+            return passthrough_response(response);
+        }
         stream_response(response, profile.api_format)
     } else {
-        let value = match response.json::<Value>().await {
-            Ok(value) => value,
-            Err(error) => {
-                return anthropic_error(
-                    StatusCode::BAD_GATEWAY,
-                    anyhow::anyhow!("upstream returned invalid JSON: {error}"),
-                );
-            }
-        };
+        let value =
+            match tokio::time::timeout_at(deadline, read_body(response, BODY_LIMIT, false)).await {
+                Ok(Ok(bytes)) => match serde_json::from_slice::<Value>(&bytes) {
+                    Ok(value) => value,
+                    Err(error) => return anthropic_error(StatusCode::BAD_GATEWAY, error.into()),
+                },
+                result => {
+                    return anthropic_error(
+                        StatusCode::BAD_GATEWAY,
+                        anyhow::anyhow!(
+                            "upstream body failed, exceeded limit or timed out: {result:?}"
+                        ),
+                    );
+                }
+            };
+        if anthropic {
+            return Json(value).into_response();
+        }
         match translate_response(&value, profile.api_format) {
             Ok(value) => Json(value).into_response(),
             Err(error) => anthropic_error(StatusCode::BAD_GATEWAY, error),
@@ -1015,16 +1007,40 @@ async fn messages(
 }
 
 fn passthrough_response(response: reqwest::Response) -> Response {
+    passthrough_with_idle(response, IDLE_TIMEOUT)
+}
+fn passthrough_with_idle(response: reqwest::Response, idle: Duration) -> Response {
     let status = response.status();
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
         .cloned()
         .unwrap_or_else(|| header::HeaderValue::from_static("application/json"));
+    let mut stream = response.bytes_stream();
+    let output = async_stream::stream! {
+        let mut decoder = Decoder::default();
+        let mut completed = false;
+        loop {
+            match tokio::time::timeout(idle, stream.next()).await {
+                Ok(Some(Ok(bytes))) => {
+                    match decoder.push(&bytes) {
+                        Ok(frames) => {
+                            completed |= frames.iter().any(|frame| serde_json::from_str::<Value>(frame).is_ok_and(|v| v["type"] == "message_stop" || v["type"] == "error"));
+                            yield Ok::<Bytes, std::io::Error>(bytes);
+                            if completed { return; }
+                        },
+                        Err(error) => { yield Err(std::io::Error::other(error.to_string())); return; }
+                    }
+                },
+                Ok(None) => { if !completed { yield Err(std::io::Error::other("upstream stream ended without completion")); } break; },
+                _ => { yield Err(std::io::Error::other("upstream stream failed or idle timeout")); break; }
+            }
+        }
+    };
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type)
-        .body(Body::from_stream(response.bytes_stream()))
+        .body(Body::from_stream(output))
         .expect("valid upstream response")
 }
 
@@ -1080,6 +1096,37 @@ fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
     };
     url.set_path(&next);
     Ok(url)
+}
+
+fn apply_model_limits(profile: &Profile, model: &str, body: &mut Value) -> Result<()> {
+    let Some(entry) = profile
+        .models
+        .iter()
+        .find(|entry| config::canonical_model_id(&entry.id) == config::canonical_model_id(model))
+    else {
+        return Ok(());
+    };
+    entry.validate()?;
+    if let Some(limit) = entry.max_output_tokens {
+        let requested = match body.get("max_tokens") {
+            Some(value) => value
+                .as_u64()
+                .filter(|n| *n > 0)
+                .context("max_tokens must be a positive integer")?,
+            None => u64::from(limit),
+        };
+        let effective = requested.min(u64::from(limit));
+        if body["thinking"]["budget_tokens"]
+            .as_u64()
+            .is_some_and(|budget| budget >= effective)
+        {
+            bail!(
+                "configured output limit conflicts with thinking budget_tokens; increase output limit or reduce the request budget"
+            );
+        }
+        body["max_tokens"] = json!(effective);
+    }
+    Ok(())
 }
 
 fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
@@ -1597,38 +1644,42 @@ struct StreamState {
 }
 
 fn stream_response(response: reqwest::Response, format: ApiFormat) -> Response {
+    stream_with_idle(response, format, IDLE_TIMEOUT)
+}
+fn stream_with_idle(response: reqwest::Response, format: ApiFormat, idle: Duration) -> Response {
     let mut upstream = response.bytes_stream();
     let output = async_stream::stream! {
-        let mut pending = String::new();
+        let mut decoder = Decoder::default();
         let mut state = StreamState::default();
-        while let Some(chunk) = upstream.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    pending.push_str(&String::from_utf8_lossy(&bytes));
-                    while let Some(index) = pending.find("\n\n").or_else(|| pending.find("\r\n\r\n")) {
-                        let separator = if pending[index..].starts_with("\r\n") { 4 } else { 2 };
-                        let frame = pending[..index].to_owned();
-                        pending.drain(..index + separator);
-                        let data = frame.lines().filter_map(|line| line.strip_prefix("data:").map(str::trim)).collect::<Vec<_>>().join("\n");
-                        if data.is_empty() { continue; }
-                        let events = if data == "[DONE]" {
-                            finalize_stream(&mut state)
-                        } else {
-                            match serde_json::from_str::<Value>(&data) {
-                                Ok(value) => translate_stream_event(&value, format, &mut state),
-                                Err(error) => vec![error_sse(&format!("invalid upstream SSE JSON: {error}"))],
-                            }
-                        };
-                        for event in events { yield Ok::<Bytes, std::convert::Infallible>(Bytes::from(event)); }
+        loop {
+            let bytes = match tokio::time::timeout(idle, upstream.next()).await {
+                Ok(Some(Ok(bytes))) => bytes,
+                Ok(None) => { yield Ok::<Bytes, std::convert::Infallible>(Bytes::from(error_sse("upstream stream ended without completion"))); return; },
+                _ => { yield Ok(Bytes::from(error_sse("upstream stream failed or idle timeout"))); return; }
+            };
+            let frames = match decoder.push(&bytes) {
+                Ok(frames) => frames,
+                Err(error) => { yield Ok(Bytes::from(error_sse(&error.to_string()))); return; }
+            };
+            for data in frames {
+                let mut completed = data == "[DONE]";
+                if !completed {
+                    let value: Value = match serde_json::from_str(&data) {
+                        Ok(value) => value,
+                        Err(error) => { yield Ok(Bytes::from(error_sse(&format!("invalid upstream SSE JSON: {error}")))); return; }
+                    };
+                    if value.get("error").is_some() || value["type"] == "response.failed" || value["type"] == "error" {
+                        yield Ok(Bytes::from(error_sse("upstream reported a stream error"))); return;
                     }
+                    completed = value["type"] == "response.completed" || value["type"] == "response.incomplete";
+                    for event in translate_stream_event(&value, format, &mut state) { yield Ok(Bytes::from(event)); }
                 }
-                Err(error) => {
-                    yield Ok(Bytes::from(error_sse(&format!("upstream stream failed: {error}"))));
+                if completed {
+                    for event in finalize_stream(&mut state) { yield Ok(Bytes::from(event)); }
                     return;
                 }
             }
         }
-        for event in finalize_stream(&mut state) { yield Ok(Bytes::from(event)); }
     };
     Response::builder()
         .status(StatusCode::OK)
@@ -1930,6 +1981,20 @@ fn truncate_utf8(value: &str, limit: usize) -> &str {
     &value[..end]
 }
 
+/// Stop only the authenticated endpoint; never trust a PID during full uninstall.
+pub fn shutdown_authenticated(paths: &AppPaths) -> Result<()> {
+    let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
+    reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()?
+        .post(format!("http://{}/internal/shutdown", registry.listen))
+        .bearer_auth(&registry.local_token)
+        .send()?
+        .error_for_status()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1940,6 +2005,159 @@ mod tests {
         sync::mpsc,
         thread,
     };
+
+    #[tokio::test]
+    async fn stalled_streams_timeout_and_passthrough_rejects_truncation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/",
+            get(|| async {
+                Body::from_stream(
+                    futures_util::stream::once(async {
+                        Ok::<_, std::io::Error>(Bytes::from_static(b": keepalive\n\n"))
+                    })
+                    .chain(futures_util::stream::pending()),
+                )
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = Client::builder().no_proxy().build().unwrap();
+        let response = client.get(format!("http://{addr}/")).send().await.unwrap();
+        let text = axum::body::to_bytes(
+            stream_with_idle(response, ApiFormat::OpenaiChat, Duration::from_millis(20))
+                .into_body(),
+            BODY_LIMIT,
+        )
+        .await
+        .unwrap();
+        assert!(String::from_utf8_lossy(&text).contains("idle timeout"));
+        let response = client.get(format!("http://{addr}/")).send().await.unwrap();
+        assert!(
+            axum::body::to_bytes(
+                passthrough_with_idle(response, Duration::from_millis(20)).into_body(),
+                BODY_LIMIT
+            )
+            .await
+            .is_err()
+        );
+        server.abort();
+        let (response, server) = mock_stream(vec![Bytes::from_static(
+            b"data: {\"type\":\"message_start\"}\n\n",
+        )])
+        .await;
+        assert!(
+            axum::body::to_bytes(passthrough_response(response).into_body(), BODY_LIMIT)
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn model_limits_clamp_all_protocols_and_validate_thinking() {
+        let profile: Profile = toml::from_str("name='Local'\nbase_url='https://example.invalid'\ndefault_model='m'\n[[models]]\nid='m'\nmax_output_tokens=8192\ncontext_window=32768\n").unwrap();
+        for format in [
+            ApiFormat::Anthropic,
+            ApiFormat::OpenaiChat,
+            ApiFormat::OpenaiResponses,
+        ] {
+            for requested in [None, Some(4096), Some(16384)] {
+                let mut request = json!({"model":"m", "messages":[{"role":"user","content":"Hi"}]});
+                if let Some(n) = requested {
+                    request["max_tokens"] = json!(n);
+                }
+                apply_model_limits(&profile, "m[1m]", &mut request).unwrap();
+                let translated = translate_request(&request, format).unwrap();
+                let key = if format == ApiFormat::OpenaiResponses {
+                    "max_output_tokens"
+                } else {
+                    "max_tokens"
+                };
+                assert_eq!(translated[key], requested.unwrap_or(8192).min(8192));
+            }
+        }
+        let mut request =
+            json!({"max_tokens":16384,"thinking":{"type":"enabled","budget_tokens":8192}});
+        assert!(apply_model_limits(&profile, "m", &mut request).is_err());
+        request = json!({"max_tokens":16384});
+        apply_model_limits(&profile, "other", &mut request).unwrap();
+        assert_eq!(request["max_tokens"], 16384);
+    }
+
+    async fn mock_stream(chunks: Vec<Bytes>) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/",
+            get(move || {
+                let chunks = chunks.clone();
+                async move {
+                    Body::from_stream(futures_util::stream::iter(
+                        chunks.into_iter().map(Ok::<_, std::io::Error>),
+                    ))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap();
+        (response, server)
+    }
+
+    #[tokio::test]
+    async fn streaming_completion_is_single_and_abrupt_eof_is_error() {
+        let frame = "data: {\"id\":\"x\",\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"中文😀\"}}]}\r\n\r\ndata: [DONE]\n\ndata: [DONE]\n\n";
+        let (response, server) = mock_stream(
+            frame
+                .as_bytes()
+                .iter()
+                .map(|b| Bytes::copy_from_slice(&[*b]))
+                .collect(),
+        )
+        .await;
+        let result = stream_response(response, ApiFormat::OpenaiChat);
+        let body = axum::body::to_bytes(result.into_body(), BODY_LIMIT)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("中文😀"));
+        assert_eq!(body.matches("event: message_stop").count(), 1);
+        server.abort();
+        let partial = frame.split("data: [DONE]").next().unwrap();
+        let (response, server) =
+            mock_stream(vec![Bytes::copy_from_slice(partial.as_bytes())]).await;
+        let body = axum::body::to_bytes(
+            stream_response(response, ApiFormat::OpenaiChat).into_body(),
+            BODY_LIMIT,
+        )
+        .await
+        .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("ended without completion"));
+        assert!(!text.contains("event: message_stop"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn body_limits_reject_large_success_and_bound_error_reads() {
+        let (response, server) = mock_stream(vec![Bytes::from(vec![b'x'; 100])]).await;
+        assert!(read_body(response, 50, false).await.is_err());
+        server.abort();
+        let (response, server) = mock_stream(vec![Bytes::from(vec![b'x'; 100])]).await;
+        assert_eq!(read_body(response, 50, true).await.unwrap().len(), 50);
+        server.abort();
+    }
 
     #[test]
     fn aggregate_model_resolution_falls_back_to_the_configured_context_variant() {

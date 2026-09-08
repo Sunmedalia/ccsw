@@ -465,6 +465,8 @@ fn route_editor_searches_toggles_and_changes_default() {
     let models = ["alpha", "beta", "gamma"]
         .into_iter()
         .map(|id| ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: id.into(),
             label: Some(id.to_uppercase()),
             description: None,
@@ -698,16 +700,22 @@ fn form_enter_navigates_and_submits() {
 fn route_editor_batch_enable_and_disable() {
     let catalog = vec![
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "default-m".into(),
             label: None,
             description: None,
         },
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "m-1".into(),
             label: None,
             description: None,
         },
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "m-2".into(),
             label: None,
             description: None,
@@ -1002,6 +1010,8 @@ fn model_can_be_disabled_and_enabled_freely() {
 
     // Single model profile toggle test (like flatkey)
     let single_catalog = vec![ModelEntry {
+        max_output_tokens: None,
+        context_window: None,
         id: "only-model".into(),
         label: None,
         description: None,
@@ -1083,11 +1093,15 @@ fn narrow_layout_uses_one_provider_panel_and_wraps_profile_cards() {
 fn model_form_api_model_picker_populates_fields() {
     let api_models = vec![
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "qwen-max-latest".into(),
             label: Some("Qwen Max Latest".into()),
             description: Some("Alibaba Cloud flagship model".into()),
         },
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "deepseek-v4-flash[1m]".into(),
             label: Some("DeepSeek V4 Flash".into()),
             description: Some("Fast reasoning model".into()),
@@ -1119,6 +1133,8 @@ fn model_form_api_model_picker_populates_fields() {
 fn model_form_search_and_scrolling() {
     let api_models = (0..20)
         .map(|i| ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: format!("model-{i:02}"),
             label: Some(format!("Model {i}")),
             description: None,
@@ -1160,6 +1176,8 @@ fn provider_catalog_only_shows_added_models_not_unselected_gateway_models() {
     // Insert cached discovered models from remote router (e.g. 10 models)
     let discovered = (0..10)
         .map(|i| ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: format!("gateway-model-{i}"),
             label: Some(format!("Gateway Model {i}")),
             description: None,
@@ -1182,6 +1200,8 @@ fn provider_catalog_only_shows_added_models_not_unselected_gateway_models() {
 
 fn interactive_test_app() -> App {
     let model = |id: &str| ModelEntry {
+        max_output_tokens: None,
+        context_window: None,
         id: id.into(),
         label: None,
         description: None,
@@ -1248,7 +1268,7 @@ fn model_modal_keyboard_sequence_keeps_input_until_explicit_close() {
     let (_temp, mut app) = persisted_app();
     app.enter_provider_view();
     app.open_add_model_modal();
-    for _ in 0..5 {
+    for _ in 0..7 {
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
     }
@@ -1394,11 +1414,15 @@ fn model_edit_merges_external_connection_change_without_resurrecting_deletion() 
 fn api_selection_clears_previous_context_and_description() {
     let mut form = ModelForm::with_api_models(vec![
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "a[1m]".into(),
             label: None,
             description: Some("Old description".into()),
         },
         ModelEntry {
+            max_output_tokens: None,
+            context_window: None,
             id: "b".into(),
             label: None,
             description: None,
@@ -1583,4 +1607,86 @@ fn proxy_port_editor_supports_keyboard_mouse_and_validation() {
         app.proxy_status.as_ref().unwrap().listen,
         format!("127.0.0.1:{port}")
     );
+}
+
+#[test]
+fn model_token_form_validates_and_round_trips() {
+    let mut form = ModelForm::new();
+    form.fields[0].value = "m".into();
+    for invalid in ["0", "-1", "1.5", "4294967296", "no"] {
+        form.fields[5].value = invalid.into();
+        assert!(form.validate_tokens().is_err());
+    }
+    form.fields[5].value = "8192".into();
+    form.fields[6].value = "4096".into();
+    assert!(form.validate_tokens().is_err());
+    form.fields[6].value = "32768".into();
+    form.validate_tokens().unwrap();
+    let model = form.to_model();
+    let roundtrip: ModelEntry = toml::from_str(&toml::to_string(&model).unwrap()).unwrap();
+    assert_eq!(roundtrip.max_output_tokens, Some(8192));
+    assert_eq!(roundtrip.context_window, Some(32768));
+}
+
+#[test]
+fn editing_tokens_keeps_disabled_model_disabled() {
+    let (_temp, mut app) = persisted_app();
+    app.enter_provider_view();
+    let id = app.selected_model().unwrap().id;
+    if let Some(editor) = &mut app.provider_editor {
+        editor.disabled.insert(canonical_model_id(&id));
+    }
+    app.edit_model();
+    let Some(Modal::Model(form)) = &mut app.modal else {
+        panic!("model editor missing");
+    };
+    assert!(!form.enable_now());
+    form.fields[5].value = "8192".into();
+    form.fields[6].value = "32768".into();
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    let selected = app.selected_profile().unwrap();
+    let model = selected
+        .models
+        .iter()
+        .find(|m| canonical_model_id(&m.id) == canonical_model_id(&id))
+        .unwrap();
+    assert_eq!(model.max_output_tokens, Some(8192));
+    assert!(
+        selected
+            .disabled_models
+            .iter()
+            .any(|m| canonical_model_id(m) == canonical_model_id(&id))
+    );
+}
+
+#[test]
+fn model_form_1m_shortcut_preserves_input_and_focus() {
+    let mut form = ModelForm::new();
+    form.fields[0].value = "model".into();
+    form.fields[0].cursor = 5;
+    for selected in 0..form.fields.len() {
+        form.selected = selected;
+        let before = form.fields[selected].value.clone();
+        form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT), 5);
+        assert_eq!(form.to_model().id, "model[1m]");
+        assert_eq!(form.selected, selected);
+        assert!(!form.focus_api_search);
+        form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT), 5);
+        assert_eq!(form.to_model().id, "model");
+        assert_eq!(form.fields[selected].value, before);
+    }
+    form.selected = 0;
+    form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE), 5);
+    assert_eq!(form.to_model().id, "model1");
+    form.focus_api_search = true;
+    form.api_query = "search".into();
+    form.api_query_cursor = 6;
+    form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT), 5);
+    assert!(form.focus_api_search);
+    assert_eq!(form.api_query, "search");
+    assert_eq!(form.api_query_cursor, 6);
+    assert_eq!(form.to_model().id, "model1[1m]");
+    form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE), 5);
+    assert_eq!(form.api_query, "search1");
 }

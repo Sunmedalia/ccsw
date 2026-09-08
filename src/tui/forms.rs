@@ -281,6 +281,10 @@ impl ProfileForm {
 
 impl ModelForm {
     pub(super) fn handle_key(&mut self, key: KeyEvent, visible: usize) -> FormOutcome {
+        if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('1') {
+            toggle_form_field(&mut self.fields[3]);
+            return FormOutcome::Stay;
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             return FormOutcome::Submit;
         }
@@ -359,13 +363,16 @@ impl ModelForm {
                 field("Model ID", ""),
                 field("Label", ""),
                 field("Description", ""),
-                toggle_field("1M context", false),
+                toggle_field("1M context (Alt+1)", false),
                 toggle_field("Enable now", true),
+                field("Max output tokens", ""),
+                field("Context window", ""),
             ],
             selected: 0,
             api_models,
             instance: uuid::Uuid::new_v4(),
             original_profile: None,
+            original_model_id: None,
             api_query: String::new(),
             api_query_cursor: 0,
             api_scroll: 0,
@@ -439,6 +446,23 @@ impl ModelForm {
         let model = self.filtered_api_models().get(index).copied().cloned();
         if let Some(model) = model {
             let base_id = canonical_model_id(&model.id);
+            if canonical_model_id(&self.fields[0].value) != base_id {
+                let saved = self.original_profile.as_ref().and_then(|p| {
+                    p.models
+                        .iter()
+                        .find(|m| canonical_model_id(&m.id) == base_id)
+                });
+                self.fields[5].value = saved
+                    .and_then(|m| m.max_output_tokens)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default();
+                self.fields[6].value = saved
+                    .and_then(|m| m.context_window)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default();
+                self.fields[5].cursor = 0;
+                self.fields[6].cursor = 0;
+            }
             self.fields[0].value = base_id.clone();
             self.fields[0].cursor = self.fields[0].char_count();
             if let Some(label) = &model.label {
@@ -453,6 +477,28 @@ impl ModelForm {
             self.fields[3].value = has_1m_suffix(&model.id).to_string();
             self.api_status = format!("Selected API model: {base_id}");
         }
+    }
+
+    pub(super) fn validate_tokens(&self) -> Result<()> {
+        let id = canonical_model_id(self.fields[0].value.trim());
+        if self
+            .original_model_id
+            .as_ref()
+            .is_some_and(|old| *old != id)
+            && self
+                .original_profile
+                .as_ref()
+                .is_some_and(|p| p.models.iter().any(|m| canonical_model_id(&m.id) == id))
+        {
+            anyhow::bail!("another model already uses this ID");
+        }
+        for i in [5, 6] {
+            let value = self.fields[i].value.trim();
+            if !value.is_empty() && value.parse::<u32>().ok().is_none_or(|n| n == 0) {
+                anyhow::bail!("{} must be a positive integer", self.fields[i].label);
+            }
+        }
+        self.to_model().validate()
     }
 
     pub(super) fn to_model(&self) -> ModelEntry {
@@ -470,6 +516,8 @@ impl ModelForm {
             }
         });
         ModelEntry {
+            max_output_tokens: self.fields[5].value.trim().parse().ok(),
+            context_window: self.fields[6].value.trim().parse().ok(),
             id: if one_m && !base_id.is_empty() {
                 format!("{base_id}[1m]")
             } else {
@@ -867,7 +915,9 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
     frame.render_widget(Clear, area);
     frame.render_widget(
         panel(
-            if area.width < 60 {
+            if form.original_model_id.is_some() {
+                " Edit model · Ctrl+S save "
+            } else if area.width < 60 {
                 " Add model · Tab: fields / API "
             } else {
                 " Add model · enter an ID or choose an API model "
@@ -885,7 +935,10 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
     );
     let (form_area, api_area) = model_form_areas(content_area, form.focus_api_search);
 
-    frame.render_widget(panel(" Model details ", !form.focus_api_search), form_area);
+    frame.render_widget(
+        panel(" Model · Alt+1: 1M ", !form.focus_api_search),
+        form_area,
+    );
     draw_fields(
         frame,
         panel_inner(form_area),
