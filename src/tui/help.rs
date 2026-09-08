@@ -6,7 +6,8 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("↑↓ / j k", "Select All Models or a provider"),
             ("Enter / Click", "Open selection"),
             ("Space", "Toggle provider; auto-sync after connection"),
-            ("n / e / x", "New / edit / delete provider"),
+            ("n / x", "New / delete provider"),
+            ("e", "Edit selected provider"),
             ("r / t", "Test connection and fetch model catalog"),
             ("A", "Enable all models in the selected provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
@@ -35,8 +36,9 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
                 "Enable filtered models / clear non-essential enabled models",
             ),
             ("a / x", "Add model / delete custom model"),
-            ("e", "Edit selected model and token limits"),
-            ("E / r / p / P", "Edit provider / fetch / sync / proxy"),
+            ("e", "Edit selected model from either panel"),
+            ("E (Shift+e)", "Edit provider configuration"),
+            ("r / p / P", "Fetch models / sync / proxy"),
         ],
         HelpSection::Forms => &[
             (

@@ -295,13 +295,8 @@ impl App {
                         KeyCode::Char('x') => {
                             self.delete_selected_model();
                         }
-                        KeyCode::Char('e')
-                            if self.focus == Focus::Models
-                                && self.view_mode == ViewMode::Provider =>
-                        {
-                            self.edit_model()
-                        }
-                        KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
+                        KeyCode::Char('e') => self.edit_model(),
+                        KeyCode::Char('E') => self.edit_profile(),
                         KeyCode::Char('r') | KeyCode::Char('t') => {
                             self.refresh_models();
                             self.init_provider_editor();

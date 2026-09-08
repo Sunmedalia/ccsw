@@ -1629,6 +1629,30 @@ fn model_token_form_validates_and_round_trips() {
 }
 
 #[test]
+fn edit_shortcut_targets_the_current_page_regardless_of_panel_focus() {
+    let (_temp, mut app) = persisted_app();
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Profile(_))));
+    app.modal = None;
+    app.enter_provider_view();
+
+    for focus in [Focus::Models, Focus::Details] {
+        app.focus = focus;
+        let id = canonical_model_id(&app.selected_model().unwrap().id);
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(&app.modal, Some(Modal::Model(form))
+            if form.original_model_id.as_deref() == Some(id.as_str())));
+        app.modal = None;
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT))
+            .unwrap();
+        assert!(matches!(app.modal, Some(Modal::Profile(_))));
+        app.modal = None;
+    }
+}
+
+#[test]
 fn editing_tokens_keeps_disabled_model_disabled() {
     let (_temp, mut app) = persisted_app();
     app.enter_provider_view();
@@ -1636,7 +1660,9 @@ fn editing_tokens_keeps_disabled_model_disabled() {
     if let Some(editor) = &mut app.provider_editor {
         editor.disabled.insert(canonical_model_id(&id));
     }
-    app.edit_model();
+    app.focus = Focus::Details;
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
     let Some(Modal::Model(form)) = &mut app.modal else {
         panic!("model editor missing");
     };
