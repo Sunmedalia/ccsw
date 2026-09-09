@@ -1,5 +1,6 @@
 mod app;
 mod background;
+mod codex;
 mod events;
 mod forms;
 mod help;
@@ -76,6 +77,7 @@ pub struct App {
     proxy_status: Option<proxy::ProxyStatus>,
     provider_editor: Option<RouteEditor>,
     background: Background,
+    codex_ui: codex::CodexUi,
     screen: Rect,
 }
 
@@ -97,6 +99,7 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         modal: None,
         proxy_status,
         provider_editor: None,
+        codex_ui: codex::CodexUi::default(),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };

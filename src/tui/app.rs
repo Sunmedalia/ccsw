@@ -535,6 +535,10 @@ impl App {
     }
 
     pub(super) fn open_help(&mut self) {
+        if self.codex_ui.enabled {
+            self.codex_ui.help = true;
+            return;
+        }
         self.modal = Some(Modal::Help(HelpModal::for_view(self.view_mode)));
     }
 
@@ -598,6 +602,10 @@ impl App {
     }
 
     pub(super) fn sync_all_to_claude(&mut self) {
+        if self.codex_ui.enabled {
+            self.apply_codex();
+            return;
+        }
         let preferred = self
             .selected_profile_id()
             .filter(|id| self.config.profiles[id].enabled);

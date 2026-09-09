@@ -25,6 +25,10 @@ tempfile = "3.14"
 tiktoken-rs = "0.7"
 tokio = { version = "1.44", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 toml = "0.8"
+toml_edit = "0.22"
+sha2 = "0.10"
+base64 = "0.22"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }
 unicode-width = "0.2"
 url = "2.5"
 uuid = { version = "1.11", features = ["v4", "serde"] }

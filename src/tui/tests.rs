@@ -25,6 +25,7 @@ fn renders_empty_state_in_narrow_terminal() {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        codex_ui: codex::CodexUi::default(),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };
@@ -1243,6 +1244,7 @@ fn interactive_test_app() -> App {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        codex_ui: codex::CodexUi::default(),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     }
@@ -1715,4 +1717,44 @@ fn model_form_1m_shortcut_preserves_input_and_focus() {
     assert_eq!(form.to_model().id, "model1[1m]");
     form.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE), 5);
     assert_eq!(form.api_query, "search1");
+}
+
+#[test]
+fn codex_navigation_preserves_provider_editing_and_has_scrollable_help() {
+    let (_temp, mut app) = persisted_app();
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_ui.enabled);
+    app.enter_provider_view();
+    app.focus = Focus::Details;
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Model(_))));
+    app.modal = None;
+    app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_ui.accounts);
+    for (width, height) in [(40, 12), (60, 18), (120, 36)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(text.contains("Codex Accounts"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+    }
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.codex_ui.enabled);
 }

@@ -14,6 +14,10 @@ impl App {
             );
             return;
         }
+        if self.codex_ui.enabled && self.codex_ui.accounts {
+            self.draw_codex_accounts(frame, area);
+            return;
+        }
         let rows = app_rows(area);
         self.draw_route(frame, rows[0]);
         let ui = ui_areas(area, self.focus, self.view_mode);
@@ -30,6 +34,7 @@ impl App {
         if let Some(modal) = &self.modal {
             self.draw_modal(frame, modal);
         }
+        self.draw_codex_overlay(frame, area);
     }
 
     pub(super) fn draw_route(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -41,56 +46,66 @@ impl App {
             .selected_model()
             .map(|model| model.label().to_owned())
             .unwrap_or_else(|| "no model".into());
-        let line = match self.view_mode {
-            ViewMode::Home => Line::from(vec![
-                Span::styled(
-                    " CCSW ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  Providers", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    format!("  ·  {} providers", self.config.profiles.len()),
-                    Style::default().fg(MUTED),
-                ),
-            ]),
-            ViewMode::Provider => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  {profile}  "),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("→", Style::default().fg(ROUTE)),
-                Span::styled(
-                    format!("  {model}  "),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            ViewMode::AllEnabled => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "  All Models",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  ·  {} models", self.all_enabled_model_count()),
-                    Style::default().fg(CONNECTED),
-                ),
-            ]),
+        let line = if self.codex_ui.enabled {
+            Line::from(vec![
+                Span::styled(" CCSW · Codex API ", Style::default().fg(ROUTE)),
+                Span::raw("F2 Claude · F3 Accounts · p Apply"),
+            ])
+        } else {
+            match self.view_mode {
+                ViewMode::Home => Line::from(vec![
+                    Span::styled(
+                        " CCSW ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ROUTE)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "  Providers · F2 Codex",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  ·  {} providers", self.config.profiles.len()),
+                        Style::default().fg(MUTED),
+                    ),
+                ]),
+                ViewMode::Provider => Line::from(vec![
+                    Span::styled(
+                        " ‹ Back (Esc) ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ROUTE)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {profile}  "),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("→", Style::default().fg(ROUTE)),
+                    Span::styled(
+                        format!("  {model}  "),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                ViewMode::AllEnabled => Line::from(vec![
+                    Span::styled(
+                        " ‹ Back (Esc) ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ROUTE)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "  All Models",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  ·  {} models", self.all_enabled_model_count()),
+                        Style::default().fg(CONNECTED),
+                    ),
+                ]),
+            }
         };
         frame.render_widget(
             Paragraph::new(line)
@@ -831,7 +846,14 @@ impl App {
         };
         let footer = Line::from(vec![
             Span::styled(
-                format!(" {} · ", self.background.status.label()),
+                format!(
+                    " {} · ",
+                    if self.codex_ui.enabled {
+                        "Codex · restart after apply"
+                    } else {
+                        self.background.status.label()
+                    }
+                ),
                 Style::default().fg(sync_color),
             ),
             Span::styled(
@@ -858,6 +880,16 @@ impl App {
         compact: bool,
         tiny: bool,
     ) -> (String, Style) {
+        if self.codex_ui.enabled && control == FooterControl::Sync {
+            return (
+                if tiny {
+                    "Apply".into()
+                } else {
+                    "Apply Codex".into()
+                },
+                Style::default().fg(Color::Black).bg(ROUTE),
+            );
+        }
         let selected = match control {
             FooterControl::Models => self.focus == Focus::Models,
             FooterControl::Details => self.focus == Focus::Details,

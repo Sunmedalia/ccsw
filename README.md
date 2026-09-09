@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CCSW 是 Claude Code 的多厂商、多模型配置管理器。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
+CCSW 是 Claude Code 与 Codex 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
 
 它提供三个核心能力：
 
@@ -14,7 +14,7 @@ CCSW 是 Claude Code 的多厂商、多模型配置管理器。它负责维护 E
 
 > 本文对应 main 分支。模型 Token 参数、模型表单 `Alt+1` 和完整卸载功能尚未包含在 v0.1.4 中；使用这些功能请从源码安装。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
@@ -155,6 +155,73 @@ ccsw import --yes
 模型表单中，`Tab`/`Shift+Tab` 会依次遍历字段和 API 搜索面板；窄窗口按焦点显示面板。搜索时按 `Esc` 先清空搜索，再退出搜索，最后关闭表单。`Ctrl+S` 在搜索面板中也能保存。
 
 模型刷新、代理管理和同步在后台执行，等待时仍可导航。重复刷新同一厂商会合并提示；过期请求不会覆盖新表单或已修改的厂商配置。
+
+## Codex 配置与账号
+
+> 此功能属于源码版本，尚未包含在 v0.1.4 中。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
+
+在 TUI 中按 `F2` 切换 Claude / Codex，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
+
+### Codex API
+
+1. 在 Codex 的 API Providers 页面添加或选择厂商。
+2. 进入厂商页面选中模型；`e` 编辑模型、`E` 编辑厂商，`g` 设置推理强度。
+3. 按 `p` 应用。CCSW 启动本地代理，并将 `model`、专属 `model_providers.ccsw` 等字段写入 Codex 配置。
+4. 重启 Codex CLI / ChatGPT App，打开新会话确认模型和请求地址。已有会话不会迁移到新模型。
+
+支持 OpenAI Responses、Chat Completions 和 Anthropic 厂商。Responses 上游直接转发；另外两种格式转换文本、图片（取决于上游能力）、函数工具、命名空间工具、自定义编辑工具与流式输出。无法转换的内容返回明确错误，包括跨协议的加密推理历史、`previous_response_id` 和托管工具；转换型厂商默认关闭 Codex 托管网页搜索。远程 `/responses/compact` 只转发给 Responses 上游，其他上游需客户端本地压缩。
+
+模型 ID 写入时移除 Claude 专用 `[1m]` 后缀。`Max output tokens` 在代理侧限制实际输出，`Context window` 写入 Codex 上下文设置，并将自动压缩阈值设为容量的 90%。推理强度仍需所选上游模型支持。
+
+```sh
+ccsw codex apply --profile my-provider --model my-model --reasoning high
+ccsw codex status
+ccsw codex disconnect
+```
+
+### Codex 订阅账号
+
+| 按键 | 操作 |
+| --- | --- |
+| `n` / `N` | 浏览器登录 / 设备码登录，完成后保存账号 |
+| `i` / `I` | 导入本机当前登录 / 指定 `auth.json` 路径 |
+| `↑↓`、`j/k` | 选择账号 |
+| `e` | 重命名账号 |
+| `p`、`Enter` | 切换到选中账号 |
+| `r` | 刷新所选账号的套餐与额度 |
+| `x` | 删除保存的账号；需先切换或断开当前使用账号 |
+| `s` | 检查磁盘配置与登录冲突 |
+| `D` | 断开接管并恢复之前的受管配置 |
+| `?` | 帮助；`↑↓`、`PgUp/PgDn` 滚动 |
+| `Esc` | 取消登录或返回 API 页面 |
+
+新增账号在隔离目录中完成登录，不会自动切换当前账号。同一用户的不同工作区分别保存；重复导入相同身份会更新已有记录。重新登录失效账号时再次使用 `n`，完成相同身份登录即可更新凭据。
+
+切换前保存当前账号最新凭据，再写入目标账号。允许客户端运行时切换，但需要自行退出并重启 CLI / ChatGPT App；旧进程可能继续使用原账号或回写登录状态，`s` / `ccsw codex status` 会报告身份冲突。此时重启客户端后重新应用。App 可能共用整个 ChatGPT 登录身份，因此切换可能影响 App 主界面的账号。
+
+额度通过已安装 Codex 的 App Server 查询，展示其返回的套餐、各额度窗口使用比例及重置时间。失败时保留旧数据并标记过期；缺失信息显示未知。只查询选中的账号，不自动轮换账号，也不办理订阅购买、续费或取消。
+
+```sh
+ccsw codex accounts login --name personal
+ccsw codex accounts login --name work --device
+ccsw codex accounts import --name existing
+ccsw codex accounts import --name backup --file /absolute/path/auth.json
+ccsw codex accounts list
+ccsw codex accounts use <account-id>
+ccsw codex accounts refresh <account-id>
+ccsw codex accounts rename <account-id> new-name
+ccsw codex accounts remove <account-id>
+```
+
+### Codex 文件与恢复
+
+- Codex 目标目录遵循 `CODEX_HOME`，默认 `~/.codex`。登录与额度查询调用 `codex`，可用 `CCSW_CODEX_BIN` 指定二进制路径。
+- 保存的账号元数据位于 CCSW 配置；凭据副本位于 CCSW 状态目录的 `codex-accounts/<id>/auth.json`。Unix 下目录为 `0700`、文件为 `0600`。这些文件包含登录凭据，不应提交或分享。
+- 当前 Codex 登录遵循其 `cli_auth_credentials_store`：支持文件、系统凭据库及 `auto`。`ephemeral` 登录不能持久化切换。系统凭据库访问失败会报告错误。
+- 保留 Codex 配置注释、MCP、权限、插件及其他非受管字段。项目配置、启动参数和认证环境变量仍可能覆盖用户级设置。
+- 写入使用锁、原子替换、受管字段比较和事务日志。中断后执行 `ccsw codex recover`；外部修改冲突不会静默覆盖。
+- `ccsw codex disconnect` 恢复仍属于 CCSW 的配置字段，保留外部编辑。卸载会预览并清理登记过的账号文件，恢复受管 Codex 配置，保留聊天记录。
+- 首次保存后 CCSW 配置升级到版本 3；旧版本不识别该版本，升级前可自行保留配置备份。
 
 ## 模型状态规则
 
@@ -328,6 +395,17 @@ cargo build --locked --release
 ```
 
 CI 在 Pull Request、版本标签推送或手动触发时运行：在 Ubuntu、macOS 与 Windows 上执行相同检查并生成平台二进制，同时执行依赖安全审计和 Docker 安全回归。版本标签通过全部发布门禁后生成 Release；普通 main 推送不会自动运行当前工作流。
+
+Codex 的自动测试使用隔离 HOME、模拟登录凭据和本地上游，不读取真实账号。可另行安装 Codex CLI 后运行真实进程冒烟测试（无 API 调用费用）：
+
+```sh
+cargo build --locked
+SMOKE_FORMAT=openai-responses python3 tests/fixtures/codex_cli_smoke.py
+SMOKE_FORMAT=anthropic python3 tests/fixtures/codex_cli_smoke.py
+SMOKE_FORMAT=openai-chat python3 tests/fixtures/codex_cli_smoke.py
+```
+
+该脚本通过本地模拟上游驱动 Codex 执行固定的临时文件读取、修改与验证命令。已在 Codex CLI `0.153.4` 验证三种路径；ChatGPT App `26.901.41600` 内置后端已验证可读取生成的配置，App UI 登录切换与真实订阅额度仍需实际账号验收。
 
 TUI 按状态、事件、页面、表单、模型规则、布局和后台任务拆分在 `src/tui/`；CLI 与 TUI 共用 `src/sync.rs` 的同步服务。回归测试包含真实事件序列、延迟本地 API、同步失败恢复、并发编辑及 120×36 到 40×12 的布局检查。
 

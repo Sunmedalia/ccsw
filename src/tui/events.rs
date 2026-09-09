@@ -7,6 +7,7 @@ impl App {
         let mut redraw = true;
         loop {
             redraw |= self.poll_background();
+            redraw |= self.poll_codex();
             if redraw {
                 terminal.draw(|frame| self.draw(frame))?;
                 redraw = false;
@@ -15,6 +16,7 @@ impl App {
                 if !self.background.sync_running
                     && !self.background.proxy_running
                     && self.background.queued_sync.is_none()
+                    && !self.codex_ui.busy
                 {
                     return Ok(());
                 }
@@ -68,7 +70,15 @@ impl App {
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.codex_ui
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(true);
+        }
+        if self.modal.is_none()
+            && let Some(quit) = self.handle_codex_key(key)?
+        {
+            return Ok(quit);
         }
         if self.modal.is_some() {
             self.handle_modal(key)?;
@@ -312,6 +322,9 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<MouseAction> {
+        if self.codex_mouse(mouse, area)? {
+            return Ok(MouseAction::None);
+        }
         let before = self.config.clone();
         let result = self.handle_mouse_inner(mouse, area);
         if before != self.config {

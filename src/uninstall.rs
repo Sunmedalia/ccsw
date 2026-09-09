@@ -21,6 +21,9 @@ const STATE_FILES: &[&str] = &[
     "sync-state.json",
     "sync-state.lock",
     "session.lock",
+    "codex.lock",
+    "codex-binding.json",
+    "codex-transaction.json",
 ];
 
 /// Reject links/reparse points and anything outside the chosen user's home.
@@ -149,6 +152,8 @@ struct Settings {
     replacement: Option<Value>,
 }
 struct Plan {
+    codex: Option<crate::codex::DetachPlan>,
+    account_dirs: Vec<PathBuf>,
     files: Vec<Snapshot>,
     settings: Vec<Settings>,
     service: Option<Snapshot>,
@@ -173,6 +178,32 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
     for name in STATE_FILES {
         names.insert(paths.state_dir.join(name));
     }
+    let mut account_dirs = Vec::new();
+    if paths.config.exists() {
+        for id in crate::config::load(&paths.config)?.codex.accounts.keys() {
+            if id.len() != 32 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+                bail!("Invalid Codex account ID");
+            }
+            let dir = checked(&paths.state_dir.join("codex-accounts").join(id))?;
+            for name in ["auth.json", "config.toml"] {
+                names.insert(dir.join(name));
+            }
+            account_dirs.push(dir);
+        }
+    }
+    if paths.state_dir.join("codex-binding.json").exists() {
+        checked(&paths.state_dir.join("codex-binding.json"))?;
+        let binding: Value =
+            serde_json::from_slice(&fs::read(paths.state_dir.join("codex-binding.json"))?)?;
+        let home = checked(Path::new(
+            binding["home"]
+                .as_str()
+                .context("Invalid Codex home binding")?,
+        ))?;
+        checked(&home.join("config.toml"))?;
+        checked(&home.join("auth.json"))?;
+    }
+    let codex = crate::codex::prepare_detach(&paths)?;
     let mut files = Vec::new();
     for name in names {
         if let Some(file) = Snapshot::read(&name)? {
@@ -336,6 +367,8 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         }
     }
     Ok(Plan {
+        codex,
+        account_dirs,
         files,
         settings,
         service,
@@ -386,6 +419,12 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     for file in &plan.files {
         println!("Remove file: {}", file.path.display());
     }
+    if let Some(codex) = &plan.codex {
+        println!(
+            "Detach Codex settings and preserve external edits: {}",
+            codex.home.display()
+        );
+    }
     for settings in &plan.settings {
         println!(
             "{} Claude settings: {}",
@@ -412,11 +451,15 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     let mut lock_paths = vec![
         plan.paths.state_dir.join("session.lock"),
         plan.paths.state_dir.join("sync-state.lock"),
+        plan.paths.state_dir.join("codex.lock"),
         plan.paths.config.with_extension("toml.lock"),
         plan.paths.cache.with_extension("json.lock"),
         plan.paths.state_dir.join("proxy.lifecycle.lock"),
         plan.paths.state_dir.join("proxy.json.lock"),
     ];
+    if let Some(codex) = &plan.codex {
+        lock_paths.push(codex.home.join(".ccsw.lock"));
+    }
     lock_paths.extend(
         plan.settings
             .iter()
@@ -478,6 +521,9 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
             temp.persist(&settings.original.path).map_err(|e| e.error)?;
         }
     }
+    if let Some(codex) = &plan.codex {
+        crate::codex::execute_detach(codex)?;
+    }
     // Keep operation locks through deletion. Partial I/O failures are reported;
     // remaining files can be safely processed on a later retry.
     for file in &plan.files {
@@ -505,6 +551,13 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     if let Some(service) = &plan.service {
         service.verify()?;
         fs::remove_file(&service.path)?;
+    }
+    for dir in &plan.account_dirs {
+        let _ = fs::remove_dir(checked(dir)?);
+    }
+    let account_root = plan.paths.state_dir.join("codex-accounts");
+    if account_root.exists() {
+        let _ = fs::remove_dir(checked(&account_root)?);
     }
     // Remove only explicitly known, empty app directories, never their parents.
     for dir in [

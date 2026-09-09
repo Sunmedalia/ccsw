@@ -1,3 +1,4 @@
+mod responses;
 mod transport;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -38,6 +39,8 @@ const MAX_ERROR_BODY: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RouteTarget {
+    #[serde(default)]
+    codex: bool,
     config_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile_id: Option<String>,
@@ -190,6 +193,7 @@ pub fn aggregate_profile(
             registry.routes.insert(
                 id.clone(),
                 RouteTarget {
+                    codex: false,
                     config_path: paths.config.clone(),
                     profile_id: None,
                     models: targets.clone(),
@@ -695,6 +699,8 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         .route("/r/{route}/v1/messages", post(messages))
         .route("/r/{route}/v1/messages/count_tokens", post(count_tokens))
         .route("/r/{route}/v1/models", get(models))
+        .route("/r/{route}/v1/responses", post(responses::handle))
+        .route("/r/{route}/v1/responses/compact", post(responses::compact))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
     let app = app.route("/internal/shutdown", post(shutdown_request));
     let app = app.with_state(state);
@@ -807,7 +813,7 @@ fn resolve_profile(
     if !profile.enabled {
         bail!("profile '{profile_id}' is disabled");
     }
-    if target.profile_id.is_some() && !profile.api_format.is_openai() {
+    if target.profile_id.is_some() && !target.codex && !profile.api_format.is_openai() {
         bail!("profile '{profile_id}' is not an OpenAI route");
     }
     let active = crate::discovery::active_models(&profile, &[]);
@@ -1995,6 +2001,37 @@ pub fn shutdown_authenticated(paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
+/// A dedicated route keeps Codex selection independent from Claude's aggregate binding.
+pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String)> {
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    let id = update_registry(&proxy_paths, None, |registry| {
+        if let Some((id, _)) = registry.routes.iter().find(|(_, target)| {
+            target.codex
+                && target.config_path == paths.config
+                && target.profile_id.as_deref() == Some(profile_id)
+        }) {
+            return id.clone();
+        }
+        let id = Uuid::new_v4().simple().to_string();
+        registry.routes.insert(
+            id.clone(),
+            RouteTarget {
+                codex: true,
+                config_path: paths.config.clone(),
+                profile_id: Some(profile_id.into()),
+                models: BTreeMap::new(),
+            },
+        );
+        id
+    })?;
+    start(paths, None)?;
+    let registry = load_registry(&proxy_paths)?;
+    Ok((
+        format!("http://{}/r/{id}/v1", registry.listen),
+        registry.local_token,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2192,6 +2229,7 @@ mod tests {
             registry.routes.insert(
                 "aggregate".into(),
                 RouteTarget {
+                    codex: false,
                     config_path: paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -2399,6 +2437,7 @@ mod tests {
             registry.routes.insert(
                 "route-test".into(),
                 RouteTarget {
+                    codex: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -2505,6 +2544,7 @@ mod tests {
             registry.routes.insert(
                 "aggregate-test".into(),
                 RouteTarget {
+                    codex: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -2569,6 +2609,7 @@ enabled_models = ["b"]
         )
         .unwrap();
         let target = RouteTarget {
+            codex: false,
             config_path: path.clone(),
             profile_id: None,
             models: ["a", "b"]

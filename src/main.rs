@@ -1,4 +1,5 @@
 mod claude_config;
+mod codex;
 mod config;
 mod discovery;
 mod import;
@@ -24,7 +25,7 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 #[command(
     name = "ccsw",
     version,
-    about = "Manage Claude Code providers, models, and proxy settings"
+    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -33,6 +34,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage Codex CLI and desktop API settings and subscription accounts
+    Codex {
+        #[command(subcommand)]
+        command: codex::Command,
+    },
     /// Remove this user's CCSW configuration and startup entry (binary retained)
     Uninstall {
         /// Execute the displayed cleanup plan
@@ -138,6 +144,7 @@ fn main() -> Result<()> {
             tui::run(paths, config, import)
         }
         Some(Commands::Doctor) => doctor(&paths),
+        Some(Commands::Codex { command }) => codex::run(&paths, command),
         Some(Commands::Apply { profile }) => apply_to_claude(&paths, &profile),
         Some(Commands::Proxy { command }) => proxy_command(&paths, command),
         Some(Commands::Config {

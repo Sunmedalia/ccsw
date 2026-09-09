@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use url::Url;
 
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_version")]
     pub version: u32,
+    #[serde(default)]
+    pub codex: crate::codex::Settings,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
 }
@@ -26,6 +28,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
+            codex: Default::default(),
             profiles: BTreeMap::new(),
         }
     }
@@ -362,6 +365,8 @@ pub fn load(path: &Path) -> Result<Config> {
         .unwrap_or(1);
     if version == 1 {
         migrate_v1(&mut raw)?;
+    } else if version == 2 {
+        raw["version"] = toml::Value::Integer(i64::from(CONFIG_VERSION));
     } else if version != i64::from(CONFIG_VERSION) {
         bail!(
             "unsupported config version {}; expected {}",
@@ -388,7 +393,10 @@ fn migrate_v1(raw: &mut toml::Value) -> Result<()> {
     let table = raw
         .as_table_mut()
         .context("config root must be a TOML table")?;
-    table.insert("version".into(), toml::Value::Integer(2));
+    table.insert(
+        "version".into(),
+        toml::Value::Integer(i64::from(CONFIG_VERSION)),
+    );
     if let Some(profiles) = table
         .get_mut("profiles")
         .and_then(toml::Value::as_table_mut)
@@ -701,7 +709,7 @@ value = "secret"
         )
         .unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.version, CONFIG_VERSION);
         assert_eq!(loaded.profiles["old"].api_format, ApiFormat::Anthropic);
         assert!(matches!(
             loaded.profiles["old"].credential,
