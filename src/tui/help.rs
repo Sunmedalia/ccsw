@@ -240,7 +240,12 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
 
 fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
     if section == HelpSection::Forms {
-        return help_content(section, false);
+        let mut lines = help_content(section, false);
+        lines.pop(); // The shared availability / role legend does not apply to Pi.
+        lines.push(Line::raw(
+            "Ctrl+S writes models.json; all saved models are configured.",
+        ));
+        return lines;
     }
     let mut lines = vec![
         Line::styled(
@@ -250,6 +255,7 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
         Line::raw("n / a  Add a provider / model directly to models.json"),
         Line::raw("e / E  Edit model / provider; saving updates models.json"),
         Line::raw("p  Set the selected provider and model in settings.json"),
+        Line::raw("d / 1  Set default / change the model context window"),
         Line::raw("i  Reload Pi configuration files"),
         Line::raw("r  Test connection and fetch provider models"),
         Line::raw("s  Inspect Pi configuration status"),
@@ -259,6 +265,7 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
         if (key.contains('p') && (action.contains("proxy") || action.contains("sync")))
             || key.contains("Space")
             || *key == "A / C"
+            || *key == "A"
         {
             continue;
         }

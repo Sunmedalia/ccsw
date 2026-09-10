@@ -884,7 +884,7 @@ fn mouse_click_showcase_buttons_perform_actions() {
     let screen = Rect::new(0, 0, 120, 30);
     let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
     let (showcase_card, _) = provider_detail_cards(details);
-    let controls = showcase_controls(showcase_card);
+    let controls = showcase_controls(showcase_card, false);
 
     // Click Default button
     let default_btn = controls
@@ -1087,7 +1087,7 @@ fn narrow_layout_uses_one_provider_panel_and_wraps_profile_cards() {
     assert!(details_view.details.is_some());
 
     let profile = &app.config.profiles["one"];
-    let lines = home_profile_lines("one", profile, 2, 42);
+    let lines = home_profile_lines("one", profile, 2, 42, false);
     assert!(lines.len() > 5);
     assert!(lines.iter().all(|line| line.width() <= 42));
 }
@@ -2134,6 +2134,14 @@ fn pi_native_model_form_saves_without_changing_ccsw_config() {
         panic!("model form missing")
     };
     form.fields[0].value = "native-added".into();
+    assert!(!form.fields.iter().any(|field| field.label == "Enable now"));
+    for (label, value) in [("Max output tokens", "8192"), ("Context window", "128000")] {
+        form.fields
+            .iter_mut()
+            .find(|field| field.label == label)
+            .unwrap()
+            .value = value.into();
+    }
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
         .unwrap();
     assert!(app.modal.is_none(), "{}", app.status);
@@ -2147,8 +2155,16 @@ fn pi_native_model_form_saves_without_changing_ccsw_config() {
             .any(|m| m["id"] == "native-added")
     );
     assert!(models["providers"].get(format!("ccsw-{profile}")).is_none());
+    let saved = models["providers"][&profile]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "native-added")
+        .unwrap();
+    assert_eq!(saved["maxTokens"], 8192);
+    assert_eq!(saved["contextWindow"], 128000);
     app.select_model_id("native-added");
-    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))
+    app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
         .unwrap();
     assert!(!app.status_error, "{}", app.status);
     let settings: serde_json::Value =
@@ -2164,4 +2180,122 @@ fn pi_native_model_form_saves_without_changing_ccsw_config() {
             .any(|m| m.id == "native-added")
     );
     assert_eq!(std::fs::read(&app.paths.config).unwrap(), ccsw_before);
+}
+
+#[test]
+fn pi_availability_controls_do_not_mutate_native_files() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Pi);
+    let before = std::fs::read(app.pi_home.join("models.json")).unwrap();
+    let screen = Rect::new(0, 0, 120, 36);
+    for view in [ViewMode::Home, ViewMode::Provider, ViewMode::AllEnabled] {
+        app.view_mode = view;
+        app.home_all_selected = false;
+        if view == ViewMode::Provider {
+            app.init_provider_editor();
+        }
+        for key in [' ', 'A', 'C'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))
+                .unwrap();
+            assert!(!app.status_error, "{}", app.status);
+        }
+        let ui = ui_areas(screen, app.focus, view);
+        let (column, row) = match view {
+            ViewMode::Home => {
+                let panel = ui.profiles.unwrap();
+                (
+                    panel.x + 2,
+                    panel.y + 1 + app.home_profile_item_heights(panel)[0] as u16,
+                )
+            }
+            ViewMode::Provider => {
+                let panel = ui.models.unwrap();
+                (panel.x + 2, panel.y + 4)
+            }
+            ViewMode::AllEnabled => {
+                let panel = ui.models.unwrap();
+                (panel.x + 2, panel.y + 1)
+            }
+        };
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        if view == ViewMode::Provider {
+            app.provider_editor.as_mut().unwrap().search_active = true;
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .unwrap();
+            assert!(!app.provider_editor.as_ref().unwrap().search_active);
+            let (card, _) = provider_detail_cards(ui.details.unwrap());
+            assert!(
+                !showcase_controls(card, true)
+                    .iter()
+                    .any(|(control, _)| *control == ShowcaseControl::Toggle)
+            );
+        }
+        assert_eq!(
+            std::fs::read(app.pi_home.join("models.json")).unwrap(),
+            before
+        );
+    }
+}
+
+#[test]
+fn pi_views_and_help_use_configured_model_labels() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Pi);
+    let mut terminal = Terminal::new(TestBackend::new(150, 45)).unwrap();
+    for view in [ViewMode::Home, ViewMode::Provider, ViewMode::AllEnabled] {
+        app.view_mode = view;
+        app.home_all_selected = false;
+        if view == ViewMode::Provider {
+            app.init_provider_editor();
+        }
+        app.status.clear();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .to_lowercase();
+        assert!(rendered.contains("configured"));
+        for stale in [
+            " enabled",
+            " disabled",
+            "space toggle",
+            "space enable",
+            "space disable",
+        ] {
+            assert!(!rendered.contains(stale), "{view:?}: {stale}");
+        }
+    }
+    for section in HelpSection::ALL {
+        let help = HelpModal {
+            section,
+            pi: true,
+            ..HelpModal::for_view(ViewMode::Home)
+        };
+        app.modal = Some(Modal::Help(help));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .to_lowercase();
+        assert!(!rendered.contains("enable all"));
+        assert!(!rendered.contains(" disabled"));
+        assert!(!rendered.contains("role dependency"));
+    }
 }

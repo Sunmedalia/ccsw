@@ -448,6 +448,8 @@ impl ModelForm {
     }
 
     pub(super) fn pick_api_model(&mut self, index: usize) {
+        let output_index = self.fields.len() - 2;
+        let context_index = self.fields.len() - 1;
         let model = self.filtered_api_models().get(index).copied().cloned();
         if let Some(model) = model {
             let base_id = canonical_model_id(&model.id);
@@ -457,16 +459,16 @@ impl ModelForm {
                         .iter()
                         .find(|m| canonical_model_id(&m.id) == base_id)
                 });
-                self.fields[5].value = saved
+                self.fields[output_index].value = saved
                     .and_then(|m| m.max_output_tokens)
                     .map(|n| n.to_string())
                     .unwrap_or_default();
-                self.fields[6].value = saved
+                self.fields[context_index].value = saved
                     .and_then(|m| m.context_window)
                     .map(|n| n.to_string())
                     .unwrap_or_default();
-                self.fields[5].cursor = 0;
-                self.fields[6].cursor = 0;
+                self.fields[output_index].cursor = 0;
+                self.fields[context_index].cursor = 0;
             }
             self.fields[0].value = base_id.clone();
             self.fields[0].cursor = self.fields[0].char_count();
@@ -497,7 +499,7 @@ impl ModelForm {
         {
             anyhow::bail!("another model already uses this ID");
         }
-        for i in [5, 6] {
+        for i in [self.fields.len() - 2, self.fields.len() - 1] {
             let value = self.fields[i].value.trim();
             if !value.is_empty() && value.parse::<u32>().ok().is_none_or(|n| n == 0) {
                 anyhow::bail!("{} must be a positive integer", self.fields[i].label);
@@ -507,6 +509,8 @@ impl ModelForm {
     }
 
     pub(super) fn to_model(&self) -> ModelEntry {
+        let output_index = self.fields.len() - 2;
+        let context_index = self.fields.len() - 1;
         let optional = |index: usize| {
             let value = self.fields[index].value.trim();
             (!value.is_empty()).then(|| value.to_owned())
@@ -521,8 +525,8 @@ impl ModelForm {
             }
         });
         ModelEntry {
-            max_output_tokens: self.fields[5].value.trim().parse().ok(),
-            context_window: self.fields[6].value.trim().parse().ok(),
+            max_output_tokens: self.fields[output_index].value.trim().parse().ok(),
+            context_window: self.fields[context_index].value.trim().parse().ok(),
             id: if one_m && !base_id.is_empty() {
                 format!("{base_id}[1m]")
             } else {
@@ -534,7 +538,10 @@ impl ModelForm {
     }
 
     pub(super) fn enable_now(&self) -> bool {
-        self.fields[4].value == "true"
+        self.fields
+            .iter()
+            .find(|field| field.label == "Enable now")
+            .is_none_or(|field| field.value == "true")
     }
 }
 

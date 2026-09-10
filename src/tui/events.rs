@@ -147,6 +147,7 @@ impl App {
                     search_active = editor.search_active;
                 }
                 if search_active {
+                    let pi = self.pi_enabled;
                     let editor = self.ensure_provider_editor().unwrap();
                     match key.code {
                         KeyCode::Esc => {
@@ -166,6 +167,9 @@ impl App {
                             editor.selected = 0;
                         }
                         KeyCode::Tab | KeyCode::Down => {
+                            editor.search_active = false;
+                        }
+                        KeyCode::Enter if pi => {
                             editor.search_active = false;
                         }
                         KeyCode::Enter => {
@@ -216,8 +220,11 @@ impl App {
                             };
                             if let Some(name) = name {
                                 self.status_error = false;
-                                self.status =
-                                    format!("Selected {name} · Space toggle · d default · 1 1M");
+                                self.status = if self.pi_enabled {
+                                    format!("Selected {name} · e edit · p default · 1 1M")
+                                } else {
+                                    format!("Selected {name} · Space toggle · d default · 1 1M")
+                                };
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
@@ -240,8 +247,11 @@ impl App {
                             };
                             if let Some(name) = name {
                                 self.status_error = false;
-                                self.status =
-                                    format!("Selected {name} · Space toggle · d default · 1 1M");
+                                self.status = if self.pi_enabled {
+                                    format!("Selected {name} · e edit · p default · 1 1M")
+                                } else {
+                                    format!("Selected {name} · Space toggle · d default · 1 1M")
+                                };
                             }
                         }
                         KeyCode::PageUp => {
@@ -360,6 +370,7 @@ impl App {
             return Ok(MouseAction::None);
         }
 
+        let pi = self.pi_enabled;
         let ui = ui_areas(area, self.focus, self.view_mode);
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -473,7 +484,7 @@ impl App {
                                     let filtered = editor.filtered_indices();
                                     if index < filtered.len() {
                                         editor.selected = index;
-                                        let should_toggle = mouse.column < list_area.x + 4;
+                                        let should_toggle = !pi && mouse.column < list_area.x + 4;
                                         if should_toggle {
                                             editor.toggle_selected();
                                         } else {
@@ -510,8 +521,13 @@ impl App {
                             self.model_idx = index;
                             self.status_error = false;
                             self.status = format!(
-                                "Selected {} · Space toggles availability",
-                                models[index].label()
+                                "Selected {} · {}",
+                                models[index].label(),
+                                if self.pi_enabled {
+                                    "e edit · p default · x delete"
+                                } else {
+                                    "Space toggles availability"
+                                }
                             );
                             return Ok(MouseAction::None);
                         }
@@ -577,7 +593,7 @@ impl App {
                     if let Some(index) = index.filter(|index| *index < item_count) {
                         self.focus = Focus::Profiles;
                         if self.view_mode == ViewMode::Home {
-                            if index > 0 && mouse.column < panel.x.saturating_add(5) {
+                            if !pi && index > 0 && mouse.column < panel.x.saturating_add(5) {
                                 self.select_home_index(index);
                                 self.toggle_selected_provider()?;
                                 return Ok(MouseAction::None);
@@ -608,7 +624,7 @@ impl App {
                             let was_selected = self.model_idx == index;
                             self.focus = Focus::Models;
                             self.model_idx = index;
-                            if mouse.column < panel.x.saturating_add(4) {
+                            if !pi && mouse.column < panel.x.saturating_add(4) {
                                 self.toggle_selected_global_model()?;
                                 return Ok(MouseAction::None);
                             }
@@ -630,8 +646,15 @@ impl App {
                         self.model_idx = index;
                         if let Some(model) = self.selected_model() {
                             self.status_error = false;
-                            self.status =
-                                format!("Selected {} · Space toggles availability", model.label());
+                            self.status = format!(
+                                "Selected {} · {}",
+                                model.label(),
+                                if self.pi_enabled {
+                                    "e edit · p default · x delete"
+                                } else {
+                                    "Space toggles availability"
+                                }
+                            );
                         }
                     }
                 } else if let Some(details) = ui.details
@@ -641,9 +664,10 @@ impl App {
                     if self.view_mode == ViewMode::Provider {
                         let (showcase_card, provider_card) = provider_detail_cards(details);
                         if contains(showcase_card, mouse.column, mouse.row) {
-                            if let Some((control, _)) = showcase_controls(showcase_card)
-                                .into_iter()
-                                .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                            if let Some((control, _)) =
+                                showcase_controls(showcase_card, self.pi_enabled)
+                                    .into_iter()
+                                    .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                             {
                                 match control {
                                     ShowcaseControl::Toggle => {
@@ -1320,7 +1344,13 @@ impl App {
                         self.status = format!(
                             "Saved model {} · {}",
                             model.id,
-                            if enable_now { "enabled" } else { "disabled" }
+                            if self.pi_enabled {
+                                "saved to models.json"
+                            } else if enable_now {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
                         );
                         self.init_provider_editor();
                         if let Some(editor) = &mut self.provider_editor

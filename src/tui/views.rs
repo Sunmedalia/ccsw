@@ -141,6 +141,7 @@ impl App {
                 self.all_enabled_model_count(),
                 self.all_managed_models().len(),
                 content_width,
+                self.pi_enabled,
             );
             let lines = if self.codex_ui.enabled {
                 self.chatgpt_provider_lines(content_width)
@@ -160,7 +161,8 @@ impl App {
                     .map(|cached| cached.models.as_slice())
                     .unwrap_or_default();
                 let enabled_count = discovery::active_models(profile, discovered).len();
-                let lines = home_profile_lines(id, profile, enabled_count, content_width);
+                let lines =
+                    home_profile_lines(id, profile, enabled_count, content_width, self.pi_enabled);
                 item_heights.push(lines.len());
                 ListItem::new(lines)
             } else {
@@ -245,7 +247,11 @@ impl App {
             let mut state = ListState::default()
                 .with_offset(self.model_offset)
                 .with_selected((!items.is_empty()).then_some(self.model_idx));
-            let title = format!(" All models · {enabled_count}/{} enabled ", models.len());
+            let title = if self.pi_enabled {
+                format!(" All models · {} configured ", models.len())
+            } else {
+                format!(" All models · {enabled_count}/{} enabled ", models.len())
+            };
             frame.render_stateful_widget(
                 List::new(items)
                     .block(panel(&title, true))
@@ -326,8 +332,11 @@ impl App {
                     .iter()
                     .filter(|m| editor.is_enabled(&m.id))
                     .count();
-                let stats_text =
-                    format!("({filtered_len}/{total_len} models · {enabled_len} enabled)");
+                let stats_text = if self.pi_enabled {
+                    format!("({filtered_len}/{total_len} models)")
+                } else {
+                    format!("({filtered_len}/{total_len} models · {enabled_len} enabled)")
+                };
                 let query_text = if editor.query.is_empty() {
                     if editor.search_active {
                         "Search by name or model ID…".to_owned()
@@ -394,7 +403,11 @@ impl App {
             }
 
             let filtered = editor.filtered_indices();
-            let list_title = " Models · ◆ default  ● enabled  ○ disabled ";
+            let list_title = if self.pi_enabled {
+                " Models · ◆ default  ● configured "
+            } else {
+                " Models · ◆ default  ● enabled  ○ disabled "
+            };
             let block = panel(
                 list_title,
                 self.focus == Focus::Models && !editor.search_active,
@@ -528,7 +541,11 @@ impl App {
                 ])
             })
             .collect::<Vec<_>>();
-        let title = " Enabled models ";
+        let title = if self.pi_enabled {
+            " Configured models "
+        } else {
+            " Enabled models "
+        };
         let mut state = ListState::default()
             .with_offset(self.model_offset)
             .with_selected((!items.is_empty()).then_some(self.model_idx));
@@ -632,7 +649,9 @@ impl App {
             Line::from(vec![
                 Span::styled(" Status: ", Style::default().fg(MUTED)),
                 Span::styled(
-                    if is_enabled {
+                    if self.pi_enabled {
+                        "● Configured"
+                    } else if is_enabled {
                         "● Enabled"
                     } else {
                         "○ Disabled"
@@ -659,7 +678,7 @@ impl App {
                 },
             ]),
         ];
-        let controls = showcase_controls(area);
+        let controls = showcase_controls(area, self.pi_enabled);
         let controls_top = controls
             .iter()
             .map(|(_, rect)| rect.y)
@@ -688,7 +707,11 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
                 ShowcaseControl::Default => (
-                    "[d Set default]",
+                    if self.pi_enabled {
+                        "[p Set default]"
+                    } else {
+                        "[d Set default]"
+                    },
                     Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
                 ),
                 ShowcaseControl::OneM => (
@@ -759,7 +782,9 @@ impl App {
         let mut lines = vec![
             detail(
                 "Provider",
-                if profile.enabled {
+                if self.pi_enabled {
+                    "● configured"
+                } else if profile.enabled {
                     "● enabled"
                 } else {
                     "○ disabled"
@@ -771,11 +796,15 @@ impl App {
             detail("Default", &profile.default_model),
             detail(
                 "Models",
-                &format!(
-                    "{} enabled / {} available",
-                    self.models().len(),
-                    self.catalog_models().len()
-                ),
+                &if self.pi_enabled {
+                    format!("{} configured", profile.models.len())
+                } else {
+                    format!(
+                        "{} enabled / {} available",
+                        self.models().len(),
+                        self.catalog_models().len()
+                    )
+                },
             ),
             detail(
                 match self.client_tab() {

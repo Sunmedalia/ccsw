@@ -30,6 +30,7 @@ impl App {
                 self.all_enabled_model_count(),
                 self.all_managed_models().len(),
                 panel.width.saturating_sub(2),
+                self.pi_enabled,
             )
             .len(),
         ];
@@ -51,6 +52,7 @@ impl App {
                 profile,
                 discovery::active_models(profile, discovered).len(),
                 panel.width.saturating_sub(2),
+                self.pi_enabled,
             )
             .len()
         }));
@@ -220,9 +222,15 @@ impl App {
             } else {
                 let profile = self.selected_profile().expect("provider selected");
                 format!(
-                    "Selected {} · Space {} provider · Enter details",
+                    "Selected {} · {} · Enter details",
                     profile.name,
-                    if profile.enabled { "disable" } else { "enable" }
+                    if self.pi_enabled {
+                        "e edit · x delete"
+                    } else if profile.enabled {
+                        "Space disable provider"
+                    } else {
+                        "Space enable provider"
+                    }
                 )
             };
             return;
@@ -261,15 +269,29 @@ impl App {
                 if let Some(entry) = self.all_managed_models().get(self.model_idx) {
                     self.status_error = false;
                     self.status = format!(
-                        "{} · {} · Space {} · Enter/click again to open provider",
+                        "{} · {} · {} · Enter/click again to open provider",
                         entry.profile_name,
                         entry.model.label(),
-                        if entry.enabled { "disable" } else { "enable" }
+                        if self.pi_enabled {
+                            "p set default"
+                        } else if entry.enabled {
+                            "Space disable"
+                        } else {
+                            "Space enable"
+                        }
                     );
                 }
             } else if let Some(model) = self.selected_model() {
                 self.status_error = false;
-                self.status = format!("Selected {} · Space toggles availability", model.label());
+                self.status = format!(
+                    "Selected {} · {}",
+                    model.label(),
+                    if self.pi_enabled {
+                        "e edit · p default · x delete"
+                    } else {
+                        "Space toggles availability"
+                    }
+                );
             }
         }
     }
@@ -348,7 +370,12 @@ impl App {
             query: String::new(),
             selected,
             search_active: false,
-            status: "Space toggle · 1 context · d default".into(),
+            status: if self.pi_enabled {
+                "e edit · 1 context · p default"
+            } else {
+                "Space toggle · 1 context · d default"
+            }
+            .into(),
         })
     }
 
@@ -363,21 +390,27 @@ impl App {
         self.open_add_model_modal();
         if let Some(Modal::Model(form)) = &mut self.modal {
             form.original_model_id = Some(canonical_model_id(&model.id));
-            form.fields[4].value = enabled.to_string();
+            if let Some(field) = form
+                .fields
+                .iter_mut()
+                .find(|field| field.label == "Enable now")
+            {
+                field.value = enabled.to_string();
+            }
             for (index, value) in [
                 (0, canonical_model_id(&model.id)),
                 (1, model.label.unwrap_or_default()),
                 (2, model.description.unwrap_or_default()),
                 (3, has_1m_suffix(&model.id).to_string()),
                 (
-                    5,
+                    form.fields.len() - 2,
                     model
                         .max_output_tokens
                         .map(|n| n.to_string())
                         .unwrap_or_default(),
                 ),
                 (
-                    6,
+                    form.fields.len() - 1,
                     model
                         .context_window
                         .map(|n| n.to_string())
@@ -398,6 +431,9 @@ impl App {
             .and_then(|id| self.cache.profiles.get(&id).map(|c| c.models.clone()))
             .unwrap_or_default();
         let mut form = ModelForm::with_api_models(cached);
+        if self.pi_enabled {
+            form.fields.retain(|field| field.label != "Enable now");
+        }
         form.original_profile = self.selected_profile().cloned().map(Box::new);
         self.modal = Some(Modal::Model(form));
     }
@@ -461,7 +497,14 @@ impl App {
             .map(|p| p.name.clone())
             .unwrap_or_default();
         self.status_error = false;
-        self.status = format!("Managing {name} · Space toggles model · Esc back to providers");
+        self.status = format!(
+            "Managing {name} · {} · Esc back to providers",
+            if self.pi_enabled {
+                "e edit · p default · x delete"
+            } else {
+                "Space toggles model"
+            }
+        );
     }
 
     pub(super) fn enter_all_enabled_view(&mut self) {
@@ -476,7 +519,12 @@ impl App {
             .min(self.all_managed_models().len().saturating_sub(1));
         self.model_offset = 0;
         self.status_error = false;
-        self.status = "Space toggle model · Enter/click again to open provider · Esc back".into();
+        self.status = if self.pi_enabled {
+            "p set default · Enter/click again to open provider · Esc back"
+        } else {
+            "Space toggle model · Enter/click again to open provider · Esc back"
+        }
+        .into();
     }
 
     pub(super) fn return_home(&mut self) {
@@ -715,6 +763,10 @@ impl App {
     }
 
     pub(super) fn set_selected_as_default(&mut self) {
+        if self.pi_enabled {
+            self.apply_pi();
+            return;
+        }
         if self.view_mode == ViewMode::Provider {
             if let Some(editor) = self.ensure_provider_editor() {
                 editor.set_selected_default();

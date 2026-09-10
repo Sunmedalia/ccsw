@@ -193,7 +193,7 @@ pub(super) fn provider_detail_cards(area: Rect) -> (Rect, Rect) {
     (cards[0], cards[1])
 }
 
-pub(super) fn showcase_controls(area: Rect) -> Vec<(ShowcaseControl, Rect)> {
+pub(super) fn showcase_controls(area: Rect, pi: bool) -> Vec<(ShowcaseControl, Rect)> {
     let inner = panel_inner(area);
     if inner.height < 2 || inner.width < 8 {
         return vec![];
@@ -203,7 +203,10 @@ pub(super) fn showcase_controls(area: Rect) -> Vec<(ShowcaseControl, Rect)> {
         ShowcaseControl::Default,
         ShowcaseControl::OneM,
         ShowcaseControl::Delete,
-    ];
+    ]
+    .into_iter()
+    .filter(|control| !pi || *control != ShowcaseControl::Toggle)
+    .collect::<Vec<_>>();
     if inner.width >= 38 && inner.height >= 2 {
         let width = inner.width / 2;
         let start_y = inner.y + inner.height.saturating_sub(2);
@@ -511,6 +514,7 @@ pub(super) fn all_enabled_lines(
     model_count: usize,
     total_count: usize,
     width: u16,
+    pi: bool,
 ) -> Vec<Line<'static>> {
     let active = model_count > 0;
     let mut lines = wrap_styled_segments(
@@ -524,9 +528,13 @@ pub(super) fn all_enabled_lines(
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             (
-                format!(
-                    "  {total_count} models · {model_count} enabled · {provider_count} providers"
-                ),
+                if pi {
+                    format!("  {total_count} configured models · {provider_count} providers")
+                } else {
+                    format!(
+                        "  {total_count} models · {model_count} enabled · {provider_count} providers"
+                    )
+                },
                 Style::default().fg(CONNECTED),
             ),
         ],
@@ -541,6 +549,7 @@ pub(super) fn home_profile_lines(
     profile: &Profile,
     enabled_count: usize,
     width: u16,
+    pi: bool,
 ) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let signal = if profile.enabled { " ● " } else { " ○ " };
@@ -564,7 +573,9 @@ pub(super) fn home_profile_lines(
             Style::default().fg(WARNING),
         ),
         (
-            if profile.enabled {
+            if pi {
+                format!("   {enabled_count} configured")
+            } else if profile.enabled {
                 format!("   {enabled_count} enabled")
             } else {
                 "   provider disabled".into()
@@ -575,13 +586,14 @@ pub(super) fn home_profile_lines(
     if width >= 96
         && UnicodeWidthStr::width(
             format!(
-                " {} {}  [{}]  {}     Default: {}   {} enabled",
+                " {} {}  [{}]  {}     Default: {}   {} {}",
                 if profile.enabled { "●" } else { "○" },
                 profile.name,
                 profile.api_format.label(),
                 id,
                 profile.default_model,
-                enabled_count
+                enabled_count,
+                if pi { "configured" } else { "enabled" }
             )
             .as_str(),
         ) <= usize::from(width)

@@ -93,7 +93,8 @@ impl App {
             KeyCode::Char('D') => {
                 self.status = "Pi files are edited directly; no connection to disconnect".into();
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ' | 'A' | 'C') => {
+                self.status_error = false;
                 self.status =
                     "Pi lists every configured model; use x to delete, p to set the default".into();
             }
@@ -133,7 +134,7 @@ impl App {
                 self.status_error = false;
                 self.status = "Pi default saved to settings.json · open /model in Pi".into();
             }
-            Err(error) => self.set_error(format!("Pi sync failed: {error:#}")),
+            Err(error) => self.set_error(format!("Could not set Pi default: {error:#}")),
         }
     }
     pub(super) fn sync_pi_after_edit(&mut self) {

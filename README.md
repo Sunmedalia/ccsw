@@ -182,7 +182,7 @@ Pi 自行连接厂商；页面不显示代理按钮，`P` 不打开代理面板�
 | `p` / Set default | 将选中厂商和模型写为 `settings.json` 的默认值 |
 | `s` | 查看实际配置目录、可编辑厂商数量和只读条目原因 |
 
-表单保存即生效，不需要先连接或同步。Pi 原生文件没有厂商/模型启用开关，配置中的模型都可用；`Space` 不再启停条目，需要移除时使用删除操作。删除当前默认厂商会清除默认引用，删除当前默认模型会改用该厂商的替代模型。`p` 仅设置默认选择，其他 `settings.json` 设置保留。
+表单保存即生效，不需要先连接或同步。Pi 原生文件没有厂商/模型启用开关，配置中的模型都可用；列表统一显示 configured（已配置），不显示启用/禁用状态，模型表单也不再提供 Enable now 开关。单击仅选中条目，再次点击进入；`Space`、`A`、`C` 不修改文件，需要移除时使用 `x` 删除操作。删除当前默认厂商会清除默认引用，删除当前默认模型会改用该厂商的替代模型。`p`（或模型页的 `d`）仅设置默认选择，其他 `settings.json` 设置保留。
 
 可用以下命令检查原生配置路径和读取结果：
 
@@ -225,7 +225,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 > Codex 配置随 v0.1.6 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
-在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改、禁用及同步只作用于当前客户端。Codex 的 API 页面不显示 Claude 的角色别名设置。
+在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
 ### Codex API
 
