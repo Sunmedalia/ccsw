@@ -328,6 +328,16 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<MouseAction> {
+        if area.width >= 40
+            && area.height >= 12
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && let Some((tab, _)) = client_tabs(area)
+                .into_iter()
+                .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+        {
+            self.select_client_tab(tab);
+            return Ok(MouseAction::None);
+        }
         if self.codex_mouse(mouse, area)? {
             return Ok(MouseAction::None);
         }
@@ -388,7 +398,11 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-                if self.view_mode != ViewMode::Home && mouse.row <= 2 && mouse.column <= 16 {
+                if self.view_mode != ViewMode::Home
+                    && mouse.row == area.y + 1
+                    && mouse.column >= area.x
+                    && mouse.column <= area.x + 16
+                {
                     self.return_home();
                     return Ok(MouseAction::None);
                 }

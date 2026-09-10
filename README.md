@@ -160,7 +160,7 @@ ccsw import --yes
 
 > 源码版本功能，尚未包含在 v0.1.4 发布包中。使用源码构建的新二进制；当前兼容验证基准为 Pi `0.85.1`。
 
-按 `F2` 切换到 **Pi API**。厂商及模型目录与 Claude/Codex 共用，Pi 的接入和默认模型独立保存。
+点击顶部 **Pi** 标签或按 `F2` 切换到 **Pi API**。厂商及模型目录与 Claude/Codex 共用，Pi 的接入和默认模型独立保存。
 
 | 按键 | 操作 |
 | --- | --- |
@@ -206,7 +206,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 > 此功能属于源码版本，尚未包含在 v0.1.4 中。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
-在 TUI 中按 `F2` 循环切换 Claude / Codex / Pi，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
+在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
 
 ### Codex API
 

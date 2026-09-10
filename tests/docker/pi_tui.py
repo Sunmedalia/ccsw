@@ -29,9 +29,9 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-tui-') as directory:
     def key(value):os.write(master,value);return read()
     try:
         assert 'CCSW' in read()
-        assert 'Codex' in key(b'\x1bOQ')
-        assert 'Pi API' in key(b'\x1bOQ')
-        key(b'j')
+        assert 'Codex API' in key(b'\x1bOQ')
+        assert 'Accounts' in key(b'\x1bOR')
+        assert 'Pi API' in key(b'\x1b[<0;30;1M')
         assert 'Profile' in key(b'e')
         key(b'\x1b');key(b'\r')
         assert 'Edit model' in key(b'e')
@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-tui-') as directory:
         key(b'\x03')
         process.wait(timeout=5)
         assert process.returncode==0
-        print('PASS Debian PTY: launch, Claude/Codex/Pi cycle, provider e, model e, Help, clean exit')
+        print('PASS Debian PTY: launch, F2 and mouse tabs from Codex Accounts to Pi, provider e, model e, Help, clean exit')
     finally:
         if process.poll() is None:process.kill();process.wait()
         os.close(master)

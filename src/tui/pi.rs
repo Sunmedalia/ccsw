@@ -2,23 +2,11 @@ use super::*;
 impl App {
     pub(super) fn handle_pi_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
         if key.code == KeyCode::F(2) && !self.codex_navigation_blocked() {
-            if self.pi_enabled {
-                self.pi_enabled = false;
-            } else if self.codex_ui.enabled {
-                self.codex_ui.enabled = false;
-                self.pi_enabled = true;
-            } else {
-                self.codex_ui.enabled = true;
-            }
-            self.return_home();
-            self.status = if self.pi_enabled {
-                "Pi · direct API · i import · p sync · s status · D disconnect"
-            } else if self.codex_ui.enabled {
-                "Codex · F2 Pi · F3 Accounts"
-            } else {
-                "Claude · F2 Codex"
-            }
-            .into();
+            self.select_client_tab(match self.client_tab() {
+                ClientTab::Claude => ClientTab::Codex,
+                ClientTab::Codex => ClientTab::Pi,
+                ClientTab::Pi => ClientTab::Claude,
+            });
             return Ok(Some(false));
         }
         if !self.pi_enabled

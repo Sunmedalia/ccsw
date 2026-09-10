@@ -8,6 +8,7 @@ mod layout;
 mod models;
 mod pi;
 mod state;
+mod tabs;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -18,6 +19,7 @@ use help::*;
 use layout::*;
 use models::*;
 use state::*;
+use tabs::*;
 
 use std::{
     collections::{BTreeMap, BTreeSet},

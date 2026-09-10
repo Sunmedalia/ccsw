@@ -38,6 +38,13 @@ impl App {
     }
 
     pub(super) fn draw_route(&self, frame: &mut ratatui::Frame, area: Rect) {
+        self.draw_client_tabs(frame, area);
+        let area = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height.saturating_sub(1),
+        );
         let profile = self
             .selected_profile()
             .map(|profile| profile.name.as_str())
@@ -115,7 +122,11 @@ impl App {
         frame.render_widget(
             Paragraph::new(line)
                 .wrap(Wrap { trim: true })
-                .block(Block::default().borders(Borders::BOTTOM)),
+                .block(Block::default().borders(if area.height > 1 {
+                    Borders::BOTTOM
+                } else {
+                    Borders::NONE
+                })),
             area,
         );
     }

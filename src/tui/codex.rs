@@ -389,10 +389,11 @@ impl App {
         ])
         .split(area);
         frame.render_widget(
-            Paragraph::new("CCSW · Codex Accounts\nF2 Pi · F3 API Providers · ? Help")
+            Paragraph::new("CCSW · Codex Accounts · F3 API Providers · ? Help")
                 .style(Style::default().fg(ROUTE)),
-            rows[0],
+            Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
         );
+        self.draw_client_tabs(frame, rows[0]);
         let items = self
             .config
             .codex
@@ -477,7 +478,7 @@ impl App {
                 area.height.saturating_sub(2),
             );
             frame.render_widget(Clear, popup);
-            let text = "F2  Claude / Codex / Pi\nF3  API Providers / Accounts\nAPI: n new provider · Enter models\ne edit provider on Home; model on model page\nE edit provider · a add model · p apply\ng reasoning · s status · D disconnect\nAccounts: n browser login · N device login\ni import current · I import auth.json\ne rename · x delete · p/Enter switch\nr refresh limits · s status\nEsc cancel login / back · ? close Help\n\nSwitching writes shared configuration.\nRestart CLI / ChatGPT App and open a new chat.\nLimits are cached; refresh failures keep old data.";
+            let text = "Click top tabs / F2  Claude Code / Codex / Pi\nF3  API Providers / Accounts\nAPI: n new provider · Enter models\ne edit provider on Home; model on model page\nE edit provider · a add model · p apply\ng reasoning · s status · D disconnect\nAccounts: n browser login · N device login\ni import current · I import auth.json\ne rename · x delete · p/Enter switch\nr refresh limits · s status\nEsc cancel login / back · ? close Help\n\nSwitching writes shared configuration.\nRestart CLI / ChatGPT App and open a new chat.\nLimits are cached; refresh failures keep old data.";
             frame.render_widget(
                 Paragraph::new(text)
                     .block(panel(" Codex Help · ↑↓ scroll ", true))

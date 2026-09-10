@@ -1797,3 +1797,70 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
     assert!(!app.pi_enabled);
     assert!(!app.codex_ui.enabled);
 }
+
+#[test]
+fn client_tabs_click_from_accounts_and_preserve_active_view_and_modal() {
+    let (_temp, mut app) = persisted_app();
+    let screen = Rect::new(3, 2, 80, 24);
+    let click = |app: &mut App, tab| {
+        let (_, rect) = client_tabs(screen)
+            .into_iter()
+            .find(|(t, _)| *t == tab)
+            .unwrap();
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x + 1,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+    };
+    click(&mut app, ClientTab::Codex);
+    assert!(app.codex_ui.enabled);
+    app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_ui.accounts);
+    click(&mut app, ClientTab::Pi);
+    assert!(app.pi_enabled);
+    app.enter_provider_view();
+    click(&mut app, ClientTab::Pi);
+    assert_eq!(app.view_mode, ViewMode::Provider);
+    app.edit_profile();
+    click(&mut app, ClientTab::Claude);
+    assert!(app.pi_enabled);
+    assert!(matches!(app.modal, Some(Modal::Profile(_))));
+    app.modal = None;
+    click(&mut app, ClientTab::Claude);
+    assert_eq!(app.client_tab(), ClientTab::Claude);
+}
+
+#[test]
+fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
+    let (_temp, mut app) = persisted_app();
+    for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+        for tab in [ClientTab::Claude, ClientTab::Codex, ClientTab::Pi] {
+            app.select_client_tab(tab);
+            for accounts in [false, true] {
+                app.codex_ui.accounts = accounts;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let buffer = terminal.backend().buffer();
+                let first_row = (0..width)
+                    .map(|x| buffer[(x, 0)].symbol())
+                    .collect::<String>();
+                for label in ["Claude Code", "Codex", "Pi"] {
+                    assert!(first_row.contains(label));
+                }
+                for (candidate, rect) in client_tabs(Rect::new(0, 0, width, height)) {
+                    assert_eq!(
+                        buffer[(rect.x, rect.y)].bg,
+                        if candidate == tab { ROUTE } else { SELECTION }
+                    );
+                }
+            }
+        }
+    }
+}
