@@ -235,7 +235,7 @@ ccsw codex disconnect
 
 ### Codex 订阅账号
 
-Codex 的提供商列表首项为 **ChatGPT Account**，也可以点击顶部 **Account · ChatGPT** 按钮进入。首页选中 Account 按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。`Enter` 或点击 Account 进入账号管理。选择账号后按 `p` / `Enter` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，顶部显示生效的 CCSW 选择。切换账号时不继承第三方模型目录和上下文参数。
+Codex 的提供商列表首项为 **ChatGPT Account**，单击选中，再次点击或按 Enter 进入。首页选中 Account 按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。`Enter` 或再次点击 Account 进入账号管理。账号列表中方向键或鼠标移动光标，空格选中账号，再按 `p` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，账号列表以 Applied 标记已应用账号。切换账号时不继承第三方模型目录和上下文参数。
 
 账号页只提供导入与切换，不进行额度查询或浏览器登录：
 
@@ -244,11 +244,12 @@ Codex 的提供商列表首项为 **ChatGPT Account**，也可以点击顶部 **
 | `i` / Import | 导入本机当前 Codex 登录，输入保存名称 |
 | `I` / File | 导入指定 `auth.json` 文件 |
 | `↑↓`、`j/k` | 选择账号 |
-| `p`、`Enter` / Use | 使用账号，同时切换为 ChatGPT 提供商 |
+| `Space` | 选中光标所在账号，不应用配置 |
+| `p` / Apply Codex | 使用账号，同时切换为 ChatGPT 提供商 |
 | `Esc` / Back | 返回提供商列表 |
 | `?` | 与 Claude 一致的分栏 Help：Providers / Accounts / Models / Forms |
 
-导入成功后自动高亮，点击 Use 才激活。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
+导入成功后自动高亮，空格选中，再按 p 或点击 Apply Codex 才激活。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
 
 切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Selected]` 是 CCSW 选择，`[Local login]` 是磁盘凭据身份；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
 

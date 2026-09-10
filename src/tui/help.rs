@@ -275,10 +275,13 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
     let rows: &[(&str, &str)] = match section {
         HelpSection::Home => &[
             (
-                "Account / F3",
+                "F3",
                 "Open ChatGPT accounts; also available as the first provider",
             ),
-            ("Enter / click", "Open selected provider or ChatGPT Account"),
+            (
+                "Enter / click again",
+                "Open selected provider or ChatGPT Account",
+            ),
             ("n / e / x", "Add / edit / remove an API provider"),
             ("p", "Apply selected provider or saved ChatGPT account"),
             (
@@ -293,15 +296,13 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
         HelpSection::AllEnabled => &[
             ("i", "Import current Codex login; enter a name"),
             ("I", "Import an auth.json file by absolute path"),
-            ("Up/Down", "Select a saved account"),
-            (
-                "p / Enter / Apply",
-                "Activate the account and ChatGPT provider",
-            ),
+            ("Up/Down", "Move the account cursor"),
+            ("Space", "Select the highlighted account without applying"),
+            ("p / Apply", "Activate the account and ChatGPT provider"),
             ("Esc / Back", "Return to API providers"),
             (
                 "",
-                "Import highlights the account; Apply activates it. No quota queries.",
+                "Import highlights; Space selects; Apply activates. No quota queries.",
             ),
             (
                 "",

@@ -23,6 +23,7 @@ pub(super) struct CodexUi {
     pub accounts: bool,
     selected: usize,
     pending_selection: Option<String>,
+    chosen_account: Option<String>,
     live_id: Option<String>,
     live_message: String,
     pub busy: bool,
@@ -44,6 +45,7 @@ impl Default for CodexUi {
             accounts: false,
             selected: 0,
             pending_selection: None,
+            chosen_account: None,
             live_id: None,
             live_message: "s inspect local login".into(),
             busy: false,
@@ -55,7 +57,8 @@ impl Default for CodexUi {
             status_view: false,
             help_scroll: 0,
             scroll_max: std::cell::Cell::new(200),
-            message: "i import current · I import file · p use · Esc providers".into(),
+            message: "i import current · I import file · Space select · p apply · Esc providers"
+                .into(),
         }
     }
 }
@@ -71,10 +74,10 @@ impl App {
             Some(service::Selection::Account { .. })
         );
         let name = self
-            .selected_codex_account()
+            .chosen_codex_account()
             .and_then(|id| self.config.codex.accounts.get(&id))
             .map(|account| account.name.as_str())
-            .unwrap_or("Import an account");
+            .unwrap_or("Select an account");
         let mut lines = wrap_styled_segments(
             vec![
                 (
@@ -110,8 +113,8 @@ impl App {
     }
 
     fn apply_codex_account(&mut self) {
-        let Some(id) = self.selected_codex_account() else {
-            self.set_error("No saved account · Enter Account and import a Codex login first");
+        let Some(id) = self.chosen_codex_account() else {
+            self.set_error("No saved account selected · Enter Account, import a login, then press Space to select");
             return;
         };
         self.codex_job(move |paths, _, _| {
@@ -185,6 +188,17 @@ impl App {
         }
         changed
     }
+    fn chosen_codex_account(&self) -> Option<String> {
+        self.codex_ui
+            .chosen_account
+            .clone()
+            .or_else(|| match &self.config.codex.active {
+                Some(service::Selection::Account { id }) => Some(id.clone()),
+                _ => None,
+            })
+            .filter(|id| self.config.codex.accounts.contains_key(id))
+    }
+
     fn selected_codex_account(&self) -> Option<String> {
         if !self.codex_ui.accounts
             && let Some(service::Selection::Account { id }) = &self.config.codex.active
@@ -267,10 +281,7 @@ impl App {
                         Input::Import => {
                             let id = service::accounts::import(&paths, &text, None)?;
                             let _ = sender.send(Update::Select(id));
-                            Ok(
-                                "Account imported and highlighted · p activates subscription login"
-                                    .into(),
-                            )
+                            Ok("Account imported and highlighted · Space select · p apply".into())
                         }
                         Input::ImportFile => {
                             let path = std::path::PathBuf::from(&text);
@@ -280,7 +291,7 @@ impl App {
                                 .unwrap_or("Imported account");
                             let id = service::accounts::import(&paths, name, Some(&path))?;
                             let _ = sender.send(Update::Select(id));
-                            Ok("Account imported and highlighted · p activate".into())
+                            Ok("Account imported and highlighted · Space select · p apply".into())
                         }
                         Input::Reasoning => {
                             service::validate_reasoning(&text)?;
@@ -386,7 +397,11 @@ impl App {
             }
             KeyCode::Char('i') => self.codex_input(Input::Import, String::new()),
             KeyCode::Char('I') => self.codex_input(Input::ImportFile, String::new()),
-            KeyCode::Char('p') | KeyCode::Enter => {
+            KeyCode::Char(' ') => {
+                self.codex_ui.chosen_account = self.selected_codex_account();
+                self.codex_ui.message = "Account selected · p / Apply Codex to apply".into();
+            }
+            KeyCode::Char('p') => {
                 self.apply_codex_account();
             }
             _ => {}
@@ -411,14 +426,6 @@ impl App {
             return Ok(true);
         }
         if !self.codex_ui.accounts {
-            if self.view_mode == ViewMode::Home
-                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                && mouse.row == area.y + 1
-                && mouse.column < area.x + 20
-            {
-                self.open_codex_accounts();
-                return Ok(true);
-            }
             return Ok(false);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
@@ -515,8 +522,14 @@ impl App {
                     == Some(service::Selection::Account { id: id.clone() });
                 ListItem::new(format!(
                     "{}{} {} · {}",
-                    if active { "[Selected] " } else { "" },
-                    if self.codex_ui.live_id.as_ref() == Some(id) {
+                    if self.chosen_codex_account().as_ref() == Some(id) {
+                        "[●] "
+                    } else {
+                        "[○] "
+                    },
+                    if active {
+                        "[Applied]"
+                    } else if self.codex_ui.live_id.as_ref() == Some(id) {
                         "[Local login]"
                     } else {
                         "○"
@@ -542,8 +555,8 @@ impl App {
         );
         let details = self.selected_codex_account()
             .and_then(|id| self.config.codex.accounts.get(&id))
-            .map(|account| format!("{}\n{}\n\nUse selects the ChatGPT provider and this account.\nAPI providers use their own endpoint and model.\nNo account or quota requests are made.", account.name, account.email))
-            .unwrap_or("Import your current Codex login, or import an auth.json file. Then select an account and press p / Enter.".into());
+            .map(|account| format!("{}\n{}\n\nSpace selects an account; p / Apply Codex applies it.\nAPI providers use their own endpoint and model.\nNo account or quota requests are made.", account.name, account.email))
+            .unwrap_or("Import your current Codex login, or import an auth.json file. Then select an account and press Space, then p.".into());
         let details = format!("{}\n\n{details}", self.codex_ui.message);
         frame.render_widget(
             Paragraph::new(details)

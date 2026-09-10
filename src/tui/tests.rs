@@ -1970,16 +1970,18 @@ fn codex_account_provider_and_help_use_shared_navigation() {
         .map(|c| c.symbol())
         .collect();
     assert!(text.contains("ChatGPT Account"));
-    app.handle_mouse(
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 3,
-            row: 1,
-            modifiers: KeyModifiers::NONE,
-        },
-        Rect::new(0, 0, 120, 36),
-    )
-    .unwrap();
+    assert!(text.contains("Providers · F2 Pi"));
+    app.home_all_selected = false;
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 8,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
+    assert!(!app.codex_ui.accounts);
+    assert!(app.home_all_selected);
+    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
     assert!(app.codex_ui.accounts);
     app.open_help();
     assert!(matches!(app.modal, Some(Modal::Help(_))));
@@ -2018,4 +2020,44 @@ fn codex_account_apply_without_login_stays_on_provider_home() {
             assert!(line.width() <= usize::from(width));
         }
     }
+}
+
+#[test]
+fn codex_space_selects_account_without_applying_or_following_cursor() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Codex);
+    app.config.codex.accounts.insert(
+        "a".into(),
+        crate::codex::accounts::Account {
+            name: "First".into(),
+            ..Default::default()
+        },
+    );
+    app.config.codex.accounts.insert(
+        "b".into(),
+        crate::codex::accounts::Account {
+            name: "Second".into(),
+            ..Default::default()
+        },
+    );
+    app.open_codex_accounts();
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.codex_ui.busy);
+    assert!(app.config.codex.active.is_none());
+    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("[●] ○ First"));
+    assert!(text.contains("[○] ○ Second"));
 }

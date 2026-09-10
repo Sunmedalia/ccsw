@@ -583,10 +583,7 @@ impl App {
                                 self.toggle_selected_provider()?;
                                 return Ok(MouseAction::None);
                             }
-                            if self.codex_ui.enabled && index == 0 {
-                                self.select_home_index(0);
-                                self.open_codex_accounts();
-                            } else if self.home_selected_index() == index {
+                            if self.home_selected_index() == index {
                                 if index == 0 {
                                     self.enter_all_enabled_view();
                                 } else {

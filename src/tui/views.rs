@@ -61,31 +61,6 @@ impl App {
                 Span::styled(" CCSW · Pi API ", Style::default().fg(ROUTE)),
                 Span::raw("F2 Claude · i Import · p Sync · s Status · D Disconnect"),
             ])
-        } else if self.codex_ui.enabled && self.view_mode == ViewMode::Home {
-            Line::from(vec![
-                Span::styled(
-                    " Account · ChatGPT ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(match &self.config.codex.active {
-                    Some(crate::codex::Selection::Account { id }) => format!(
-                        " Active: ChatGPT / {}",
-                        self.config
-                            .codex
-                            .accounts
-                            .get(id)
-                            .map(|a| a.name.as_str())
-                            .unwrap_or("account")
-                    ),
-                    Some(crate::codex::Selection::Api { profile, .. }) => {
-                        format!(" Active: API / {profile}")
-                    }
-                    None => " Select a provider · p Use".into(),
-                }),
-            ])
         } else {
             match self.view_mode {
                 ViewMode::Home => Line::from(vec![
@@ -97,11 +72,18 @@ impl App {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        "  Providers · F2 Codex",
+                        if self.codex_ui.enabled {
+                            "  Providers · F2 Pi"
+                        } else {
+                            "  Providers · F2 Codex"
+                        },
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("  ·  {} providers", self.config.profiles.len()),
+                        format!(
+                            "  ·  {} providers",
+                            self.config.profiles.len() + usize::from(self.codex_ui.enabled)
+                        ),
                         Style::default().fg(MUTED),
                     ),
                 ]),
