@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 main 分支。模型 Token 参数、模型表单 `Alt+1` 和完整卸载功能尚未包含在 v0.1.4 中；使用这些功能请从源码安装。
+> 本文对应 v0.1.5。Release 已包含 Claude Code、Codex、Pi Agent 配置隔离，以及 Codex 订阅账号导入和切换功能。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -164,7 +164,7 @@ ccsw import --yes
 
 ## Pi Agent 配置
 
-> 源码版本功能，尚未包含在 v0.1.4 发布包中。使用源码构建的新二进制；当前兼容验证基准为 Pi `0.85.1`。
+> Pi Agent 配置随 v0.1.5 发布；当前兼容验证基准为 Pi `0.85.1`。
 
 点击顶部 **Pi** 标签或按 `F2` 切换到 **Pi API**。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
 
@@ -210,7 +210,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 ## Codex 配置与账号
 
-> 此功能属于源码版本，尚未包含在 v0.1.4 中。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
+> Codex 配置随 v0.1.5 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
 在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改、禁用及同步只作用于当前客户端。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
@@ -235,7 +235,7 @@ ccsw codex disconnect
 
 ### Codex 订阅账号
 
-Codex 的提供商列表首项为 **ChatGPT Account**，单击选中，再次点击或按 Enter 进入。首页选中 Account 按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。`Enter` 或再次点击 Account 进入账号管理。账号列表中方向键或鼠标移动光标，空格选中账号，再按 `p` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，账号列表以 Applied 标记已应用账号。切换账号时不继承第三方模型目录和上下文参数。
+Codex 的首页标题与 Claude Code 一致，显示 `CCSW Providers · F2 Codex · N providers`。提供商列表首项为 **ChatGPT Account**：单击选中，再次点击或按 Enter 进入账号页。首页选中 Account 后按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。账号列表中方向键或鼠标移动光标，空格选中账号，再按 `p` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，账号列表以 `[●]` 标记空格选中的账号，以 `[Applied]` 标记当前已应用账号。切换账号时不继承第三方模型目录和上下文参数。
 
 账号页只提供导入与切换，不进行额度查询或浏览器登录：
 
@@ -251,7 +251,7 @@ Codex 的提供商列表首项为 **ChatGPT Account**，单击选中，再次点
 
 导入成功后自动高亮，空格选中，再按 p 或点击 Apply Codex 才激活。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
 
-切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Selected]` 是 CCSW 选择，`[Local login]` 是磁盘凭据身份；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
+切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Applied]` 是当前写入 Codex 的账号，`[Local login]` 是磁盘凭据身份；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
 
 在 Codex 内切换模型或推理强度后，可以直接回 CCSW 按 `p` 应用。连接地址等受管字段发生外部变化时，按 `s` 查看，必要时按 `D` 断开后再应用；事务恢复使用 `ccsw codex recover`。
 
@@ -270,7 +270,7 @@ ccsw codex accounts use <account-id>
 - 保留 Codex 配置注释、MCP、权限、插件及其他非受管字段。项目配置、启动参数和认证环境变量仍可能覆盖用户级设置。
 - 写入使用锁、原子替换、受管字段比较和事务日志。中断后执行 `ccsw codex recover`；外部修改冲突不会静默覆盖。
 - `ccsw codex disconnect` 恢复仍属于 CCSW 的配置字段，保留外部编辑。卸载会预览并清理登记过的账号文件，恢复受管 Codex 配置，保留聊天记录。
-- 首次保存后 CCSW 配置升级到版本 3；旧版本不识别该版本，升级前可自行保留配置备份。
+- 首次保存后 CCSW 配置升级到版本 4；旧版本不识别该版本，升级前可自行保留配置备份。
 
 ## 模型状态规则
 
