@@ -19,11 +19,7 @@ impl App {
 
     pub(super) fn handle_pi_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
         if key.code == KeyCode::F(2) && !self.codex_navigation_blocked() {
-            self.select_client_tab(match self.client_tab() {
-                ClientTab::Claude => ClientTab::Codex,
-                ClientTab::Codex => ClientTab::Pi,
-                ClientTab::Pi => ClientTab::Claude,
-            });
+            self.select_client_tab(self.client_tab().next());
             return Ok(Some(false));
         }
         if !self.pi_enabled

@@ -7,6 +7,24 @@ pub(super) enum ClientTab {
     Pi,
 }
 
+impl ClientTab {
+    pub(super) fn next(self) -> Self {
+        match self {
+            Self::Claude => Self::Codex,
+            Self::Codex => Self::Pi,
+            Self::Pi => Self::Claude,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Pi => "Pi",
+        }
+    }
+}
+
 pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 3] {
     let mut x = area.x.saturating_add(1);
     [
@@ -90,11 +108,7 @@ impl App {
             } else {
                 Style::default().fg(Color::White).bg(SELECTION)
             };
-            let label = match tab {
-                ClientTab::Claude => "Claude Code",
-                ClientTab::Codex => "Codex",
-                ClientTab::Pi => "Pi",
-            };
+            let label = tab.label();
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)

@@ -66,11 +66,7 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    if self.codex_ui.enabled {
-                        "  Providers · F2 Pi"
-                    } else {
-                        "  Providers · F2 Codex"
-                    },
+                    format!("  Providers · F2 {}", self.client_tab().next().label()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
