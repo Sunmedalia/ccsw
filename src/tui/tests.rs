@@ -1953,5 +1953,53 @@ fn pi_help_is_client_specific_and_codex_account_buttons_are_clickable() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("Browser login"));
+    assert!(text.contains("Import current login"));
+}
+
+#[test]
+fn codex_account_provider_and_help_use_shared_navigation() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Codex);
+    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("ChatGPT Account"));
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        },
+        Rect::new(0, 0, 120, 36),
+    )
+    .unwrap();
+    assert!(app.codex_ui.accounts);
+    app.open_help();
+    assert!(matches!(app.modal, Some(Modal::Help(_))));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("2 Accounts"));
+    assert!(text.contains("No quota queries"));
+    app.handle_modal(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(
+        app.modal,
+        Some(Modal::Help(HelpModal {
+            section: HelpSection::Provider,
+            ..
+        }))
+    ));
 }

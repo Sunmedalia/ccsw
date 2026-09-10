@@ -7,20 +7,15 @@ use std::sync::{
 };
 
 enum Update {
-    Message(String),
     Select(String),
     Login(Option<String>, String),
     Done(std::result::Result<String, String>),
 }
 #[derive(Clone)]
 enum Input {
-    Login,
-    Device,
     Import,
     ImportFile,
-    Rename(String),
     Reasoning,
-    Delete(String),
     Disconnect,
 }
 pub(super) struct CodexUi {
@@ -36,7 +31,6 @@ pub(super) struct CodexUi {
     receiver: Receiver<Update>,
     input: Option<Input>,
     field: String,
-    pub help: bool,
     status_view: bool,
     help_scroll: u16,
     scroll_max: std::cell::Cell<u16>,
@@ -58,15 +52,40 @@ impl Default for CodexUi {
             receiver,
             input: None,
             field: String::new(),
-            help: false,
             status_view: false,
             help_scroll: 0,
             scroll_max: std::cell::Cell::new(200),
-            message: "n login · i import current · p use · r refresh · F3 API Providers".into(),
+            message: "i import current · I import file · p use · Esc providers".into(),
         }
     }
 }
 impl App {
+    pub(super) fn open_codex_accounts(&mut self) {
+        if !self.codex_ui.accounts {
+            let _ = self.handle_codex_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+        }
+    }
+    pub(super) fn chatgpt_provider_lines(&self) -> Vec<Line<'static>> {
+        let selected = matches!(
+            self.config.codex.active,
+            Some(service::Selection::Account { .. })
+        );
+        vec![
+            Line::styled(
+                if selected {
+                    "● ChatGPT Account"
+                } else {
+                    "○ ChatGPT Account"
+                },
+                Style::default().fg(ROUTE),
+            ),
+            Line::raw(format!(
+                "{} saved accounts · Enter / click to switch",
+                self.config.codex.accounts.len()
+            )),
+        ]
+    }
+
     fn codex_job(
         &mut self,
         work: impl FnOnce(AppPaths, Arc<AtomicBool>, Sender<Update>) -> Result<String> + Send + 'static,
@@ -104,9 +123,6 @@ impl App {
                     self.codex_ui.live_id = id;
                     self.codex_ui.live_message = message;
                 }
-                Update::Message(message) => {
-                    self.codex_ui.message = message;
-                }
                 Update::Done(result) => {
                     self.codex_ui.busy = false;
                     self.status_error = result.is_err();
@@ -143,15 +159,13 @@ impl App {
             .nth(self.codex_ui.selected)
             .cloned()
     }
-    fn refresh_codex_account(&mut self) {
-        if let Some(id) = self.selected_codex_account() {
-            self.codex_job(move |paths, _, _| {
-                service::accounts::refresh(&paths, &id)?;
-                Ok("Account limits refreshed".into())
-            });
-        }
-    }
     pub(super) fn apply_codex(&mut self) {
+        if self.view_mode == ViewMode::Home
+            && (self.home_all_selected || self.config.profiles.is_empty())
+        {
+            self.open_codex_accounts();
+            return;
+        }
         let Some(profile) = self.selected_profile_id() else {
             self.set_error("Select a provider and model to apply to Codex");
             return;
@@ -170,16 +184,12 @@ impl App {
         self.codex_ui.field = initial;
     }
     pub(super) fn codex_navigation_blocked(&self) -> bool {
-        self.codex_ui.busy
-            || self.codex_ui.help
-            || self.codex_ui.status_view
-            || self.codex_ui.input.is_some()
+        self.codex_ui.busy || self.codex_ui.status_view || self.codex_ui.input.is_some()
     }
     pub(super) fn handle_codex_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
-        if self.codex_ui.help || self.codex_ui.status_view {
+        if self.codex_ui.status_view {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
-                    self.codex_ui.help = false;
                     self.codex_ui.status_view = false;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -213,19 +223,7 @@ impl App {
                 KeyCode::Enter => {
                     let text = self.codex_ui.field.trim().to_owned();
                     self.codex_ui.input = None;
-                    self.codex_job(move |paths, cancel, sender| match input {
-                        Input::Login | Input::Device => {
-                            let device = matches!(input, Input::Device);
-                            let id =
-                                service::accounts::login(&paths, &text, device, &cancel, |m| {
-                                    let _ = sender.send(Update::Message(m));
-                                })?;
-                            let _ = sender.send(Update::Select(id));
-                            Ok(
-                                "Account saved and highlighted · p activates subscription login"
-                                    .into(),
-                            )
-                        }
+                    self.codex_job(move |paths, _, sender| match input {
                         Input::Import => {
                             let id = service::accounts::import(&paths, &text, None)?;
                             let _ = sender.send(Update::Select(id));
@@ -242,11 +240,7 @@ impl App {
                                 .unwrap_or("Imported account");
                             let id = service::accounts::import(&paths, name, Some(&path))?;
                             let _ = sender.send(Update::Select(id));
-                            Ok("Account imported and highlighted · e rename · p activate".into())
-                        }
-                        Input::Rename(id) => {
-                            service::accounts::rename(&paths, &id, &text)?;
-                            Ok("Account renamed".into())
+                            Ok("Account imported and highlighted · p activate".into())
                         }
                         Input::Reasoning => {
                             service::validate_reasoning(&text)?;
@@ -255,13 +249,6 @@ impl App {
                                 Ok(())
                             })?;
                             Ok("Reasoning saved · p apply to Codex".into())
-                        }
-                        Input::Delete(id) => {
-                            if text != "delete" {
-                                anyhow::bail!("Deletion cancelled");
-                            }
-                            service::accounts::remove(&paths, &id)?;
-                            Ok("Saved account removed".into())
                         }
                         Input::Disconnect => {
                             if text != "disconnect" {
@@ -278,6 +265,14 @@ impl App {
         }
         if !self.codex_ui.enabled {
             return Ok(None);
+        }
+        if key.code == KeyCode::Enter
+            && !self.codex_ui.accounts
+            && self.view_mode == ViewMode::Home
+            && (self.home_all_selected || self.config.profiles.is_empty())
+        {
+            self.open_codex_accounts();
+            return Ok(Some(false));
         }
         match key.code {
             KeyCode::F(3) => {
@@ -304,8 +299,7 @@ impl App {
                 return Ok(Some(false));
             }
             KeyCode::Char('?') => {
-                self.codex_ui.help = true;
-                self.codex_ui.help_scroll = 0;
+                self.open_help();
                 return Ok(Some(false));
             }
             KeyCode::Char('g') if !self.codex_ui.accounts => {
@@ -350,24 +344,8 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1)
             }
-            KeyCode::Char('n') => self.codex_input(Input::Login, String::new()),
-            KeyCode::Char('N') => self.codex_input(Input::Device, String::new()),
             KeyCode::Char('i') => self.codex_input(Input::Import, String::new()),
             KeyCode::Char('I') => self.codex_input(Input::ImportFile, String::new()),
-            KeyCode::Char('e') => {
-                if let Some(id) = self.selected_codex_account() {
-                    self.codex_input(
-                        Input::Rename(id.clone()),
-                        self.config.codex.accounts[&id].name.clone(),
-                    );
-                }
-            }
-            KeyCode::Char('x') => {
-                if let Some(id) = self.selected_codex_account() {
-                    self.codex_input(Input::Delete(id), String::new());
-                }
-            }
-            KeyCode::Char('r') => self.refresh_codex_account(),
             KeyCode::Char('p') | KeyCode::Enter => {
                 if let Some(id) = self.selected_codex_account() {
                     self.codex_job(move |paths, _, _| {
@@ -384,10 +362,10 @@ impl App {
         Ok(Some(false))
     }
     pub(super) fn codex_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<bool> {
-        if !self.codex_ui.enabled {
+        if !self.codex_ui.enabled || self.modal.is_some() {
             return Ok(false);
         }
-        if self.codex_ui.help || self.codex_ui.status_view {
+        if self.codex_ui.status_view {
             if matches!(mouse.kind, MouseEventKind::ScrollDown) {
                 self.codex_ui.help_scroll =
                     (self.codex_ui.help_scroll + 1).min(self.codex_ui.scroll_max.get());
@@ -401,12 +379,26 @@ impl App {
             return Ok(true);
         }
         if !self.codex_ui.accounts {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && mouse.row == area.y + 1
+                && mouse.column < area.x + 20
+            {
+                self.open_codex_accounts();
+                return Ok(true);
+            }
             return Ok(false);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
             for (key, _, rect) in account_buttons(area) {
                 if mouse.column >= rect.x && mouse.column < rect.right() && mouse.row == rect.y {
-                    self.handle_codex_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))?;
+                    self.handle_codex_key(KeyEvent::new(
+                        if key == '\u{1b}' {
+                            KeyCode::Esc
+                        } else {
+                            KeyCode::Char(key)
+                        },
+                        KeyModifiers::NONE,
+                    ))?;
                     return Ok(true);
                 }
             }
@@ -453,7 +445,7 @@ impl App {
         ])
         .split(area);
         frame.render_widget(
-            Paragraph::new("CCSW · Codex Accounts · F3 API Providers · ? Help")
+            Paragraph::new("Codex Accounts · ChatGPT provider · Esc back · ? Help")
                 .style(Style::default().fg(ROUTE)),
             Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
         );
@@ -476,7 +468,7 @@ impl App {
                 let active = self.config.codex.active
                     == Some(service::Selection::Account { id: id.clone() });
                 ListItem::new(format!(
-                    "{}{} {} · {} · {}",
+                    "{}{} {} · {}",
                     if active { "[Selected] " } else { "" },
                     if self.codex_ui.live_id.as_ref() == Some(id) {
                         "[Local login]"
@@ -484,32 +476,26 @@ impl App {
                         "○"
                     },
                     account.name,
-                    account.email,
-                    account.plan.as_deref().unwrap_or("unknown")
+                    account.email
                 ))
             })
             .collect::<Vec<_>>();
         let mut state = ListState::default().with_selected(Some(self.codex_ui.selected));
         frame.render_stateful_widget(
             List::new(items)
-                .block(panel(
-                    " Accounts · n login · i import · e rename · p use ",
-                    true,
-                ))
+                .block(panel(" ChatGPT accounts ", true))
                 .highlight_style(Style::default().bg(SELECTION)),
             rows[1],
             &mut state,
         );
-        let details = self
-            .selected_codex_account()
-            .and_then(|id| service::accounts::summary(&self.paths, &id).ok())
-            .unwrap_or(
-                "No subscription accounts.\nn: browser login · i: import current login".into(),
-            );
+        let details = self.selected_codex_account()
+            .and_then(|id| self.config.codex.accounts.get(&id))
+            .map(|account| format!("{}\n{}\n\nUse selects the ChatGPT provider and this account.\nAPI providers use their own endpoint and model.\nNo account or quota requests are made.", account.name, account.email))
+            .unwrap_or("Import your current Codex login, or import an auth.json file. Then select an account and press p / Enter.".into());
         let details = format!("{}\n\n{details}", self.codex_ui.message);
         frame.render_widget(
             Paragraph::new(details)
-                .block(panel(" Subscription & limits · r refresh ", false))
+                .block(panel(" Switch account ", false))
                 .wrap(Wrap { trim: false }),
             rows[2],
         );
@@ -526,13 +512,9 @@ impl App {
             return;
         }
         let title = self.codex_ui.input.as_ref().map(|input| match input {
-            Input::Login => "Browser login · account name",
-            Input::Device => "Device login · account name",
             Input::Import => "Import current login · account name",
             Input::ImportFile => "Import auth.json · absolute file path",
-            Input::Rename(_) => "Rename account",
             Input::Reasoning => "Reasoning: none/minimal/low/medium/high/xhigh",
-            Input::Delete(_) => "Type delete to remove saved account",
             Input::Disconnect => "Type disconnect to restore previous configuration",
         });
         if let Some(title) = title {
@@ -552,7 +534,7 @@ impl App {
                 .wrap(Wrap { trim: false }),
                 popup,
             );
-        } else if self.codex_ui.help || self.codex_ui.status_view {
+        } else if self.codex_ui.status_view {
             let popup = Rect::new(
                 area.x + 1,
                 area.y + 1,
@@ -560,17 +542,8 @@ impl App {
                 area.height.saturating_sub(2),
             );
             frame.render_widget(Clear, popup);
-            let text = "CODEX · API PROVIDERS\nTop tabs / F2: switch independent client configurations\nF3: API Providers / Subscription Accounts\nn: new provider · Enter: open models\ne: edit provider on Home; edit model on model page\nE: edit provider · a: add model · Space: enable model\np: apply selected API model · g: API reasoning\n\nSUBSCRIPTION ACCOUNTS\nn: browser login · N: device login (enter an account name)\ni: import current login · I: import auth.json by absolute path\nImport saves and highlights an account; p / Enter activates it.\ne: rename · x: remove saved account (type delete to confirm)\nr: refresh selected account limits; entering this page is offline\n[Selected]: CCSW selection · [Local login]: credentials on disk\nAPI mode can retain subscription credentials without using them.\nLocal identity is not proof that credentials are valid; r checks online.\n\nSTATUS & RECOVERY\ns: inspect local login and configuration · D: disconnect (type disconnect)\nModel/reasoning changes in Codex can be replaced with p.\nProvider/connection conflicts: restore the changed setting or D, then p.\nInterrupted transaction: run ccsw codex recover.\nDisconnect before deleting the selected account.\nRestart Codex CLI / Codex App and open a new chat after switching.\nCLI and App use the targeted CODEX_HOME; project/launch overrides may win.\nCached limits survive refresh failures; r retries.\nEsc: cancel login / back · q: quit\n\nHELP\nUp/Down, PgUp/PgDn or mouse wheel: scroll · Esc / ?: close";
-            let text = if self.codex_ui.status_view {
-                self.codex_ui.message.as_str()
-            } else {
-                text
-            };
-            let title = if self.codex_ui.status_view {
-                " Codex Status · ↑↓ scroll · Esc close "
-            } else {
-                " Codex Help · ↑↓ scroll · Esc close "
-            };
+            let text = self.codex_ui.message.as_str();
+            let title = " Codex Status · ↑↓ scroll · Esc close ";
             let max_scroll = text
                 .lines()
                 .map(|line| {
@@ -600,14 +573,10 @@ fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
     let mut x = area.x;
     let mut y = area.bottom().saturating_sub(3);
     for (key, label) in [
-        ('n', " n Login "),
         ('i', " i Import "),
+        ('I', " I File "),
         ('p', " p Use "),
-        ('e', " e Rename "),
-        ('r', " r Limits "),
-        ('s', " s Status "),
-        ('x', " x Remove "),
-        ('D', " D Disconnect "),
+        ('\u{1b}', " Back "),
     ] {
         let width = label.len() as u16;
         if x + width > area.right() {

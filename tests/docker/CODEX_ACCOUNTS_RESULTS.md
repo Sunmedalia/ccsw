@@ -14,3 +14,13 @@ Real retained login validation used `tests/docker/codex_current_login.py` with `
 Import and activation passed; disconnect restored the original configuration. The input copies and credentials were unchanged. The retained `/root/codex-test` directory was not removed.
 
 The installed Codex rejected `account/rateLimits/read`. The test recorded a refresh error and no cached quota; quota retrieval is **not** verified as successful. Local identity display does not establish remote credential validity or prove a running Codex App switched accounts.
+
+## Simplified ChatGPT provider workflow
+
+The subsequent account-provider change passed 143 Rust tests on macOS and Debian, plus the real PTY client-isolation test. The TUI now exposes ChatGPT Account as a provider and a clickable entry, with Import, File, Use and Back buttons. Help uses the shared Claude modal with Providers / Accounts / Models / Forms sections.
+
+`codex_account_switch.py` imported the retained previous and newly copied local login. Their identities differed. Switching previous → current → previous → current matched each expected auth file and selected `model_provider = "openai"`. Installed Codex recognized the final ChatGPT login via `codex login status`. No quota calls or remote credential validation were performed. Both retained inputs were unchanged.
+
+Default Debian CCSW now has `Current ChatGPT` selected and its live auth matches the new copy. `Previous (revoked)` remains saved for the user's inspection. The old revoked token was not tested with remote requests and cannot be repaired by switching accounts.
+
+Regression tests also verify that reimported fresh credentials are not overwritten by a revoked live copy of the same identity, and that ChatGPT does not inherit third-party model settings from an unmanaged API configuration.

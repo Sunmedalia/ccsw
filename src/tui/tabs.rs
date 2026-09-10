@@ -74,7 +74,7 @@ impl App {
         self.initialize_background();
         self.status = match tab {
             ClientTab::Claude => "Claude Code · p sync · F2 next tab",
-            ClientTab::Codex => "Codex · F3 API / Accounts · F2 next tab",
+            ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
         }
         .into();

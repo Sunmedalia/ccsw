@@ -440,7 +440,12 @@ pub(super) fn commit(
         }
     }
     state.before = baseline.to_string();
-    accounts::capture_current(paths, previous_auth.as_ref())?;
+    let replacing_same_account = auth.is_some()
+        && matches!(&selection,
+        Selection::Account { id } if previous_auth.as_ref().and_then(|a| accounts::identity(a).ok()).is_some_and(|a| &a.id == id));
+    if !replacing_same_account {
+        accounts::capture_current(paths, previous_auth.as_ref())?;
+    }
     state.managed = KEYS
         .iter()
         .map(|key| ((*key).into(), get(new, key)))
@@ -476,6 +481,11 @@ pub(super) fn commit(
             }
             if !matches!(config.codex.active, Some(Selection::Api { .. }))
                 && matches!(selection, Selection::Api { .. })
+                && old
+                    .get("model_provider")
+                    .and_then(Item::as_str)
+                    .is_none_or(|p| p == "openai")
+                && old.get("openai_base_url").is_none()
             {
                 config.codex.subscription_model =
                     old.get("model").and_then(Item::as_str).map(str::to_owned);

@@ -33,6 +33,9 @@ impl App {
             )
             .len(),
         ];
+        if self.codex_ui.enabled {
+            heights[0] = self.chatgpt_provider_lines().len();
+        }
         heights.extend(self.profile_ids().iter().map(|id| {
             let profile = &self.config.profiles[id];
             let discovered = self
@@ -205,7 +208,9 @@ impl App {
             let next = ((current as isize + delta).rem_euclid(len as isize)) as usize;
             self.select_home_index(next);
             self.status_error = false;
-            self.status = if self.home_all_selected {
+            self.status = if self.home_all_selected && self.codex_ui.enabled {
+                "ChatGPT Account · Enter to import or switch accounts".into()
+            } else if self.home_all_selected {
                 format!(
                     "All Models · {} models · Enter manage models",
                     self.all_enabled_model_count()
@@ -464,6 +469,10 @@ impl App {
     }
 
     pub(super) fn enter_all_enabled_view(&mut self) {
+        if self.codex_ui.enabled {
+            self.open_codex_accounts();
+            return;
+        }
         self.view_mode = ViewMode::AllEnabled;
         self.focus = Focus::Models;
         self.model_idx = self
@@ -553,12 +562,12 @@ impl App {
     }
 
     pub(super) fn open_help(&mut self) {
-        if self.codex_ui.enabled {
-            self.codex_ui.help = true;
-            return;
-        }
         let mut help = HelpModal::for_view(self.view_mode);
         help.pi = self.pi_enabled;
+        help.codex = self.codex_ui.enabled;
+        if help.codex && self.codex_ui.accounts {
+            help.section = HelpSection::AllEnabled;
+        }
         self.modal = Some(Modal::Help(help));
     }
 

@@ -131,12 +131,19 @@ pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static
 
 pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal) {
     let compact = area.width < 58 || area.height < 14;
-    let title = if compact {
-        format!(" Help · {} · Esc ", help.section.label())
+    let label = if help.codex {
+        ["Providers", "Accounts", "Models", "Forms"][help.section.index()]
     } else {
-        format!(" Help · {} ", help.section.label())
+        help.section.label()
     };
-    let title = if help.pi {
+    let title = if compact {
+        format!(" Help · {} · Esc ", label)
+    } else {
+        format!(" Help · {} ", label)
+    };
+    let title = if help.codex {
+        title.replacen("Help", "Codex Help", 1)
+    } else if help.pi {
         title.replacen("Help", "Pi Help", 1)
     } else {
         title
@@ -158,7 +165,28 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     let tab_height = if compact { 2 } else { 1 }.min(usable.height);
     let tabs = Rect::new(usable.x, usable.y, usable.width, tab_height);
     frame.render_widget(
-        Paragraph::new(help_tabs(help.section)).wrap(Wrap { trim: true }),
+        Paragraph::new(if help.codex {
+            Line::from(
+                HelpSection::ALL
+                    .iter()
+                    .enumerate()
+                    .map(|(i, section)| {
+                        let label = ["Providers", "Accounts", "Models", "Forms"][i];
+                        Span::styled(
+                            format!(" {} {} ", i + 1, label),
+                            if *section == help.section {
+                                Style::default().fg(Color::Black).bg(ROUTE)
+                            } else {
+                                Style::default().fg(MUTED)
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            help_tabs(help.section)
+        })
+        .wrap(Wrap { trim: true }),
         tabs,
     );
 
@@ -192,7 +220,9 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     );
     if content.height > 0 {
         frame.render_widget(
-            Paragraph::new(if help.pi {
+            Paragraph::new(if help.codex {
+                codex_help_content(help.section)
+            } else if help.pi {
                 pi_help_content(help.section)
             } else {
                 help_content(help.section, area.width >= 58)
@@ -239,4 +269,77 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
         Line::raw("Pi connects directly to the API; no CCSW proxy or Codex subscription accounts."),
     ]);
     lines
+}
+
+fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
+    let rows: &[(&str, &str)] = match section {
+        HelpSection::Home => &[
+            (
+                "Account / F3",
+                "Open ChatGPT accounts; also available as the first provider",
+            ),
+            ("Enter / click", "Open selected provider or ChatGPT Account"),
+            ("n / e / x", "Add / edit / remove an API provider"),
+            (
+                "p",
+                "Use selected API provider; Account opens account selection",
+            ),
+            (
+                "Top tabs / F2",
+                "Switch independent Claude / Codex / Pi configurations",
+            ),
+            (
+                "",
+                "Exactly one provider is selected: ChatGPT account or API provider.",
+            ),
+        ],
+        HelpSection::AllEnabled => &[
+            ("i", "Import current Codex login; enter a name"),
+            ("I", "Import an auth.json file by absolute path"),
+            ("Up/Down", "Select a saved account"),
+            (
+                "p / Enter / Use",
+                "Activate the account and ChatGPT provider",
+            ),
+            ("Esc / Back", "Return to API providers"),
+            (
+                "",
+                "Import highlights the account; Use activates it. No quota queries.",
+            ),
+            (
+                "",
+                "Revoked token: sign in with Codex, then reimport the fresh login.",
+            ),
+            (
+                "",
+                "Restart Codex CLI / App and open a new chat after switching.",
+            ),
+        ],
+        HelpSection::Provider => &[
+            ("a / e / E", "Add model / edit model / edit provider"),
+            ("r", "Fetch API models"),
+            (
+                "Space / d / 1",
+                "Enable model / set default / toggle 1M context",
+            ),
+            ("p / g", "Use API model / set reasoning"),
+            (
+                "s / D",
+                "Local status / disconnect and restore managed settings",
+            ),
+            (
+                "",
+                "API selection uses its endpoint and model; ChatGPT uses saved login.",
+            ),
+        ],
+        HelpSection::Forms => return help_content(section, false),
+    };
+    rows.iter()
+        .map(|(key, action)| {
+            Line::from(vec![
+                Span::styled(format!("{key}  "), Style::default().fg(WARNING)),
+                Span::raw(*action),
+            ])
+        })
+        .collect()
 }

@@ -16,6 +16,9 @@ impl App {
         }
         if self.codex_ui.enabled && self.codex_ui.accounts {
             self.draw_codex_accounts(frame, area);
+            if let Some(modal) = &self.modal {
+                self.draw_modal(frame, modal);
+            }
             return;
         }
         let rows = app_rows(area);
@@ -60,8 +63,25 @@ impl App {
             ])
         } else if self.codex_ui.enabled {
             Line::from(vec![
-                Span::styled(" CCSW · Codex API ", Style::default().fg(ROUTE)),
-                Span::raw("F2 Pi · F3 Accounts · p Apply"),
+                Span::styled(
+                    " Account · ChatGPT ",
+                    Style::default().fg(ROUTE).bg(SELECTION),
+                ),
+                Span::raw(match &self.config.codex.active {
+                    Some(crate::codex::Selection::Account { id }) => format!(
+                        " Active: ChatGPT / {}",
+                        self.config
+                            .codex
+                            .accounts
+                            .get(id)
+                            .map(|a| a.name.as_str())
+                            .unwrap_or("account")
+                    ),
+                    Some(crate::codex::Selection::Api { profile, .. }) => {
+                        format!(" Active: API / {profile}")
+                    }
+                    None => " Select a provider · p Use".into(),
+                }),
             ])
         } else {
             match self.view_mode {
@@ -148,6 +168,11 @@ impl App {
                 self.all_managed_models().len(),
                 content_width,
             );
+            let lines = if self.codex_ui.enabled {
+                self.chatgpt_provider_lines()
+            } else {
+                lines
+            };
             item_heights.push(lines.len());
             items.push(ListItem::new(lines));
         }
@@ -817,6 +842,11 @@ impl App {
     }
 
     pub(super) fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
+        if self.codex_ui.enabled && self.home_all_selected && self.view_mode == ViewMode::Home {
+            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nUse an API provider to switch back to its endpoint and model.")
+                .block(panel(" ChatGPT provider ", active)).wrap(Wrap { trim: false }), area);
+            return;
+        }
         let Some(profile) = self.selected_profile() else {
             let title = if active {
                 " Provider details · Esc back "

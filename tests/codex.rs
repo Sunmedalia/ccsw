@@ -361,3 +361,39 @@ fn external_model_change_allows_account_switch_and_is_restored_on_disconnect() {
     assert_eq!(doc["model"].as_str(), Some("chosen-in-codex"));
     assert_eq!(doc["model_reasoning_effort"].as_str(), Some("high"));
 }
+
+#[test]
+fn freshly_imported_credentials_replace_revoked_live_copy_of_same_account() {
+    let s = Sandbox::new();
+    let old = auth("same", "workspace", "revoked-refresh");
+    let fresh = auth("same", "workspace", "fresh-refresh");
+    s.save_auth(&old);
+    let id = s.add("Renewed", &fresh);
+    s.ok(&["codex", "accounts", "use", &id]);
+    assert_eq!(s.auth(), fresh);
+    let saved: Value = serde_json::from_slice(
+        &fs::read(
+            s.root
+                .path()
+                .join("state/ccsw/codex-accounts")
+                .join(id)
+                .join("auth.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved, fresh);
+}
+#[test]
+fn chatgpt_selection_does_not_inherit_unmanaged_api_model_settings() {
+    let s = Sandbox::new();
+    fs::write(s.home().join("config.toml"), "model_provider='custom'\nmodel='third-party'\nmodel_catalog_json='/tmp/custom.json'\nmodel_context_window=1000000\n").unwrap();
+    let id = s.add("ChatGPT", &auth("user", "workspace", "fresh"));
+    s.ok(&["codex", "accounts", "use", &id]);
+    let doc: toml::Value =
+        toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
+    assert_eq!(doc["model_provider"].as_str(), Some("openai"));
+    for key in ["model", "model_catalog_json", "model_context_window"] {
+        assert!(doc.get(key).is_none());
+    }
+}

@@ -264,7 +264,14 @@ pub fn activate(paths: &AppPaths, id: &str) -> Result<()> {
     }
     let home = home()?;
     let old = document(&home)?;
-    capture_current(paths, read_live_auth(&home, &old)?.as_ref())?;
+    let live = read_live_auth(&home, &old)?;
+    if live
+        .as_ref()
+        .and_then(|a| identity(a).ok())
+        .is_none_or(|a| a.id != id)
+    {
+        capture_current(paths, live.as_ref())?;
+    }
     let auth = read_auth(&account_dir(paths, id)?.join("auth.json"))?;
     if identity(&auth)?.id != id {
         bail!("Saved credentials belong to another account; reimport this account");
@@ -292,12 +299,16 @@ pub fn activate(paths: &AppPaths, id: &str) -> Result<()> {
         .map(|binding| binding.before.parse::<DocumentMut>())
         .transpose()?
         .unwrap_or(old.clone());
-    if let Some(model) = config
-        .codex
-        .subscription_model
-        .as_deref()
-        .or_else(|| previous.get("model").and_then(Item::as_str))
-    {
+    let subscription_baseline = previous
+        .get("model_provider")
+        .and_then(Item::as_str)
+        .is_none_or(|provider| provider == "openai")
+        && previous.get("openai_base_url").is_none();
+    if let Some(model) = config.codex.subscription_model.as_deref().or_else(|| {
+        subscription_baseline
+            .then(|| previous.get("model").and_then(Item::as_str))
+            .flatten()
+    }) {
         new["model"] = value(model);
     } else {
         new.remove("model");
@@ -308,7 +319,11 @@ pub fn activate(paths: &AppPaths, id: &str) -> Result<()> {
         "model_auto_compact_token_limit",
         "model_reasoning_effort",
     ] {
-        super::restore_key(&mut new, &previous, key);
+        if subscription_baseline {
+            super::restore_key(&mut new, &previous, key);
+        } else {
+            new.remove(key);
+        }
     }
     if let Some(effort) = &config.codex.subscription_reasoning {
         new["model_reasoning_effort"] = value(effort);

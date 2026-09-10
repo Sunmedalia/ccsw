@@ -108,6 +108,7 @@ impl HelpSection {
 #[derive(Clone)]
 pub(super) struct HelpModal {
     pub(super) pi: bool,
+    pub(super) codex: bool,
     pub(super) section: HelpSection,
     pub(super) scroll: u16,
 }
@@ -121,6 +122,7 @@ impl HelpModal {
         };
         Self {
             pi: false,
+            codex: false,
             section,
             scroll: 0,
         }

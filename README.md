@@ -235,42 +235,30 @@ ccsw codex disconnect
 
 ### Codex 订阅账号
 
-| 按键 | 操作 |
+Codex 的提供商列表首项为 **ChatGPT Account**，也可以点击顶部 **Account · ChatGPT** 按钮进入。选择账号后按 `p` / `Enter` / **Use**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，顶部显示生效的 CCSW 选择。切换账号时不继承第三方模型目录和上下文参数。
+
+账号页只提供导入与切换，不进行额度查询或浏览器登录：
+
+| 按键 / 按钮 | 操作 |
 | --- | --- |
-| `n` / `N` | 浏览器登录 / 设备码登录，完成后保存账号 |
-| `i` / `I` | 导入本机当前登录 / 指定 `auth.json` 路径 |
+| `i` / Import | 导入本机当前 Codex 登录，输入保存名称 |
+| `I` / File | 导入指定 `auth.json` 文件 |
 | `↑↓`、`j/k` | 选择账号 |
-| `e` | 重命名账号 |
-| `p`、`Enter` | 切换到选中账号 |
-| `r` | 刷新所选账号的套餐与额度 |
-| `x` | 删除保存的账号；需先切换或断开当前使用账号 |
-| `s` | 检查磁盘配置与登录冲突 |
-| `D` | 断开接管并恢复之前的受管配置 |
-| `?` | 帮助；`↑↓`、`PgUp/PgDn` 滚动 |
-| `Esc` | 取消登录或返回 API 页面 |
+| `p`、`Enter` / Use | 使用账号，同时切换为 ChatGPT 提供商 |
+| `Esc` / Back | 返回提供商列表 |
+| `?` | 与 Claude 一致的分栏 Help：Providers / Accounts / Models / Forms |
 
-账号页顶部显示目标 Codex 配置中的 Provider 和磁盘上的登录邮箱/套餐；`[Selected]` 表示 CCSW 已选择的账号，`[Local login]` 表示当前凭据对应的账号。API 模式也可能保留订阅凭据，不代表请求正在使用订阅。页面读取本地身份，不验证凭据是否有效；进入页面不会自动联网刷新额度，按 `r` 才查询。底部按钮支持鼠标点击，`s` 打开可滚动的完整状态窗口。
+导入成功后自动高亮，点击 Use 才激活。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
 
-登录或导入成功后自动高亮对应账号，按 `p` 才激活。Codex 和 Pi 的 `?` 帮助各自说明当前客户端的操作与恢复方式，Pi 帮助不再展示 Claude 的代理操作。
+切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Selected]` 是 CCSW 选择，`[Local login]` 是磁盘凭据身份；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
 
-在 Codex 内切换模型或推理强度后，可以直接回 CCSW 按 `p` 应用模型/账号，不再出现 `Codex setting model changed outside CCSW`。断开时恢复接管期间最后一次被 CCSW 覆盖的外部模型/推理设置。Provider、连接地址及凭据存储方式等发生外部变化仍会提示冲突：恢复对应字段，或按 `D` 断开后再应用。事务期间发生的配置变化仍会拒绝覆盖。
-
-新增账号在隔离目录中完成登录，不会自动切换当前账号。同一用户的不同工作区分别保存；重复导入相同身份会更新已有记录。重新登录失效账号时再次使用 `n`，完成相同身份登录即可更新凭据。
-
-切换前保存当前账号最新凭据，再写入目标账号。允许客户端运行时切换，但需要自行退出并重启 CLI / ChatGPT App；旧进程可能继续使用原账号或回写登录状态，`s` / `ccsw codex status` 会报告身份冲突。此时重启客户端后重新应用。App 可能共用整个 ChatGPT 登录身份，因此切换可能影响 App 主界面的账号。
-
-额度通过已安装 Codex 的 App Server 查询，展示其返回的套餐、各额度窗口使用比例及重置时间。失败时保留旧数据并标记过期；缺失信息显示未知。只查询选中的账号，不自动轮换账号，也不办理订阅购买、续费或取消。
+在 Codex 内切换模型或推理强度后，可以直接回 CCSW 按 `p` 应用。连接地址等受管字段发生外部变化时，按 `s` 查看，必要时按 `D` 断开后再应用；事务恢复使用 `ccsw codex recover`。
 
 ```sh
-ccsw codex accounts login --name personal
-ccsw codex accounts login --name work --device
-ccsw codex accounts import --name existing
-ccsw codex accounts import --name backup --file /absolute/path/auth.json
+ccsw codex accounts import --name current
+ccsw codex accounts import --name another --file /absolute/path/auth.json
 ccsw codex accounts list
 ccsw codex accounts use <account-id>
-ccsw codex accounts refresh <account-id>
-ccsw codex accounts rename <account-id> new-name
-ccsw codex accounts remove <account-id>
 ```
 
 ### Codex 文件与恢复
