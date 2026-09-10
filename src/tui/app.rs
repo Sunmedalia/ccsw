@@ -602,6 +602,10 @@ impl App {
     }
 
     pub(super) fn sync_all_to_claude(&mut self) {
+        if self.pi_enabled {
+            self.apply_pi();
+            return;
+        }
         if self.codex_ui.enabled {
             self.apply_codex();
             return;

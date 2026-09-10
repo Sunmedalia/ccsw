@@ -21,6 +21,8 @@ pub struct Config {
     #[serde(default)]
     pub codex: crate::codex::Settings,
     #[serde(default)]
+    pub pi: crate::pi::Settings,
+    #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
 }
 
@@ -29,6 +31,7 @@ impl Default for Config {
         Self {
             version: CONFIG_VERSION,
             codex: Default::default(),
+            pi: Default::default(),
             profiles: BTreeMap::new(),
         }
     }

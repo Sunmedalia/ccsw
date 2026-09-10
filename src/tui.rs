@@ -6,6 +6,7 @@ mod forms;
 mod help;
 mod layout;
 mod models;
+mod pi;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -78,6 +79,7 @@ pub struct App {
     provider_editor: Option<RouteEditor>,
     background: Background,
     codex_ui: codex::CodexUi,
+    pi_enabled: bool,
     screen: Rect,
 }
 
@@ -100,6 +102,7 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         proxy_status,
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
+        pi_enabled: false,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };

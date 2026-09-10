@@ -3,6 +3,7 @@ mod codex;
 mod config;
 mod discovery;
 mod import;
+mod pi;
 mod platform;
 mod proxy;
 mod sync;
@@ -25,7 +26,7 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 #[command(
     name = "ccsw",
     version,
-    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts"
+    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -34,6 +35,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage Pi Agent native API providers and models
+    Pi {
+        #[command(subcommand)]
+        command: pi::Command,
+    },
     /// Manage Codex CLI and desktop API settings and subscription accounts
     Codex {
         #[command(subcommand)]
@@ -144,6 +150,7 @@ fn main() -> Result<()> {
             tui::run(paths, config, import)
         }
         Some(Commands::Doctor) => doctor(&paths),
+        Some(Commands::Pi { command }) => pi::run(&paths, command),
         Some(Commands::Codex { command }) => codex::run(&paths, command),
         Some(Commands::Apply { profile }) => apply_to_claude(&paths, &profile),
         Some(Commands::Proxy { command }) => proxy_command(&paths, command),

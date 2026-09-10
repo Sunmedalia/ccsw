@@ -135,6 +135,9 @@ impl App {
         self.codex_ui.input = Some(input);
         self.codex_ui.field = initial;
     }
+    pub(super) fn codex_navigation_blocked(&self) -> bool {
+        self.codex_ui.busy || self.codex_ui.help || self.codex_ui.input.is_some()
+    }
     pub(super) fn handle_codex_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
         if self.codex_ui.help {
             match key.code {
@@ -224,17 +227,6 @@ impl App {
                 }
                 _ => {}
             }
-            return Ok(Some(false));
-        }
-        if key.code == KeyCode::F(2) {
-            self.codex_ui.enabled = !self.codex_ui.enabled;
-            self.return_home();
-            self.status = if self.codex_ui.enabled {
-                "Codex · F3 Accounts · select provider, p apply"
-            } else {
-                "Claude · F2 Codex"
-            }
-            .into();
             return Ok(Some(false));
         }
         if !self.codex_ui.enabled {
@@ -397,7 +389,7 @@ impl App {
         ])
         .split(area);
         frame.render_widget(
-            Paragraph::new("CCSW · Codex Accounts\nF2 Claude · F3 API Providers · ? Help")
+            Paragraph::new("CCSW · Codex Accounts\nF2 Pi · F3 API Providers · ? Help")
                 .style(Style::default().fg(ROUTE)),
             rows[0],
         );
@@ -485,7 +477,7 @@ impl App {
                 area.height.saturating_sub(2),
             );
             frame.render_widget(Clear, popup);
-            let text = "F2  Claude / Codex\nF3  API Providers / Accounts\nAPI: n new provider · Enter models\ne edit provider on Home; model on model page\nE edit provider · a add model · p apply\ng reasoning · s status · D disconnect\nAccounts: n browser login · N device login\ni import current · I import auth.json\ne rename · x delete · p/Enter switch\nr refresh limits · s status\nEsc cancel login / back · ? close Help\n\nSwitching writes shared configuration.\nRestart CLI / ChatGPT App and open a new chat.\nLimits are cached; refresh failures keep old data.";
+            let text = "F2  Claude / Codex / Pi\nF3  API Providers / Accounts\nAPI: n new provider · Enter models\ne edit provider on Home; model on model page\nE edit provider · a add model · p apply\ng reasoning · s status · D disconnect\nAccounts: n browser login · N device login\ni import current · I import auth.json\ne rename · x delete · p/Enter switch\nr refresh limits · s status\nEsc cancel login / back · ? close Help\n\nSwitching writes shared configuration.\nRestart CLI / ChatGPT App and open a new chat.\nLimits are cached; refresh failures keep old data.";
             frame.render_widget(
                 Paragraph::new(text)
                     .block(panel(" Codex Help · ↑↓ scroll ", true))

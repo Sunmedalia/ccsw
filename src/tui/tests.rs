@@ -26,6 +26,7 @@ fn renders_empty_state_in_narrow_terminal() {
         proxy_status: None,
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
+        pi_enabled: false,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };
@@ -1245,6 +1246,7 @@ fn interactive_test_app() -> App {
         proxy_status: None,
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
+        pi_enabled: false,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     }
@@ -1756,5 +1758,42 @@ fn codex_navigation_preserves_provider_editing_and_has_scrollable_help() {
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
+    assert!(!app.codex_ui.enabled);
+}
+
+#[test]
+fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
+    let (_temp, mut app) = persisted_app();
+    for _ in 0..2 {
+        app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+            .unwrap();
+    }
+    assert!(app.pi_enabled);
+    assert!(!app.codex_ui.enabled);
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Profile(_))));
+    app.modal = None;
+    app.enter_provider_view();
+    app.focus = Focus::Details;
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Model(_))));
+    app.modal = None;
+    for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(text.contains("Pi API"));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.pi_enabled);
     assert!(!app.codex_ui.enabled);
 }

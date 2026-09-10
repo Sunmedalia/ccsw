@@ -11,7 +11,9 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("r / t", "Test connection and fetch model catalog"),
             ("A", "Enable all models in the selected provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
-            ("F2", "Switch Claude / Codex management"),
+            ("F2", "Switch Claude / Codex / Pi management"),
+            ("Pi: i / s / D", "Import API config / status / disconnect"),
+            ("Pi: p", "Sync enabled models directly to Pi"),
             ("q", "Quit CCSW"),
         ],
         HelpSection::AllEnabled => &[

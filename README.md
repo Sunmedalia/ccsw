@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CCSW 是 Claude Code 与 Codex 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
+CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
 
 它提供三个核心能力：
 
@@ -14,7 +14,7 @@ CCSW 是 Claude Code 与 Codex 的多厂商、多模型配置管理器，支持�
 
 > 本文对应 main 分支。模型 Token 参数、模型表单 `Alt+1` 和完整卸载功能尚未包含在 v0.1.4 中；使用这些功能请从源码安装。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
@@ -156,11 +156,57 @@ ccsw import --yes
 
 模型刷新、代理管理和同步在后台执行，等待时仍可导航。重复刷新同一厂商会合并提示；过期请求不会覆盖新表单或已修改的厂商配置。
 
+## Pi Agent 配置
+
+> 源码版本功能，尚未包含在 v0.1.4 发布包中。使用源码构建的新二进制；当前兼容验证基准为 Pi `0.85.1`。
+
+按 `F2` 切换到 **Pi API**。厂商及模型目录与 Claude/Codex 共用，Pi 的接入和默认模型独立保存。
+
+| 按键 | 操作 |
+| --- | --- |
+| `i` | 导入现有 Pi 自定义 API 厂商和模型；重复导入更新原导入项 |
+| `e` | 厂商页面编辑厂商；模型页面编辑模型 |
+| `E` | 编辑所属厂商 |
+| `p` | 同步全部已启用厂商和模型，并将选中模型设为 Pi 默认值 |
+| `s` | 查看磁盘配置状态、待同步或外部编辑冲突 |
+| `D` | 断开管理，恢复仍属于 CCSW 的配置字段 |
+
+首次按 `p` 后，TUI 中的厂商、模型修改会自动同步到 Pi。若当前默认模型被禁用，优先选择同厂商的可用默认模型，再选择其他启用模型；全部禁用时清除受管目录并恢复原默认值，接入记录保留。同步失败可按 `p` 重试。手动编辑 CCSW 文件后使用 CLI apply 或 TUI `p` 同步。
+
+```sh
+ccsw pi import --dry-run       # 预览导入，不执行凭据命令
+ccsw pi import
+ccsw pi apply --profile deepseek
+ccsw pi apply --profile deepseek --model deepseek-v4-flash
+ccsw pi status
+ccsw pi disconnect
+```
+
+Pi **直接连接厂商**，不启动或依赖 CCSW 代理。三种格式对应 Pi 原生 `anthropic-messages`、`openai-completions`、`openai-responses`。API Key 会写入 Pi 配置，Unix 文件权限为 0600；字符串按 Pi 规则转义。输出上限由 Pi 客户端使用，不是代理强制限制。
+
+- 目标目录遵循 `PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`。写入 `models.json` 的 `ccsw-<厂商 ID>` 项，以及 `settings.json` 的 `defaultProvider` / `defaultModel`。
+- 模型 ID 移除 `[1m]` 后缀；显式 Context window 优先，否则 `[1m]` 对应 1,000,000。Max output tokens 对应 Pi 的 `maxTokens`。其他能力使用 Pi 默认值，导入模型保留其兼容性、输入类型和推理能力配置。
+- 导入读取自定义厂商和普通 API Key。OAuth 令牌、命令或环境变量凭据、内置模型覆盖、混合协议和每模型独立认证等不支持项目会列出跳过原因，不执行命令。导入同名 CCSW 厂商时创建独立 ID。
+- 原有 Pi 厂商、主题、扩展、订阅登录、会话保留；不会修改 `auth.json`。原厂商与 `ccsw-` 项可同时出现在 Pi 中。本次不提供订阅多账号管理。
+- 在 Pi 内重新打开 `/model` 可重新加载目录；启动默认值请在新 Pi 进程中确认。命令行、项目设置和扩展可能覆盖全局配置。
+- 多文件写入保存事务日志。中断后重试 apply/disconnect 恢复；发生外部编辑冲突时不会覆盖。断开及卸载仅恢复仍与最后写入一致的受管字段。
+
+验证真实 Pi 进程（隔离 HOME、本地模拟上游，不使用真实凭据）：
+
+```sh
+cargo build
+SMOKE_FORMAT=anthropic python3 tests/fixtures/pi_cli_smoke.py
+SMOKE_FORMAT=openai-chat python3 tests/fixtures/pi_cli_smoke.py
+SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
+```
+
+可使用 `CCSW_TEST_BINARY` 和 `CCSW_PI_BIN` 指定 CCSW / Pi 二进制。
+
 ## Codex 配置与账号
 
 > 此功能属于源码版本，尚未包含在 v0.1.4 中。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
-在 TUI 中按 `F2` 切换 Claude / Codex，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
+在 TUI 中按 `F2` 循环切换 Claude / Codex / Pi，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
 
 ### Codex API
 

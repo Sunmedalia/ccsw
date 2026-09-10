@@ -46,10 +46,15 @@ impl App {
             .selected_model()
             .map(|model| model.label().to_owned())
             .unwrap_or_else(|| "no model".into());
-        let line = if self.codex_ui.enabled {
+        let line = if self.pi_enabled {
+            Line::from(vec![
+                Span::styled(" CCSW · Pi API ", Style::default().fg(ROUTE)),
+                Span::raw("F2 Claude · i Import · p Sync · s Status · D Disconnect"),
+            ])
+        } else if self.codex_ui.enabled {
             Line::from(vec![
                 Span::styled(" CCSW · Codex API ", Style::default().fg(ROUTE)),
-                Span::raw("F2 Claude · F3 Accounts · p Apply"),
+                Span::raw("F2 Pi · F3 Accounts · p Apply"),
             ])
         } else {
             match self.view_mode {
@@ -848,7 +853,9 @@ impl App {
             Span::styled(
                 format!(
                     " {} · ",
-                    if self.codex_ui.enabled {
+                    if self.pi_enabled {
+                        "Pi · direct API"
+                    } else if self.codex_ui.enabled {
                         "Codex · restart after apply"
                     } else {
                         self.background.status.label()
@@ -880,6 +887,12 @@ impl App {
         compact: bool,
         tiny: bool,
     ) -> (String, Style) {
+        if self.pi_enabled && control == FooterControl::Sync {
+            return (
+                "Sync Pi".into(),
+                Style::default().fg(Color::Black).bg(ROUTE),
+            );
+        }
         if self.codex_ui.enabled && control == FooterControl::Sync {
             return (
                 if tiny {

@@ -64,6 +64,7 @@ impl App {
         let result = self.handle_key_inner(key);
         if before != self.config {
             self.queue_sync(false, None);
+            self.sync_pi_after_edit();
         }
         result
     }
@@ -74,6 +75,11 @@ impl App {
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(true);
+        }
+        if self.modal.is_none()
+            && let Some(quit) = self.handle_pi_key(key)?
+        {
+            return Ok(quit);
         }
         if self.modal.is_none()
             && let Some(quit) = self.handle_codex_key(key)?
@@ -329,6 +335,7 @@ impl App {
         let result = self.handle_mouse_inner(mouse, area);
         if before != self.config {
             self.queue_sync(false, None);
+            self.sync_pi_after_edit();
         }
         result
     }

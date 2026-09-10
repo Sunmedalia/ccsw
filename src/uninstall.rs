@@ -24,6 +24,9 @@ const STATE_FILES: &[&str] = &[
     "codex.lock",
     "codex-binding.json",
     "codex-transaction.json",
+    "pi.lock",
+    "pi-binding.json",
+    "pi-transaction.json",
 ];
 
 /// Reject links/reparse points and anything outside the chosen user's home.
@@ -152,6 +155,7 @@ struct Settings {
     replacement: Option<Value>,
 }
 struct Plan {
+    pi: Option<crate::pi::DetachPlan>,
     codex: Option<crate::codex::DetachPlan>,
     account_dirs: Vec<PathBuf>,
     files: Vec<Snapshot>,
@@ -204,6 +208,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         checked(&home.join("auth.json"))?;
     }
     let codex = crate::codex::prepare_detach(&paths)?;
+    let pi = crate::pi::prepare_detach(&paths)?;
     let mut files = Vec::new();
     for name in names {
         if let Some(file) = Snapshot::read(&name)? {
@@ -367,6 +372,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         }
     }
     Ok(Plan {
+        pi,
         codex,
         account_dirs,
         files,
@@ -419,6 +425,9 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     for file in &plan.files {
         println!("Remove file: {}", file.path.display());
     }
+    if let Some(pi) = &plan.pi {
+        println!("Restore managed Pi settings: {}", pi.home.display());
+    }
     if let Some(codex) = &plan.codex {
         println!(
             "Detach Codex settings and preserve external edits: {}",
@@ -452,11 +461,15 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
         plan.paths.state_dir.join("session.lock"),
         plan.paths.state_dir.join("sync-state.lock"),
         plan.paths.state_dir.join("codex.lock"),
+        plan.paths.state_dir.join("pi.lock"),
         plan.paths.config.with_extension("toml.lock"),
         plan.paths.cache.with_extension("json.lock"),
         plan.paths.state_dir.join("proxy.lifecycle.lock"),
         plan.paths.state_dir.join("proxy.json.lock"),
     ];
+    if let Some(pi) = &plan.pi {
+        lock_paths.push(pi.home.join(".ccsw-pi.lock"));
+    }
     if let Some(codex) = &plan.codex {
         lock_paths.push(codex.home.join(".ccsw.lock"));
     }
@@ -520,6 +533,9 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
             crate::config::set_private(temp.path())?;
             temp.persist(&settings.original.path).map_err(|e| e.error)?;
         }
+    }
+    if let Some(pi) = &plan.pi {
+        crate::pi::execute_detach(pi)?;
     }
     if let Some(codex) = &plan.codex {
         crate::codex::execute_detach(codex)?;
