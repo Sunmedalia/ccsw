@@ -1748,7 +1748,7 @@ fn codex_navigation_preserves_provider_editing_and_has_scrollable_help() {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(text.contains("Codex Accounts"));
+        assert!(text.contains("ChatGPT Account"));
         app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))
             .unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -2002,4 +2002,20 @@ fn codex_account_provider_and_help_use_shared_navigation() {
             ..
         }))
     ));
+}
+
+#[test]
+fn codex_account_apply_without_login_stays_on_provider_home() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Codex);
+    app.home_all_selected = true;
+    app.apply_codex();
+    assert!(!app.codex_ui.accounts);
+    assert!(app.status_error);
+    assert!(app.status.contains("No saved account"));
+    for width in [20, 38, 80, 118] {
+        for line in app.chatgpt_provider_lines(width) {
+            assert!(line.width() <= usize::from(width));
+        }
+    }
 }

@@ -235,7 +235,7 @@ ccsw codex disconnect
 
 ### Codex 订阅账号
 
-Codex 的提供商列表首项为 **ChatGPT Account**，也可以点击顶部 **Account · ChatGPT** 按钮进入。选择账号后按 `p` / `Enter` / **Use**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，顶部显示生效的 CCSW 选择。切换账号时不继承第三方模型目录和上下文参数。
+Codex 的提供商列表首项为 **ChatGPT Account**，也可以点击顶部 **Account · ChatGPT** 按钮进入。首页选中 Account 按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。`Enter` 或点击 Account 进入账号管理。选择账号后按 `p` / `Enter` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，顶部显示生效的 CCSW 选择。切换账号时不继承第三方模型目录和上下文参数。
 
 账号页只提供导入与切换，不进行额度查询或浏览器登录：
 

@@ -61,11 +61,14 @@ impl App {
                 Span::styled(" CCSW · Pi API ", Style::default().fg(ROUTE)),
                 Span::raw("F2 Claude · i Import · p Sync · s Status · D Disconnect"),
             ])
-        } else if self.codex_ui.enabled {
+        } else if self.codex_ui.enabled && self.view_mode == ViewMode::Home {
             Line::from(vec![
                 Span::styled(
                     " Account · ChatGPT ",
-                    Style::default().fg(ROUTE).bg(SELECTION),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(match &self.config.codex.active {
                     Some(crate::codex::Selection::Account { id }) => format!(
@@ -169,7 +172,7 @@ impl App {
                 content_width,
             );
             let lines = if self.codex_ui.enabled {
-                self.chatgpt_provider_lines()
+                self.chatgpt_provider_lines(content_width)
             } else {
                 lines
             };

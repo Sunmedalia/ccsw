@@ -65,25 +65,59 @@ impl App {
             let _ = self.handle_codex_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
         }
     }
-    pub(super) fn chatgpt_provider_lines(&self) -> Vec<Line<'static>> {
+    pub(super) fn chatgpt_provider_lines(&self, width: u16) -> Vec<Line<'static>> {
         let selected = matches!(
             self.config.codex.active,
             Some(service::Selection::Account { .. })
         );
-        vec![
-            Line::styled(
-                if selected {
-                    "● ChatGPT Account"
-                } else {
-                    "○ ChatGPT Account"
-                },
-                Style::default().fg(ROUTE),
+        let name = self
+            .selected_codex_account()
+            .and_then(|id| self.config.codex.accounts.get(&id))
+            .map(|account| account.name.as_str())
+            .unwrap_or("Import an account");
+        let mut lines = wrap_styled_segments(
+            vec![
+                (
+                    (if selected { " ● " } else { " ○ " }).into(),
+                    Style::default().fg(if selected { CONNECTED } else { MUTED }),
+                ),
+                (
+                    "ChatGPT Account".into(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                ("  [ChatGPT]".into(), Style::default().fg(ROUTE)),
+            ],
+            width,
+        );
+        for (text, color) in [
+            (
+                format!(
+                    "     Account: {name}   {} saved",
+                    self.config.codex.accounts.len()
+                ),
+                WARNING,
             ),
-            Line::raw(format!(
-                "{} saved accounts · Enter / click to switch",
-                self.config.codex.accounts.len()
-            )),
-        ]
+            ("     Provider: ChatGPT".into(), MUTED),
+            ("     Credential: Saved Codex login".into(), MUTED),
+        ] {
+            lines.extend(wrap_styled_segments(
+                vec![(text, Style::default().fg(color))],
+                width,
+            ));
+        }
+        lines.push(Line::raw(""));
+        lines
+    }
+
+    fn apply_codex_account(&mut self) {
+        let Some(id) = self.selected_codex_account() else {
+            self.set_error("No saved account · Enter Account and import a Codex login first");
+            return;
+        };
+        self.codex_job(move |paths, _, _| {
+            service::accounts::activate(&paths, &id)?;
+            Ok("Codex account applied · restart CLI / Codex App and open a new chat".into())
+        });
     }
 
     fn codex_job(
@@ -152,6 +186,12 @@ impl App {
         changed
     }
     fn selected_codex_account(&self) -> Option<String> {
+        if !self.codex_ui.accounts
+            && let Some(service::Selection::Account { id }) = &self.config.codex.active
+            && self.config.codex.accounts.contains_key(id)
+        {
+            return Some(id.clone());
+        }
         self.config
             .codex
             .accounts
@@ -163,7 +203,7 @@ impl App {
         if self.view_mode == ViewMode::Home
             && (self.home_all_selected || self.config.profiles.is_empty())
         {
-            self.open_codex_accounts();
+            self.apply_codex_account();
             return;
         }
         let Some(profile) = self.selected_profile_id() else {
@@ -347,15 +387,7 @@ impl App {
             KeyCode::Char('i') => self.codex_input(Input::Import, String::new()),
             KeyCode::Char('I') => self.codex_input(Input::ImportFile, String::new()),
             KeyCode::Char('p') | KeyCode::Enter => {
-                if let Some(id) = self.selected_codex_account() {
-                    self.codex_job(move |paths, _, _| {
-                        service::accounts::activate(&paths, &id)?;
-                        Ok(
-                            "Account selected · restart CLI / ChatGPT App · s checks on-disk state"
-                                .into(),
-                        )
-                    });
-                }
+                self.apply_codex_account();
             }
             _ => {}
         }
@@ -379,7 +411,8 @@ impl App {
             return Ok(true);
         }
         if !self.codex_ui.accounts {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            if self.view_mode == ViewMode::Home
+                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && mouse.row == area.y + 1
                 && mouse.column < area.x + 20
             {
@@ -389,6 +422,10 @@ impl App {
             return Ok(false);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if mouse.row == area.y + 1 && mouse.column < area.x + 14 {
+                self.codex_ui.accounts = false;
+                return Ok(true);
+            }
             for (key, _, rect) in account_buttons(area) {
                 if mouse.column >= rect.x && mouse.column < rect.right() && mouse.row == rect.y {
                     self.handle_codex_key(KeyEvent::new(
@@ -445,8 +482,17 @@ impl App {
         ])
         .split(area);
         frame.render_widget(
-            Paragraph::new("Codex Accounts · ChatGPT provider · Esc back · ? Help")
-                .style(Style::default().fg(ROUTE)),
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    " ‹ Back (Esc) ",
+                    self.footer_control_style(FooterControl::Back, false, false)
+                        .1,
+                ),
+                Span::styled(
+                    "  ChatGPT Account",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])),
             Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
         );
         self.draw_client_tabs(frame, rows[0]);
@@ -484,7 +530,13 @@ impl App {
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(" ChatGPT accounts ", true))
-                .highlight_style(Style::default().bg(SELECTION)),
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(SELECTION)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(" "),
             rows[1],
             &mut state,
         );
@@ -501,7 +553,20 @@ impl App {
         );
         for (_, label, rect) in account_buttons(area) {
             frame.render_widget(
-                Paragraph::new(label).style(Style::default().fg(ROUTE).bg(SELECTION)),
+                Paragraph::new(label).alignment(Alignment::Center).style(
+                    self.footer_control_style(
+                        if label.contains("Import") || label.contains("File") {
+                            FooterControl::AddProfile
+                        } else if label.contains("Back") {
+                            FooterControl::Back
+                        } else {
+                            FooterControl::Sync
+                        },
+                        false,
+                        false,
+                    )
+                    .1,
+                ),
                 rect,
             );
         }
@@ -569,25 +634,24 @@ impl App {
 
 // Shared hit regions and rendering keep mouse actions aligned at every width.
 fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
-    let mut buttons = Vec::new();
-    let mut x = area.x;
-    let mut y = area.bottom().saturating_sub(3);
-    for (key, label) in [
-        ('i', " i Import "),
-        ('I', " I File "),
-        ('p', " p Use "),
-        ('\u{1b}', " Back "),
-    ] {
-        let width = label.len() as u16;
-        if x + width > area.right() {
-            x = area.x;
-            y += 1;
-        }
-        if y >= area.bottom() {
-            break;
-        }
-        buttons.push((key, label, Rect::new(x, y, width.min(area.width), 1)));
-        x += width + 1;
-    }
-    buttons
+    let labels = [
+        ('i', "Import (i)"),
+        ('I', "File (I)"),
+        ('p', "Apply Codex"),
+        ('\u{1b}', "‹ Back"),
+    ];
+    let button_width = area.width.saturating_sub(3).saturating_div(4).min(14);
+    let slots = Layout::horizontal([Constraint::Length(button_width); 4])
+        .spacing(1)
+        .split(Rect::new(
+            area.x,
+            area.bottom().saturating_sub(3),
+            area.width,
+            1,
+        ));
+    labels
+        .into_iter()
+        .zip(slots.iter())
+        .map(|((key, label), rect)| (key, label, *rect))
+        .collect()
 }

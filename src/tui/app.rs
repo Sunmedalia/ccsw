@@ -34,7 +34,9 @@ impl App {
             .len(),
         ];
         if self.codex_ui.enabled {
-            heights[0] = self.chatgpt_provider_lines().len();
+            heights[0] = self
+                .chatgpt_provider_lines(panel.width.saturating_sub(2))
+                .len();
         }
         heights.extend(self.profile_ids().iter().map(|id| {
             let profile = &self.config.profiles[id];

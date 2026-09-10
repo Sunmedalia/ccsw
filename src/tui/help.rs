@@ -280,10 +280,7 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
             ),
             ("Enter / click", "Open selected provider or ChatGPT Account"),
             ("n / e / x", "Add / edit / remove an API provider"),
-            (
-                "p",
-                "Use selected API provider; Account opens account selection",
-            ),
+            ("p", "Apply selected provider or saved ChatGPT account"),
             (
                 "Top tabs / F2",
                 "Switch independent Claude / Codex / Pi configurations",
@@ -298,13 +295,13 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
             ("I", "Import an auth.json file by absolute path"),
             ("Up/Down", "Select a saved account"),
             (
-                "p / Enter / Use",
+                "p / Enter / Apply",
                 "Activate the account and ChatGPT provider",
             ),
             ("Esc / Back", "Return to API providers"),
             (
                 "",
-                "Import highlights the account; Use activates it. No quota queries.",
+                "Import highlights the account; Apply activates it. No quota queries.",
             ),
             (
                 "",
