@@ -82,6 +82,7 @@ pub struct App {
     background: Background,
     codex_ui: codex::CodexUi,
     pi_enabled: bool,
+    pi_home: std::path::PathBuf,
     screen: Rect,
 }
 
@@ -105,6 +106,7 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
+        pi_home: crate::pi::home()?,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };

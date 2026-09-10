@@ -917,7 +917,11 @@ impl App {
     ) -> (String, Style) {
         if self.pi_enabled && control == FooterControl::Sync {
             return (
-                "Sync Pi".into(),
+                if tiny {
+                    "Use".into()
+                } else {
+                    "Set default".into()
+                },
                 Style::default().fg(Color::Black).bg(ROUTE),
             );
         }

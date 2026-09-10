@@ -158,28 +158,39 @@ ccsw import --yes
 
 ## 客户端配置隔离
 
-配置版本为 v4：Claude 厂商保存在 `[profiles]`，Codex 保存在 `[codex.profiles]`，Pi 保存在 `[pi.profiles]`。三个标签、CLI 操作及协议路由均读取对应列表，模型缓存也分别保存。新建配置的三个列表独立为空。
+配置版本为 v4：Claude 厂商保存在 `[profiles]`，Codex 保存在 `[codex.profiles]`。Pi TUI 直接读取 Pi 的 `models.json` 和 `settings.json`；旧的 `[pi.profiles]` 仅供兼容 CLI 导入/同步使用，不再作为 Pi 页面数据源。三个客户端的模型缓存分别保存。
 
 旧版 v1–v3 的共享厂商会在迁移时复制为三份独立列表，以保留已添加的模型；之后编辑不再互相影响。Codex/Pi 副本不保留 Claude 角色别名。已有账号和接入快照保留，首次保存写入 v4；旧版本 CCSW 不能编辑 v4 文件。
 
 ## Pi Agent 配置
 
-> Pi Agent 配置随 v0.1.6 发布；当前兼容验证基准为 Pi `0.85.1`。
+> 原生文件管理为当前源码版本功能，尚未包含在 v0.1.6 发布包中；兼容验证基准为 Pi `0.85.1`。
 
 点击顶部 **Pi** 标签或按 `F2` 切换到 Pi 配置管理。首页与 Claude Code 使用相同的 `CCSW Providers · F2 <下一个 Agent> · N providers` 标题和厂商布局。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
 
-Pi 页面只管理 `models.json` 和 `settings.json`，不显示代理按钮，`P` 不打开代理面板。同步后由 Pi 自身直接连接厂商。
+进入 Pi 标签即读取 `PI_CODING_AGENT_DIR` 指定目录，默认 `~/.pi/agent`。无需导入：页面展示 `models.json` 中可编辑的自定义厂商，包括已有 `ccsw-*` 条目。新增、编辑、删除保存时直接修改原条目，不写入 CCSW 的 `[pi.profiles]`，也不生成带前缀的副本。状态栏显示实际读取目录。
+
+Pi 自行连接厂商；页面不显示代理按钮，`P` 不打开代理面板。
 
 | 按键 | 操作 |
 | --- | --- |
-| `i` | 导入现有 Pi 自定义 API 厂商和模型；重复导入更新原导入项 |
+| `i` | 重新读取 Pi 原生配置文件 |
+| `n` / `a` | 新增厂商 / 模型，保存到 `models.json` |
 | `e` | 厂商页面编辑厂商；模型页面编辑模型 |
 | `E` | 编辑所属厂商 |
-| `p` | 同步全部已启用厂商和模型，并将选中模型设为 Pi 默认值 |
-| `s` | 查看磁盘配置状态、待同步或外部编辑冲突 |
-| `D` | 断开管理，恢复仍属于 CCSW 的配置字段 |
+| `x` | 删除选中的厂商或模型，确认后写回文件 |
+| `p` / Set default | 将选中厂商和模型写为 `settings.json` 的默认值 |
+| `s` | 查看实际配置目录、可编辑厂商数量和只读条目原因 |
 
-首次按 `p` 后，TUI 中的厂商、模型修改会自动同步到 Pi。若当前默认模型被禁用，优先选择同厂商的可用默认模型，再选择其他启用模型；全部禁用时清除受管目录并恢复原默认值，接入记录保留。同步失败可按 `p` 重试。手动编辑 CCSW 文件后使用 CLI apply 或 TUI `p` 同步。
+表单保存即生效，不需要先连接或同步。Pi 原生文件没有厂商/模型启用开关，配置中的模型都可用；`Space` 不再启停条目，需要移除时使用删除操作。删除当前默认厂商会清除默认引用，删除当前默认模型会改用该厂商的替代模型。`p` 仅设置默认选择，其他 `settings.json` 设置保留。
+
+可用以下命令检查原生配置路径和读取结果：
+
+```sh
+ccsw pi files
+```
+
+以下旧版 CLI 命令仍保留，操作 CCSW 中的 Pi 副本并生成 `ccsw-*` 条目，与原生 TUI 编辑不同：
 
 ```sh
 ccsw pi import --dry-run       # 预览导入，不执行凭据命令
@@ -192,12 +203,12 @@ ccsw pi disconnect
 
 Pi **直接连接厂商**，不启动或依赖 CCSW 代理。三种格式对应 Pi 原生 `anthropic-messages`、`openai-completions`、`openai-responses`。API Key 会写入 Pi 配置，Unix 文件权限为 0600；字符串按 Pi 规则转义。输出上限由 Pi 客户端使用，不是代理强制限制。
 
-- 目标目录遵循 `PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`。写入 `models.json` 的 `ccsw-<厂商 ID>` 项，以及 `settings.json` 的 `defaultProvider` / `defaultModel`。
+- 目标目录遵循 `PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`。TUI 保留原厂商 ID，`settings.json` 仅修改 `defaultProvider` / `defaultModel`。
 - 模型 ID 移除 `[1m]` 后缀；显式 Context window 优先，否则 `[1m]` 对应 1,000,000。Max output tokens 对应 Pi 的 `maxTokens`。其他能力使用 Pi 默认值，导入模型保留其兼容性、输入类型和推理能力配置。
-- 导入读取自定义厂商和普通 API Key。OAuth 令牌、命令或环境变量凭据、内置模型覆盖、混合协议和每模型独立认证等不支持项目会列出跳过原因，不执行命令。导入同名 CCSW 厂商时创建独立 ID。
+- 自定义 API 厂商和普通 API Key 可编辑；内置模型覆盖、OAuth、命令或环境变量凭据、混合协议及每模型独立认证等暂不支持的条目会保留在文件中，并在状态中列出只读原因，不执行凭据命令。
 - 原有 Pi 厂商、主题、扩展、订阅登录、会话保留；不会修改 `auth.json`。原厂商与 `ccsw-` 项可同时出现在 Pi 中。本次不提供订阅多账号管理。
 - 在 Pi 内重新打开 `/model` 可重新加载目录；启动默认值请在新 Pi 进程中确认。命令行、项目设置和扩展可能覆盖全局配置。
-- 多文件写入保存事务日志。中断后重试 apply/disconnect 恢复；发生外部编辑冲突时不会覆盖。断开及卸载仅恢复仍与最后写入一致的受管字段。
+- 原生编辑保留厂商、模型中的额外字段（例如 `compat`、`cost`、`reasoning`、`input`）。写入使用文件锁、原子替换和事务日志；中断后重新加载恢复，遇到并发文件修改会提示重试。直接编辑无需断开管理。
 
 验证真实 Pi 进程（隔离 HOME、本地模拟上游，不使用真实凭据）：
 

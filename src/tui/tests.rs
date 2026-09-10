@@ -27,6 +27,7 @@ fn renders_empty_state_in_narrow_terminal() {
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
+        pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     };
@@ -1247,6 +1248,7 @@ fn interactive_test_app() -> App {
         provider_editor: None,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
+        pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
     }
@@ -1259,6 +1261,16 @@ pub(super) fn persisted_app() -> (tempfile::TempDir, App) {
         cache: temp.path().join("cache.json"),
         state_dir: temp.path().join("state"),
     };
+    app.pi_home = temp.path().join("pi");
+    crate::pi::native::update(&app.pi_home, |native| {
+        native.profiles = app.config.profiles.clone();
+        for profile in native.profiles.values_mut() {
+            profile.enabled = true;
+            profile.disabled_models.clear();
+        }
+        Ok(())
+    })
+    .unwrap();
     config::update(&app.paths.config, |latest| {
         *latest = app.config.clone();
         latest.codex.profiles = latest.profiles.clone();
@@ -1899,6 +1911,7 @@ fn client_provider_edits_are_isolated_on_disk_and_screen() {
 #[test]
 fn fresh_client_tabs_start_with_independent_empty_catalogs() {
     let (_temp, mut app) = persisted_app();
+    app.pi_home = _temp.path().join("empty-pi");
     config::update(&app.paths.config, |c| {
         c.codex.profiles.clear();
         c.pi.profiles.clear();
@@ -1928,7 +1941,7 @@ fn pi_help_is_client_specific_and_codex_account_buttons_are_clickable() {
         .map(|c| c.symbol())
         .collect();
     assert!(text.contains("Pi Help"));
-    assert!(text.contains("Save enabled models and the default to Pi configuration files"));
+    assert!(text.contains("Set the selected provider and model in settings.json"));
     assert!(!text.contains("manage proxy"));
     app.modal = None;
     app.select_client_tab(ClientTab::Codex);
@@ -2107,4 +2120,48 @@ fn pi_uses_provider_layout_without_proxy_controls() {
         assert!(matches!(app.modal, Some(Modal::Help(_))));
         app.modal = None;
     }
+}
+
+#[test]
+fn pi_native_model_form_saves_without_changing_ccsw_config() {
+    let (_temp, mut app) = persisted_app();
+    let ccsw_before = std::fs::read(&app.paths.config).unwrap();
+    app.select_client_tab(ClientTab::Pi);
+    let profile = app.selected_profile_id().unwrap();
+    app.enter_provider_view();
+    app.open_add_model_modal();
+    let Some(Modal::Model(form)) = &mut app.modal else {
+        panic!("model form missing")
+    };
+    form.fields[0].value = "native-added".into();
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(app.modal.is_none(), "{}", app.status);
+    let models: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.pi_home.join("models.json")).unwrap()).unwrap();
+    assert!(
+        models["providers"][&profile]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "native-added")
+    );
+    assert!(models["providers"].get(format!("ccsw-{profile}")).is_none());
+    app.select_model_id("native-added");
+    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.status_error, "{}", app.status);
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.pi_home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["defaultProvider"], profile);
+    assert_eq!(settings["defaultModel"], "native-added");
+    app.select_client_tab(ClientTab::Claude);
+    app.select_client_tab(ClientTab::Pi);
+    assert!(
+        app.config.profiles[&profile]
+            .models
+            .iter()
+            .any(|m| m.id == "native-added")
+    );
+    assert_eq!(std::fs::read(&app.paths.config).unwrap(), ccsw_before);
 }

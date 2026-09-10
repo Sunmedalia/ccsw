@@ -435,13 +435,7 @@ impl App {
         let mut profile = editor.original_profile.clone();
         apply_route_editor(&mut profile, editor);
         let id = editor.profile_id.clone();
-        match config::update_client_profile(
-            &self.paths.config,
-            self.config_client(),
-            &id,
-            &editor.original_profile,
-            &profile,
-        ) {
+        match self.update_client_profile(&id, &editor.original_profile, &profile) {
             Ok(config) => self.config = config,
             Err(error) => {
                 self.reload_for_edit();
@@ -523,11 +517,11 @@ impl App {
     }
 
     pub(super) fn reload_for_edit(&mut self) {
-        if !self.paths.config.exists() {
+        if !self.pi_enabled && !self.paths.config.exists() {
             return;
         }
         let selected = self.selected_profile_id();
-        if let Ok(latest) = config::load_client(&self.paths.config, self.config_client()) {
+        if let Ok(latest) = self.load_client_config() {
             self.config = latest;
             self.profile_idx = selected
                 .and_then(|id| {
@@ -590,7 +584,7 @@ impl App {
             self.set_error("No models are available; fetch or add a model first");
             return;
         }
-        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
+        let update = self.update_client_config(|latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
@@ -658,13 +652,7 @@ impl App {
         let original = self.config.profiles[&profile_id].clone();
         let mut edited = original.clone();
         edited.enabled = enabled;
-        self.config = config::update_client_profile(
-            &self.paths.config,
-            self.config_client(),
-            &profile_id,
-            &original,
-            &edited,
-        )?;
+        self.config = self.update_client_profile(&profile_id, &original, &edited)?;
         self.profile_idx = self
             .profile_ids()
             .iter()
@@ -684,13 +672,8 @@ impl App {
         };
         let profile = self.toggled_global_model_profile(&selected)?;
         let profile_id = selected.profile_id.clone();
-        self.config = config::update_client_profile(
-            &self.paths.config,
-            self.config_client(),
-            &profile_id,
-            &self.config.profiles[&profile_id],
-            &profile,
-        )?;
+        self.config =
+            self.update_client_profile(&profile_id, &self.config.profiles[&profile_id], &profile)?;
         let remaining = self.all_managed_models().len();
         self.model_idx = self.model_idx.min(remaining.saturating_sub(1));
         let action = if selected.enabled {
@@ -761,7 +744,7 @@ impl App {
             .profiles
             .get(&profile_id)
             .map(|p| p.default_model.clone());
-        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
+        let update = self.update_client_config(|latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
@@ -816,7 +799,7 @@ impl App {
         } else {
             format!("{base}[1m]")
         };
-        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
+        let update = self.update_client_config(|latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)

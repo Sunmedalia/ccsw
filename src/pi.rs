@@ -1,4 +1,5 @@
 //! Native Pi configuration. OAuth credentials are never modified.
+pub mod native;
 use crate::config::{self, ApiFormat, AppPaths, Credential, ModelEntry, Profile};
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
@@ -24,6 +25,8 @@ pub struct Settings {
 }
 #[derive(Subcommand)]
 pub enum Command {
+    /// Inspect native Pi files without importing them into CCSW.
+    Files,
     Import {
         #[arg(long)]
         dry_run: bool,
@@ -39,6 +42,10 @@ pub enum Command {
 }
 pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
     let message = match command {
+        Command::Files => {
+            let home = home()?;
+            native::description(&home, &native::load(&home)?)
+        }
         Command::Import { dry_run } => import(paths, dry_run)?,
         Command::Apply { profile, model } => {
             apply(paths, &profile, model.as_deref())?;

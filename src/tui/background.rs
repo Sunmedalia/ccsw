@@ -189,7 +189,8 @@ impl App {
                     }
                     self.background.requests.remove(&id);
                     if self.config.profiles.get(&id) != Some(profile.as_ref())
-                        || config::load_client(&self.paths.config, self.config_client())
+                        || self
+                            .load_client_config()
                             .ok()
                             .and_then(|config| config.profiles.get(&id).cloned())
                             .as_ref()

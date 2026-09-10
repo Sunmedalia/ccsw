@@ -69,7 +69,11 @@ impl App {
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
         };
-        let config = match config::load_client(&self.paths.config, client) {
+        let config = match if tab == ClientTab::Pi {
+            crate::pi::native::load(&self.pi_home)
+        } else {
+            config::load_client(&self.paths.config, client)
+        } {
             Ok(c) => c,
             Err(e) => {
                 self.set_error(format!("Could not load client configuration: {e}"));
@@ -96,6 +100,9 @@ impl App {
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
         }
         .into();
+        if tab == ClientTab::Pi {
+            self.status = crate::pi::native::description(&self.pi_home, &self.config);
+        }
     }
     pub(super) fn draw_client_tabs(&self, frame: &mut ratatui::Frame, area: Rect) {
         for (tab, rect) in client_tabs(area) {

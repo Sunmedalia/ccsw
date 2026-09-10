@@ -247,24 +247,29 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
             "Pi · Configuration files, providers and models",
             Style::default().fg(ROUTE),
         ),
-        Line::raw("p  Save enabled models and the default to Pi configuration files"),
-        Line::raw("i  Import Pi API configuration"),
+        Line::raw("n / a  Add a provider / model directly to models.json"),
+        Line::raw("e / E  Edit model / provider; saving updates models.json"),
+        Line::raw("p  Set the selected provider and model in settings.json"),
+        Line::raw("i  Reload Pi configuration files"),
         Line::raw("r  Test connection and fetch provider models"),
         Line::raw("s  Inspect Pi configuration status"),
-        Line::raw("D  Disconnect and restore managed settings"),
         Line::raw(""),
     ];
     for (key, action) in help_commands(section) {
-        if key.contains('p') && (action.contains("proxy") || action.contains("sync")) {
+        if (key.contains('p') && (action.contains("proxy") || action.contains("sync")))
+            || key.contains("Space")
+            || *key == "A / C"
+        {
             continue;
         }
         lines.push(Line::raw(format!("{key}  {action}")));
     }
     lines.extend([
         Line::raw(""),
-        Line::raw("Pi uses its own provider list, model catalog and configuration."),
+        Line::raw("Pi reads models.json / settings.json directly; no CCSW profile mirror."),
+        Line::raw("Pi has no enable switch: x deletes an entry. Unknown fields are preserved."),
         Line::raw(
-            "After syncing, open /model in Pi. Connected edits auto-sync; p retries failures.",
+            "Read-only entries and their reasons are shown in status. auth.json is not edited.",
         ),
         Line::raw("Pi connects directly to the API; no CCSW proxy or Codex subscription accounts."),
     ]);
