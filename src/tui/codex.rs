@@ -8,6 +8,8 @@ use std::sync::{
 
 enum Update {
     Message(String),
+    Select(String),
+    Login(Option<String>, String),
     Done(std::result::Result<String, String>),
 }
 #[derive(Clone)]
@@ -25,6 +27,9 @@ pub(super) struct CodexUi {
     pub enabled: bool,
     pub accounts: bool,
     selected: usize,
+    pending_selection: Option<String>,
+    live_id: Option<String>,
+    live_message: String,
     pub busy: bool,
     pub cancel: Arc<AtomicBool>,
     sender: Sender<Update>,
@@ -32,7 +37,9 @@ pub(super) struct CodexUi {
     input: Option<Input>,
     field: String,
     pub help: bool,
+    status_view: bool,
     help_scroll: u16,
+    scroll_max: std::cell::Cell<u16>,
     message: String,
 }
 impl Default for CodexUi {
@@ -42,6 +49,9 @@ impl Default for CodexUi {
             enabled: false,
             accounts: false,
             selected: 0,
+            pending_selection: None,
+            live_id: None,
+            live_message: "s inspect local login".into(),
             busy: false,
             cancel: Arc::new(AtomicBool::new(false)),
             sender,
@@ -49,7 +59,9 @@ impl Default for CodexUi {
             input: None,
             field: String::new(),
             help: false,
+            status_view: false,
             help_scroll: 0,
+            scroll_max: std::cell::Cell::new(200),
             message: "n login · i import current · p use · r refresh · F3 API Providers".into(),
         }
     }
@@ -76,6 +88,9 @@ impl App {
             }))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("Codex operation failed unexpectedly")))
             .map_err(|error| format!("{error:#}"));
+            let (id, message) = service::accounts::live_login()
+                .unwrap_or_else(|e| (None, format!("Cannot read local login: {e}")));
+            let _ = sender.send(Update::Login(id, message));
             let _ = sender.send(Update::Done(result));
         });
     }
@@ -84,6 +99,11 @@ impl App {
         while let Ok(update) = self.codex_ui.receiver.try_recv() {
             changed = true;
             match update {
+                Update::Select(id) => self.codex_ui.pending_selection = Some(id),
+                Update::Login(id, message) => {
+                    self.codex_ui.live_id = id;
+                    self.codex_ui.live_message = message;
+                }
                 Update::Message(message) => {
                     self.codex_ui.message = message;
                 }
@@ -96,6 +116,15 @@ impl App {
                         config::load_client(&self.paths.config, config::Client::Codex)
                     {
                         self.config = config;
+                    }
+                    if let Some(id) = self.codex_ui.pending_selection.take() {
+                        self.codex_ui.selected = self
+                            .config
+                            .codex
+                            .accounts
+                            .keys()
+                            .position(|key| key == &id)
+                            .unwrap_or(self.codex_ui.selected);
                     }
                     self.codex_ui.selected = self
                         .codex_ui
@@ -134,26 +163,35 @@ impl App {
         });
     }
     fn codex_input(&mut self, input: Input, initial: String) {
+        if self.codex_ui.busy {
+            return;
+        }
         self.codex_ui.input = Some(input);
         self.codex_ui.field = initial;
     }
     pub(super) fn codex_navigation_blocked(&self) -> bool {
-        self.codex_ui.busy || self.codex_ui.help || self.codex_ui.input.is_some()
+        self.codex_ui.busy
+            || self.codex_ui.help
+            || self.codex_ui.status_view
+            || self.codex_ui.input.is_some()
     }
     pub(super) fn handle_codex_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
-        if self.codex_ui.help {
+        if self.codex_ui.help || self.codex_ui.status_view {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
-                    self.codex_ui.help = false
+                    self.codex_ui.help = false;
+                    self.codex_ui.status_view = false;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.codex_ui.help_scroll = (self.codex_ui.help_scroll + 1).min(18)
+                    self.codex_ui.help_scroll =
+                        (self.codex_ui.help_scroll + 1).min(self.codex_ui.scroll_max.get())
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.codex_ui.help_scroll = self.codex_ui.help_scroll.saturating_sub(1)
                 }
                 KeyCode::PageDown => {
-                    self.codex_ui.help_scroll = (self.codex_ui.help_scroll + 5).min(18)
+                    self.codex_ui.help_scroll =
+                        (self.codex_ui.help_scroll + 5).min(self.codex_ui.scroll_max.get())
                 }
                 KeyCode::PageUp => {
                     self.codex_ui.help_scroll = self.codex_ui.help_scroll.saturating_sub(5)
@@ -182,13 +220,19 @@ impl App {
                                 service::accounts::login(&paths, &text, device, &cancel, |m| {
                                     let _ = sender.send(Update::Message(m));
                                 })?;
-                            Ok(format!(
-                                "Account {id} saved · select it and press p to switch"
-                            ))
+                            let _ = sender.send(Update::Select(id));
+                            Ok(
+                                "Account saved and highlighted · p activates subscription login"
+                                    .into(),
+                            )
                         }
                         Input::Import => {
                             let id = service::accounts::import(&paths, &text, None)?;
-                            Ok(format!("Imported {id}"))
+                            let _ = sender.send(Update::Select(id));
+                            Ok(
+                                "Account imported and highlighted · p activates subscription login"
+                                    .into(),
+                            )
                         }
                         Input::ImportFile => {
                             let path = std::path::PathBuf::from(&text);
@@ -197,7 +241,8 @@ impl App {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("Imported account");
                             let id = service::accounts::import(&paths, name, Some(&path))?;
-                            Ok(format!("Imported {id} · e rename"))
+                            let _ = sender.send(Update::Select(id));
+                            Ok("Account imported and highlighted · e rename · p activate".into())
                         }
                         Input::Rename(id) => {
                             service::accounts::rename(&paths, &id, &text)?;
@@ -247,7 +292,14 @@ impl App {
                         .keys()
                         .position(|v| v == id)
                         .unwrap_or(0);
-                    self.refresh_codex_account();
+                }
+                if self.codex_ui.accounts {
+                    let sender = self.codex_ui.sender.clone();
+                    std::thread::spawn(move || {
+                        let (id, message) = service::accounts::live_login()
+                            .unwrap_or_else(|e| (None, format!("Cannot read local login: {e}")));
+                        let _ = sender.send(Update::Login(id, message));
+                    });
                 }
                 return Ok(Some(false));
             }
@@ -268,9 +320,9 @@ impl App {
                 return Ok(Some(false));
             }
             KeyCode::Char('s') => {
-                self.codex_ui.message =
-                    service::status(&self.paths).unwrap_or_else(|e| e.to_string());
-                self.status = self.codex_ui.message.clone();
+                self.codex_ui.status_view = true;
+                self.codex_ui.help_scroll = 0;
+                self.codex_job(|paths, _, _| service::status(&paths));
                 return Ok(Some(false));
             }
             KeyCode::Char('D') => {
@@ -335,9 +387,10 @@ impl App {
         if !self.codex_ui.enabled {
             return Ok(false);
         }
-        if self.codex_ui.help {
+        if self.codex_ui.help || self.codex_ui.status_view {
             if matches!(mouse.kind, MouseEventKind::ScrollDown) {
-                self.codex_ui.help_scroll = (self.codex_ui.help_scroll + 1).min(18);
+                self.codex_ui.help_scroll =
+                    (self.codex_ui.help_scroll + 1).min(self.codex_ui.scroll_max.get());
             }
             if matches!(mouse.kind, MouseEventKind::ScrollUp) {
                 self.codex_ui.help_scroll = self.codex_ui.help_scroll.saturating_sub(1);
@@ -350,6 +403,14 @@ impl App {
         if !self.codex_ui.accounts {
             return Ok(false);
         }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            for (key, _, rect) in account_buttons(area) {
+                if mouse.column >= rect.x && mouse.column < rect.right() && mouse.row == rect.y {
+                    self.handle_codex_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))?;
+                    return Ok(true);
+                }
+            }
+        }
         match mouse.kind {
             MouseEventKind::ScrollDown => {
                 self.codex_ui.selected = (self.codex_ui.selected + 1)
@@ -358,11 +419,9 @@ impl App {
             MouseEventKind::ScrollUp => {
                 self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1)
             }
-            MouseEventKind::Down(MouseButton::Left)
-                if mouse.row > area.y + 2 && mouse.row < area.y + area.height / 2 =>
-            {
+            MouseEventKind::Down(MouseButton::Left) if mouse.row > area.y + 4 => {
                 let rows = Layout::vertical([
-                    Constraint::Length(2),
+                    Constraint::Length(4),
                     Constraint::Percentage(40),
                     Constraint::Min(3),
                     Constraint::Length(3),
@@ -373,7 +432,10 @@ impl App {
                     .codex_ui
                     .selected
                     .saturating_sub(visible.saturating_sub(1));
-                let index = (mouse.row - area.y - 3) as usize + offset;
+                if mouse.row >= rows[1].bottom().saturating_sub(1) {
+                    return Ok(true);
+                }
+                let index = (mouse.row - rows[1].y - 1) as usize + offset;
                 if index < self.config.codex.accounts.len() {
                     self.codex_ui.selected = index;
                 }
@@ -384,7 +446,7 @@ impl App {
     }
     pub(super) fn draw_codex_accounts(&self, frame: &mut ratatui::Frame, area: Rect) {
         let rows = Layout::vertical([
-            Constraint::Length(2),
+            Constraint::Length(4),
             Constraint::Percentage(40),
             Constraint::Min(3),
             Constraint::Length(3),
@@ -396,6 +458,15 @@ impl App {
             Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
         );
         self.draw_client_tabs(frame, rows[0]);
+        frame.render_widget(
+            Paragraph::new(self.codex_ui.live_message.as_str()).wrap(Wrap { trim: false }),
+            Rect::new(
+                rows[0].x,
+                rows[0].y + 2,
+                rows[0].width,
+                rows[0].height.saturating_sub(2),
+            ),
+        );
         let items = self
             .config
             .codex
@@ -405,8 +476,13 @@ impl App {
                 let active = self.config.codex.active
                     == Some(service::Selection::Account { id: id.clone() });
                 ListItem::new(format!(
-                    "{} {} · {} · {}",
-                    if active { "●" } else { "○" },
+                    "{}{} {} · {} · {}",
+                    if active { "[Selected] " } else { "" },
+                    if self.codex_ui.live_id.as_ref() == Some(id) {
+                        "[Local login]"
+                    } else {
+                        "○"
+                    },
                     account.name,
                     account.email,
                     account.plan.as_deref().unwrap_or("unknown")
@@ -416,7 +492,10 @@ impl App {
         let mut state = ListState::default().with_selected(Some(self.codex_ui.selected));
         frame.render_stateful_widget(
             List::new(items)
-                .block(panel(" Accounts · n add · e edit · p use ", true))
+                .block(panel(
+                    " Accounts · n login · i import · e rename · p use ",
+                    true,
+                ))
                 .highlight_style(Style::default().bg(SELECTION)),
             rows[1],
             &mut state,
@@ -427,18 +506,19 @@ impl App {
             .unwrap_or(
                 "No subscription accounts.\nn: browser login · i: import current login".into(),
             );
+        let details = format!("{}\n\n{details}", self.codex_ui.message);
         frame.render_widget(
             Paragraph::new(details)
                 .block(panel(" Subscription & limits · r refresh ", false))
                 .wrap(Wrap { trim: false }),
             rows[2],
         );
-        frame.render_widget(
-            Paragraph::new(self.codex_ui.message.as_str())
-                .wrap(Wrap { trim: false })
-                .style(Style::default().fg(WARNING)),
-            rows[3],
-        );
+        for (_, label, rect) in account_buttons(area) {
+            frame.render_widget(
+                Paragraph::new(label).style(Style::default().fg(ROUTE).bg(SELECTION)),
+                rect,
+            );
+        }
         self.draw_codex_overlay(frame, area);
     }
     pub(super) fn draw_codex_overlay(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -472,7 +552,7 @@ impl App {
                 .wrap(Wrap { trim: false }),
                 popup,
             );
-        } else if self.codex_ui.help {
+        } else if self.codex_ui.help || self.codex_ui.status_view {
             let popup = Rect::new(
                 area.x + 1,
                 area.y + 1,
@@ -480,14 +560,65 @@ impl App {
                 area.height.saturating_sub(2),
             );
             frame.render_widget(Clear, popup);
-            let text = "Click top tabs / F2  Claude Code / Codex / Pi\nF3  API Providers / Accounts\nAPI: n new provider · Enter models\ne edit provider on Home; model on model page\nE edit provider · a add model · p apply\ng reasoning · s status · D disconnect\nAccounts: n browser login · N device login\ni import current · I import auth.json\ne rename · x delete · p/Enter switch\nr refresh limits · s status\nEsc cancel login / back · ? close Help\n\nSwitching writes shared configuration.\nRestart CLI / ChatGPT App and open a new chat.\nLimits are cached; refresh failures keep old data.";
+            let text = "CODEX · API PROVIDERS\nTop tabs / F2: switch independent client configurations\nF3: API Providers / Subscription Accounts\nn: new provider · Enter: open models\ne: edit provider on Home; edit model on model page\nE: edit provider · a: add model · Space: enable model\np: apply selected API model · g: API reasoning\n\nSUBSCRIPTION ACCOUNTS\nn: browser login · N: device login (enter an account name)\ni: import current login · I: import auth.json by absolute path\nImport saves and highlights an account; p / Enter activates it.\ne: rename · x: remove saved account (type delete to confirm)\nr: refresh selected account limits; entering this page is offline\n[Selected]: CCSW selection · [Local login]: credentials on disk\nAPI mode can retain subscription credentials without using them.\nLocal identity is not proof that credentials are valid; r checks online.\n\nSTATUS & RECOVERY\ns: inspect local login and configuration · D: disconnect (type disconnect)\nModel/reasoning changes in Codex can be replaced with p.\nProvider/connection conflicts: restore the changed setting or D, then p.\nInterrupted transaction: run ccsw codex recover.\nDisconnect before deleting the selected account.\nRestart Codex CLI / Codex App and open a new chat after switching.\nCLI and App use the targeted CODEX_HOME; project/launch overrides may win.\nCached limits survive refresh failures; r retries.\nEsc: cancel login / back · q: quit\n\nHELP\nUp/Down, PgUp/PgDn or mouse wheel: scroll · Esc / ?: close";
+            let text = if self.codex_ui.status_view {
+                self.codex_ui.message.as_str()
+            } else {
+                text
+            };
+            let title = if self.codex_ui.status_view {
+                " Codex Status · ↑↓ scroll · Esc close "
+            } else {
+                " Codex Help · ↑↓ scroll · Esc close "
+            };
+            let max_scroll = text
+                .lines()
+                .map(|line| {
+                    use unicode_width::UnicodeWidthStr;
+                    line.width()
+                        .max(1)
+                        .div_ceil(popup.width.saturating_sub(2).max(1) as usize)
+                })
+                .sum::<usize>()
+                .saturating_sub(popup.height.saturating_sub(2) as usize)
+                .min(u16::MAX as usize) as u16;
+            self.codex_ui.scroll_max.set(max_scroll);
             frame.render_widget(
                 Paragraph::new(text)
-                    .block(panel(" Codex Help · ↑↓ scroll ", true))
+                    .block(panel(title, true))
                     .wrap(Wrap { trim: false })
-                    .scroll((self.codex_ui.help_scroll, 0)),
+                    .scroll((self.codex_ui.help_scroll.min(max_scroll), 0)),
                 popup,
             );
         }
     }
+}
+
+// Shared hit regions and rendering keep mouse actions aligned at every width.
+fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
+    let mut buttons = Vec::new();
+    let mut x = area.x;
+    let mut y = area.bottom().saturating_sub(3);
+    for (key, label) in [
+        ('n', " n Login "),
+        ('i', " i Import "),
+        ('p', " p Use "),
+        ('e', " e Rename "),
+        ('r', " r Limits "),
+        ('s', " s Status "),
+        ('x', " x Remove "),
+        ('D', " D Disconnect "),
+    ] {
+        let width = label.len() as u16;
+        if x + width > area.right() {
+            x = area.x;
+            y += 1;
+        }
+        if y >= area.bottom() {
+            break;
+        }
+        buttons.push((key, label, Rect::new(x, y, width.min(area.width), 1)));
+        x += width + 1;
+    }
+    buttons
 }

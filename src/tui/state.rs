@@ -107,6 +107,7 @@ impl HelpSection {
 
 #[derive(Clone)]
 pub(super) struct HelpModal {
+    pub(super) pi: bool,
     pub(super) section: HelpSection,
     pub(super) scroll: u16,
 }
@@ -118,7 +119,11 @@ impl HelpModal {
             ViewMode::AllEnabled => HelpSection::AllEnabled,
             ViewMode::Provider => HelpSection::Provider,
         };
-        Self { section, scroll: 0 }
+        Self {
+            pi: false,
+            section,
+            scroll: 0,
+        }
     }
 
     pub(super) fn move_section(&mut self, forward: bool) {

@@ -15,8 +15,6 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
                 "Click top tabs / F2",
                 "Switch independent Claude Code / Codex / Pi configurations",
             ),
-            ("Pi: i / s / D", "Import API config / status / disconnect"),
-            ("Pi: p", "Sync enabled models directly to Pi"),
             ("q", "Quit CCSW"),
         ],
         HelpSection::AllEnabled => &[
@@ -138,6 +136,11 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     } else {
         format!(" Help · {} ", help.section.label())
     };
+    let title = if help.pi {
+        title.replacen("Help", "Pi Help", 1)
+    } else {
+        title
+    };
     frame.render_widget(panel(&title, true), area);
 
     let inner = panel_inner(area);
@@ -189,9 +192,13 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     );
     if content.height > 0 {
         frame.render_widget(
-            Paragraph::new(help_content(help.section, area.width >= 58))
-                .wrap(Wrap { trim: false })
-                .scroll((help.scroll, 0)),
+            Paragraph::new(if help.pi {
+                pi_help_content(help.section)
+            } else {
+                help_content(help.section, area.width >= 58)
+            })
+            .wrap(Wrap { trim: false })
+            .scroll((help.scroll, 0)),
             content,
         );
     }
@@ -199,4 +206,37 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     if show_button {
         draw_modal_buttons(frame, area, &["Close  Esc / q / ? / Enter"]);
     }
+}
+
+fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
+    if section == HelpSection::Forms {
+        return help_content(section, false);
+    }
+    let mut lines = vec![
+        Line::styled(
+            "Pi · Independent API providers and models",
+            Style::default().fg(ROUTE),
+        ),
+        Line::raw("p  Sync enabled models directly to Pi; select the default model"),
+        Line::raw("i  Import Pi API configuration"),
+        Line::raw("r  Test connection and fetch provider models"),
+        Line::raw("s  Inspect Pi configuration status"),
+        Line::raw("D  Disconnect and restore managed settings"),
+        Line::raw(""),
+    ];
+    for (key, action) in help_commands(section) {
+        if key.contains('p') && (action.contains("proxy") || action.contains("sync")) {
+            continue;
+        }
+        lines.push(Line::raw(format!("{key}  {action}")));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::raw("Pi uses its own provider list, model catalog and configuration."),
+        Line::raw(
+            "After syncing, open /model in Pi. Connected edits auto-sync; p retries failures.",
+        ),
+        Line::raw("Pi connects directly to the API; no CCSW proxy or Codex subscription accounts."),
+    ]);
+    lines
 }

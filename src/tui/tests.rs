@@ -1912,3 +1912,46 @@ fn fresh_client_tabs_start_with_independent_empty_catalogs() {
     app.select_client_tab(ClientTab::Claude);
     assert!(!app.config.profiles.is_empty());
 }
+
+#[test]
+fn pi_help_is_client_specific_and_codex_account_buttons_are_clickable() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Pi);
+    app.open_help();
+    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Pi Help"));
+    assert!(text.contains("Sync enabled models directly to Pi"));
+    assert!(!text.contains("manage proxy"));
+    app.modal = None;
+    app.select_client_tab(ClientTab::Codex);
+    app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
+        .unwrap();
+    let area = Rect::new(0, 0, 120, 36);
+    app.codex_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 33,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+    )
+    .unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Browser login"));
+}

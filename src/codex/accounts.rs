@@ -521,3 +521,33 @@ pub(super) fn clear_live_auth(home: &Path, doc: &DocumentMut) -> Result<()> {
     }
     Ok(())
 }
+
+/// Read local identity without refreshing tokens or validating them remotely.
+pub fn live_login() -> Result<(Option<String>, String)> {
+    let home = home()?;
+    let doc = document(&home)?;
+    let mode = doc
+        .get("model_provider")
+        .and_then(Item::as_str)
+        .unwrap_or("openai");
+    let Some(auth) = read_live_auth(&home, &doc)? else {
+        return Ok((
+            None,
+            format!("Provider: {mode} · No local subscription login · i import / n login"),
+        ));
+    };
+    match identity(&auth) {
+        Ok(identity) => Ok((
+            Some(identity.id),
+            format!(
+                "Provider: {mode} · Local login: {} ({}) · credentials not validated",
+                identity.account.email,
+                identity.account.plan.as_deref().unwrap_or("unknown plan")
+            ),
+        )),
+        Err(_) => Ok((
+            None,
+            format!("Provider: {mode} · No readable subscription identity · n login"),
+        )),
+    }
+}

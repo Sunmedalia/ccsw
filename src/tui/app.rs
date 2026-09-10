@@ -557,7 +557,9 @@ impl App {
             self.codex_ui.help = true;
             return;
         }
-        self.modal = Some(Modal::Help(HelpModal::for_view(self.view_mode)));
+        let mut help = HelpModal::for_view(self.view_mode);
+        help.pi = self.pi_enabled;
+        self.modal = Some(Modal::Help(help));
     }
 
     pub(super) fn refresh_models(&mut self) {

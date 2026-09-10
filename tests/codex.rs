@@ -203,6 +203,16 @@ fn api_and_subscription_modes_restore_models_without_touching_claude() {
             .contains(&address)
     );
     assert!(!s.root.path().join("claude/settings.json").exists());
+    // A model chosen directly in Codex must not block explicit API reapplication.
+    let path = s.home().join("config.toml");
+    let mut changed: toml_edit::DocumentMut = fs::read_to_string(&path).unwrap().parse().unwrap();
+    changed["model"] = toml_edit::value("external-api-model");
+    changed["model_reasoning_effort"] = toml_edit::value("low");
+    fs::write(&path, changed.to_string()).unwrap();
+    s.ok(&["codex", "apply", "--profile", "local"]);
+    let reapplied: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(reapplied["model"].as_str(), Some("test-model"));
+
     s.ok(&["codex", "accounts", "use", &aid]);
     let sub: toml::Value =
         toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
@@ -331,4 +341,23 @@ fn codex_api_uses_its_own_catalog_and_restores_metadata_on_subscription() {
     });
     s.ok(&["proxy", "stop"]);
     result.unwrap();
+}
+
+#[test]
+fn external_model_change_allows_account_switch_and_is_restored_on_disconnect() {
+    let s = Sandbox::new();
+    let aid = s.add("A", &auth("a", "workspace-a", "refresh-a"));
+    let bid = s.add("B", &auth("b", "workspace-b", "refresh-b"));
+    s.ok(&["codex", "accounts", "use", &aid]);
+    let path = s.home().join("config.toml");
+    let mut doc: toml_edit::DocumentMut = fs::read_to_string(&path).unwrap().parse().unwrap();
+    doc["model"] = toml_edit::value("chosen-in-codex");
+    doc["model_reasoning_effort"] = toml_edit::value("high");
+    fs::write(&path, doc.to_string()).unwrap();
+    s.ok(&["codex", "accounts", "use", &bid]);
+    assert!(s.ok(&["codex", "status"]).contains("Local login:"));
+    s.ok(&["codex", "disconnect"]);
+    let doc: toml_edit::DocumentMut = fs::read_to_string(path).unwrap().parse().unwrap();
+    assert_eq!(doc["model"].as_str(), Some("chosen-in-codex"));
+    assert_eq!(doc["model_reasoning_effort"].as_str(), Some("high"));
 }

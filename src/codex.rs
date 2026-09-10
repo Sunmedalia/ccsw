@@ -266,9 +266,10 @@ fn check_managed(binding: &Binding, home: &Path, doc: &DocumentMut) -> Result<()
         bail!("CODEX_HOME changed; disconnect the previous home before applying to another home");
     }
     for (key, expected) in &binding.managed {
-        if get(doc, key) != *expected {
+        if !matches!(key.as_str(), "model" | "model_reasoning_effort") && get(doc, key) != *expected
+        {
             bail!(
-                "Codex setting {key} changed outside CCSW; restore it or disconnect before applying"
+                "Codex setting {key} changed outside CCSW; restore it or run ccsw codex disconnect (TUI: D) before applying"
             );
         }
     }
@@ -426,6 +427,19 @@ pub(super) fn commit(
         ..Default::default()
     });
     check_managed(&state, home, old)?;
+    // Explicit selections may replace a model chosen in Codex. Preserve that
+    // external choice as the baseline for a later disconnect.
+    let mut baseline: DocumentMut = state.before.parse()?;
+    for key in ["model", "model_reasoning_effort"] {
+        if state
+            .managed
+            .get(key)
+            .is_some_and(|expected| get(old, key) != *expected)
+        {
+            restore_key(&mut baseline, old, key);
+        }
+    }
+    state.before = baseline.to_string();
     accounts::capture_current(paths, previous_auth.as_ref())?;
     state.managed = KEYS
         .iter()
@@ -576,6 +590,7 @@ pub fn status(paths: &AppPaths) -> Result<String> {
             .and_then(Item::as_str)
             .unwrap_or("Codex default")
     );
+    message.push_str(&format!("\n{}", accounts::live_login()?.1));
     for key in ["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_AUTH"] {
         if std::env::var_os(key).is_some_and(|v| !v.is_empty()) {
             message.push_str(&format!(
