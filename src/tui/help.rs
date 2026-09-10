@@ -244,10 +244,10 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
     }
     let mut lines = vec![
         Line::styled(
-            "Pi · Independent API providers and models",
+            "Pi · Configuration files, providers and models",
             Style::default().fg(ROUTE),
         ),
-        Line::raw("p  Sync enabled models directly to Pi; select the default model"),
+        Line::raw("p  Save enabled models and the default to Pi configuration files"),
         Line::raw("i  Import Pi API configuration"),
         Line::raw("r  Test connection and fetch provider models"),
         Line::raw("s  Inspect Pi configuration status"),

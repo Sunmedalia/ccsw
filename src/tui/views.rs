@@ -56,73 +56,66 @@ impl App {
             .selected_model()
             .map(|model| model.label().to_owned())
             .unwrap_or_else(|| "no model".into());
-        let line = if self.pi_enabled {
-            Line::from(vec![
-                Span::styled(" CCSW · Pi API ", Style::default().fg(ROUTE)),
-                Span::raw("F2 Claude · i Import · p Sync · s Status · D Disconnect"),
-            ])
-        } else {
-            match self.view_mode {
-                ViewMode::Home => Line::from(vec![
-                    Span::styled(
-                        " CCSW ",
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(ROUTE)
-                            .add_modifier(Modifier::BOLD),
+        let line = match self.view_mode {
+            ViewMode::Home => Line::from(vec![
+                Span::styled(
+                    " CCSW ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if self.codex_ui.enabled {
+                        "  Providers · F2 Pi"
+                    } else {
+                        "  Providers · F2 Codex"
+                    },
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "  ·  {} providers",
+                        self.config.profiles.len() + usize::from(self.codex_ui.enabled)
                     ),
-                    Span::styled(
-                        if self.codex_ui.enabled {
-                            "  Providers · F2 Pi"
-                        } else {
-                            "  Providers · F2 Codex"
-                        },
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(
-                            "  ·  {} providers",
-                            self.config.profiles.len() + usize::from(self.codex_ui.enabled)
-                        ),
-                        Style::default().fg(MUTED),
-                    ),
-                ]),
-                ViewMode::Provider => Line::from(vec![
-                    Span::styled(
-                        " ‹ Back (Esc) ",
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(ROUTE)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  {profile}  "),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("→", Style::default().fg(ROUTE)),
-                    Span::styled(
-                        format!("  {model}  "),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                ViewMode::AllEnabled => Line::from(vec![
-                    Span::styled(
-                        " ‹ Back (Esc) ",
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(ROUTE)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "  All Models",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  ·  {} models", self.all_enabled_model_count()),
-                        Style::default().fg(CONNECTED),
-                    ),
-                ]),
-            }
+                    Style::default().fg(MUTED),
+                ),
+            ]),
+            ViewMode::Provider => Line::from(vec![
+                Span::styled(
+                    " ‹ Back (Esc) ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {profile}  "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("→", Style::default().fg(ROUTE)),
+                Span::styled(
+                    format!("  {model}  "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            ViewMode::AllEnabled => Line::from(vec![
+                Span::styled(
+                    " ‹ Back (Esc) ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "  All Models",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ·  {} models", self.all_enabled_model_count()),
+                    Style::default().fg(CONNECTED),
+                ),
+            ]),
         };
         frame.render_widget(
             Paragraph::new(line)
@@ -872,7 +865,7 @@ impl App {
     }
 
     pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
-        for (control, rect) in footer_controls(area, compact, self.view_mode) {
+        for (control, rect) in self.client_footer_controls(area, compact) {
             let (label, style) = self.footer_control_style(control, compact, area.width < 55);
             frame.render_widget(
                 Paragraph::new(label)

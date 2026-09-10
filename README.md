@@ -166,7 +166,9 @@ ccsw import --yes
 
 > Pi Agent 配置随 v0.1.6 发布；当前兼容验证基准为 Pi `0.85.1`。
 
-点击顶部 **Pi** 标签或按 `F2` 切换到 **Pi API**。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
+点击顶部 **Pi** 标签或按 `F2` 切换到 Pi 配置管理。首页与 Claude Code 使用相同的 `CCSW Providers · F2 Codex · N providers` 标题和厂商布局。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
+
+Pi 页面只管理 `models.json` 和 `settings.json`，不显示代理按钮，`P` 不打开代理面板。同步后由 Pi 自身直接连接厂商。
 
 | 按键 | 操作 |
 | --- | --- |

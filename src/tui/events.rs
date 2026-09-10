@@ -521,8 +521,7 @@ impl App {
                 if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
                     return Ok(MouseAction::None);
                 }
-                for (control, rect) in footer_controls(ui.footer, area.width < 100, self.view_mode)
-                {
+                for (control, rect) in self.client_footer_controls(ui.footer, area.width < 100) {
                     if !contains(rect, mouse.column, mouse.row) {
                         continue;
                     }

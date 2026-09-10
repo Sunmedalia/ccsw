@@ -1,5 +1,22 @@
 use super::*;
 impl App {
+    pub(super) fn client_footer_controls(
+        &self,
+        area: Rect,
+        compact: bool,
+    ) -> Vec<(FooterControl, Rect)> {
+        let mut x = area.x;
+        footer_controls(area, compact, self.view_mode)
+            .into_iter()
+            .filter(|(control, _)| !self.pi_enabled || *control != FooterControl::Proxy)
+            .map(|(control, mut rect)| {
+                rect.x = x;
+                x = x.saturating_add(rect.width).saturating_add(1);
+                (control, rect)
+            })
+            .collect()
+    }
+
     pub(super) fn handle_pi_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
         if key.code == KeyCode::F(2) && !self.codex_navigation_blocked() {
             self.select_client_tab(match self.client_tab() {
@@ -41,7 +58,9 @@ impl App {
         match crate::pi::apply(&self.paths, &profile, model.as_deref()) {
             Ok(()) => {
                 self.status_error = false;
-                self.status = "Pi synced · direct API · open /model in Pi".into();
+                self.status =
+                    "Pi configuration saved · models.json / settings.json · open /model in Pi"
+                        .into();
             }
             Err(error) => self.set_error(format!("Pi sync failed: {error:#}")),
         }

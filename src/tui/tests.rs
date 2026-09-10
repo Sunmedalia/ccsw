@@ -1792,7 +1792,7 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(text.contains("Pi API"));
+        assert!(text.contains("‹ Back (Esc)"));
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
@@ -1928,7 +1928,7 @@ fn pi_help_is_client_specific_and_codex_account_buttons_are_clickable() {
         .map(|c| c.symbol())
         .collect();
     assert!(text.contains("Pi Help"));
-    assert!(text.contains("Sync enabled models directly to Pi"));
+    assert!(text.contains("Save enabled models and the default to Pi configuration files"));
     assert!(!text.contains("manage proxy"));
     app.modal = None;
     app.select_client_tab(ClientTab::Codex);
@@ -2060,4 +2060,51 @@ fn codex_space_selects_account_without_applying_or_following_cursor() {
         .collect();
     assert!(text.contains("[●] ○ First"));
     assert!(text.contains("[○] ○ Second"));
+}
+
+#[test]
+fn pi_uses_provider_layout_without_proxy_controls() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Pi);
+    for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Providers · F2 Codex"));
+        let area = Rect::new(0, 0, width, height);
+        let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
+        assert!(
+            !controls
+                .iter()
+                .any(|(control, _)| *control == FooterControl::Proxy)
+        );
+        for pair in controls.windows(2) {
+            assert_eq!(pair[0].1.right() + 1, pair[1].1.x);
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.modal.is_none());
+        let (_, help) = controls
+            .iter()
+            .find(|(control, _)| *control == FooterControl::Help)
+            .unwrap();
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: help.x,
+                row: help.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        )
+        .unwrap();
+        assert!(matches!(app.modal, Some(Modal::Help(_))));
+        app.modal = None;
+    }
 }

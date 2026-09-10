@@ -555,6 +555,9 @@ impl App {
 
     pub(super) fn open_proxy_manager(&mut self) {
         if self.pi_enabled {
+            return;
+        }
+        if self.pi_enabled {
             self.status = "Pi connects directly to providers; no CCSW proxy required".into();
             return;
         }
