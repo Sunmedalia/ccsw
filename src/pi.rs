@@ -15,6 +15,8 @@ use std::{
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub profiles: BTreeMap<String, Profile>,
+    #[serde(default)]
     pub imports: BTreeMap<String, String>,
     /// JSON strings preserve Pi-only compatibility options without TOML null loss.
     #[serde(default)]
@@ -287,7 +289,7 @@ fn apply_locked(paths: &AppPaths, profile_id: &str, model: Option<&str>) -> Resu
     let home = home()?;
     let _lock = lock(&home)?;
     recover(paths, &home)?;
-    let config = config::load(&paths.config)?;
+    let config = config::update_client(&paths.config, config::Client::Pi, |_| Ok(()))?;
     let wanted = if profile_id.is_empty() {
         ""
     } else {
@@ -434,7 +436,7 @@ pub fn sync_if_connected(paths: &AppPaths) -> Result<()> {
     let Some(b) = binding(paths)? else {
         return Ok(());
     };
-    let config = config::load(&paths.config)?;
+    let config = config::load_client(&paths.config, config::Client::Pi)?;
     let choices: Vec<_> = config
         .profiles
         .iter()
@@ -472,7 +474,7 @@ pub fn status(paths: &AppPaths) -> Result<String> {
         return Ok("Pi not connected · p sync".into());
     };
     if check(&b, paths, &home, &documents(&home)?).is_ok()
-        && source_hash(&config::load(&paths.config)?)? != b.source
+        && source_hash(&config::load_client(&paths.config, config::Client::Pi)?)? != b.source
     {
         return Ok("Pi pending sync · p retry".into());
     }
@@ -571,9 +573,9 @@ pub fn import(paths: &AppPaths, dry_run: bool) -> Result<String> {
     };
     if dry_run {
         let mut edit = edit;
-        edit(&mut config::load(&paths.config)?)?;
+        edit(&mut config::load_client(&paths.config, config::Client::Pi)?)?;
     } else {
-        config::update(&paths.config, edit)?;
+        config::update_client(&paths.config, config::Client::Pi, edit)?;
         sync_if_connected(paths).context(
             "Pi import saved, but synchronization failed; resolve conflict and retry apply",
         )?;
@@ -751,7 +753,11 @@ fn source_hash(config: &config::Config) -> Result<String> {
     use sha2::{Digest, Sha256};
     Ok(format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&(&config.profiles, &config.pi))?)
+        Sha256::digest(serde_json::to_vec(&(
+            &config.profiles,
+            &config.pi.imports,
+            &config.pi.extras
+        ))?)
     ))
 }
 

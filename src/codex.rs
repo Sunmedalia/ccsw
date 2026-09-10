@@ -21,6 +21,8 @@ use toml_edit::{DocumentMut, Item, value};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub profiles: BTreeMap<String, config::Profile>,
+    #[serde(default)]
     pub accounts: BTreeMap<String, accounts::Account>,
     pub active: Option<Selection>,
     pub api_model: Option<String>,
@@ -221,6 +223,7 @@ const KEYS: &[&str] = &[
     "model",
     "model_provider",
     "model_reasoning_effort",
+    "model_catalog_json",
     "model_context_window",
     "model_auto_compact_token_limit",
     "cli_auth_credentials_store",
@@ -487,7 +490,7 @@ pub fn apply(
     reasoning: Option<&str>,
 ) -> Result<()> {
     let _guard = lock(paths)?;
-    let config = config::load(&paths.config)?;
+    let config = config::load_client(&paths.config, config::Client::Codex)?;
     let profile = config
         .profiles
         .get(profile_id)
@@ -513,6 +516,8 @@ pub fn apply(
     let mut new = old.clone();
     new["model"] = value(wanted);
     new["model_provider"] = value("ccsw");
+    let catalog = write_model_catalog(paths, &models)?;
+    new["model_catalog_json"] = value(catalog.to_string_lossy().as_ref());
     ensure_providers(&mut new)?;
     new["model_providers"]["ccsw"] = Item::Table(toml_edit::Table::new());
     for (key, val) in [
@@ -676,6 +681,32 @@ pub fn disconnect(paths: &AppPaths) -> Result<()> {
     })?;
     fs::remove_file(binding_path(paths))?;
     Ok(())
+}
+
+fn write_model_catalog(paths: &AppPaths, models: &[config::ModelEntry]) -> Result<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let entries: Vec<Value> = models.iter().map(|entry| {
+        let context = entry.context_window.unwrap_or(if entry.id.ends_with("[1m]") { 1_000_000 } else { 128_000 });
+        json!({
+            "slug":config::canonical_model_id(&entry.id), "display_name":entry.label(),
+            "description":"User-configured model managed by CCSW",
+            "default_reasoning_level":"none", "supported_reasoning_levels":[],
+            "shell_type":"unified_exec", "visibility":"list", "supported_in_api":true,
+            "priority":0, "base_instructions":"You are a coding assistant. Inspect the workspace, use tools to perform the requested work, and verify your changes.",
+            "supports_reasoning_summaries":false,"support_verbosity":false,
+            "truncation_policy":{"mode":"tokens","limit":10000},
+            "context_window":context,"effective_context_window_percent":90,
+            "input_modalities":["text"],"experimental_supported_tools":[],
+            "supports_search_tool":false,"use_responses_lite":false
+        })
+    }).collect();
+    let bytes = serde_json::to_vec_pretty(&json!({"models":entries}))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let dir = paths.state_dir.join("codex-model-catalogs");
+    fs::create_dir_all(&dir)?;
+    let path = std::path::absolute(dir.join(format!("{digest}.json")))?;
+    atomic_write(&path, &bytes)?;
+    Ok(path)
 }
 
 #[cfg(test)]

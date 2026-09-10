@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use url::Url;
 
-pub const CONFIG_VERSION: u32 = 3;
+pub const CONFIG_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
@@ -368,7 +368,7 @@ pub fn load(path: &Path) -> Result<Config> {
         .unwrap_or(1);
     if version == 1 {
         migrate_v1(&mut raw)?;
-    } else if version == 2 {
+    } else if version == 2 || version == 3 {
         raw["version"] = toml::Value::Integer(i64::from(CONFIG_VERSION));
     } else if version != i64::from(CONFIG_VERSION) {
         bail!(
@@ -380,10 +380,45 @@ pub fn load(path: &Path) -> Result<Config> {
     let mut config: Config = raw
         .try_into()
         .with_context(|| format!("failed to parse {}", path.display()))?;
-    for profile in config.profiles.values_mut() {
+    if version < 4 {
+        config.codex.profiles = config.profiles.clone();
+        config.pi.profiles = config.profiles.clone();
+        for profile in config
+            .codex
+            .profiles
+            .values_mut()
+            .chain(config.pi.profiles.values_mut())
+        {
+            for id in profile.required_model_ids() {
+                if canonical_model_id(&id) != canonical_model_id(&profile.default_model)
+                    && !profile.enabled_models.contains(&id)
+                    && !profile
+                        .disabled_models
+                        .iter()
+                        .any(|disabled| canonical_model_id(disabled) == canonical_model_id(&id))
+                {
+                    profile.enabled_models.push(id);
+                }
+            }
+            profile.aliases = RoleModels::default();
+            profile.subagent_model = None;
+            profile.fallback_models.clear();
+        }
+    }
+    for profile in config
+        .profiles
+        .values_mut()
+        .chain(config.codex.profiles.values_mut())
+        .chain(config.pi.profiles.values_mut())
+    {
         profile.models = deduplicate_model_entries(std::mem::take(&mut profile.models));
     }
-    for (id, profile) in &config.profiles {
+    for (id, profile) in config
+        .profiles
+        .iter()
+        .chain(config.codex.profiles.iter())
+        .chain(config.pi.profiles.iter())
+    {
         validate_profile_id(id).with_context(|| format!("invalid profile id {id}"))?;
         profile
             .validate()
@@ -465,7 +500,12 @@ fn update_locked(
     let mut latest = load(path)?;
     edit(&mut latest)?;
     latest.version = CONFIG_VERSION;
-    for (id, profile) in &latest.profiles {
+    for (id, profile) in latest
+        .profiles
+        .iter()
+        .chain(latest.codex.profiles.iter())
+        .chain(latest.pi.profiles.iter())
+    {
         validate_profile_id(id)?;
         profile.validate()?;
     }
@@ -524,23 +564,6 @@ pub fn merge_profile(original: &Profile, edited: &Profile, latest: &Profile) -> 
     Ok(profile)
 }
 
-pub fn update_profile(
-    path: &Path,
-    id: &str,
-    original: &Profile,
-    edited: &Profile,
-) -> Result<Config> {
-    try_update(path, |latest| {
-        let current = latest
-            .profiles
-            .get(id)
-            .context("provider was removed in another CCSW instance")?;
-        let merged = merge_profile(original, edited, current)?;
-        latest.profiles.insert(id.to_owned(), merged);
-        Ok(())
-    })
-}
-
 fn write_unlocked(path: &Path, config: &Config) -> Result<()> {
     let encoded = toml::to_string_pretty(config).context("failed to encode config")?;
     let parent = path.parent().context("config path has no parent")?;
@@ -576,6 +599,57 @@ pub fn set_private(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 pub fn set_private(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub enum Client {
+    #[default]
+    Claude,
+    Codex,
+    Pi,
+}
+fn swap_scope(config: &mut Config, client: Client) {
+    match client {
+        Client::Claude => {}
+        Client::Codex => std::mem::swap(&mut config.profiles, &mut config.codex.profiles),
+        Client::Pi => std::mem::swap(&mut config.profiles, &mut config.pi.profiles),
+    }
+}
+pub fn load_client(path: &Path, client: Client) -> Result<Config> {
+    let mut config = load(path)?;
+    swap_scope(&mut config, client);
+    Ok(config)
+}
+pub fn update_client(
+    path: &Path,
+    client: Client,
+    edit: impl FnOnce(&mut Config) -> Result<()>,
+) -> Result<Config> {
+    let mut config = try_update(path, |config| {
+        swap_scope(config, client);
+        let result = edit(config);
+        swap_scope(config, client);
+        result
+    })?;
+    swap_scope(&mut config, client);
+    Ok(config)
+}
+pub fn update_client_profile(
+    path: &Path,
+    client: Client,
+    id: &str,
+    original: &Profile,
+    edited: &Profile,
+) -> Result<Config> {
+    update_client(path, client, |config| {
+        let current = config
+            .profiles
+            .get(id)
+            .context("provider was removed in another CCSW instance")?;
+        let merged = merge_profile(original, edited, current)?;
+        config.profiles.insert(id.into(), merged);
+        Ok(())
+    })
 }
 
 #[cfg(test)]

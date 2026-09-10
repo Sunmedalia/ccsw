@@ -112,7 +112,7 @@ fn import_preview_deduplicates_and_preserves_compatibility() {
     s.ok(&["pi", "import"]);
     let cfg: toml::Value =
         toml::from_str(&fs::read_to_string(s.root.path().join("config.toml")).unwrap()).unwrap();
-    assert_eq!(cfg["profiles"].as_table().unwrap().len(), 2);
+    assert_eq!(cfg["pi"]["profiles"].as_table().unwrap().len(), 2);
     s.ok(&["pi", "apply", "--profile", "pi-custom"]);
     let models = s.get("models.json");
     let p = &models["providers"]["ccsw-pi-custom"];
@@ -149,10 +149,13 @@ fn import_resync_removes_disabled_models_and_reconnects_catalog() {
     s.ok(&["pi", "apply", "--profile", "local"]);
     let path = s.root.path().join("config.toml");
     let mut cfg: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    cfg["profiles"]["local"].as_table_mut().unwrap().insert(
-        "disabled_models".into(),
-        toml::Value::Array(vec![toml::Value::String("test[1m]".into())]),
-    );
+    cfg["pi"]["profiles"]["local"]
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            "disabled_models".into(),
+            toml::Value::Array(vec![toml::Value::String("test[1m]".into())]),
+        );
     fs::write(&path, toml::to_string(&cfg).unwrap()).unwrap();
     assert!(s.ok(&["pi", "status"]).contains("pending"));
     s.ok(&["pi", "import"]);
@@ -162,7 +165,7 @@ fn import_resync_removes_disabled_models_and_reconnects_catalog() {
             .is_none()
     );
     assert_eq!(s.get("settings.json")["defaultProvider"], "original");
-    cfg["profiles"]["local"]["disabled_models"] = toml::Value::Array(vec![]);
+    cfg["pi"]["profiles"]["local"]["disabled_models"] = toml::Value::Array(vec![]);
     fs::write(&path, toml::to_string(&cfg).unwrap()).unwrap();
     s.ok(&["pi", "import"]);
     assert!(

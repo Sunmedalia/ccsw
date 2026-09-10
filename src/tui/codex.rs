@@ -92,7 +92,9 @@ impl App {
                     self.status_error = result.is_err();
                     self.codex_ui.message = result.unwrap_or_else(|e| e);
                     self.status = self.codex_ui.message.clone();
-                    if let Ok(config) = config::load(&self.paths.config) {
+                    if let Ok(config) =
+                        config::load_client(&self.paths.config, config::Client::Codex)
+                    {
                         self.config = config;
                     }
                     self.codex_ui.selected = self

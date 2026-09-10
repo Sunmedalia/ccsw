@@ -786,7 +786,14 @@ fn resolve_profile(
     target: &RouteTarget,
     requested_model: Option<&str>,
 ) -> Result<(Profile, String)> {
-    let config = config::load(&target.config_path)?;
+    let config = config::load_client(
+        &target.config_path,
+        if target.codex {
+            config::Client::Codex
+        } else {
+            config::Client::Claude
+        },
+    )?;
     let (profile_id, model_id) = if let Some(profile_id) = &target.profile_id {
         (profile_id.as_str(), requested_model.unwrap_or_default())
     } else {
@@ -828,7 +835,14 @@ fn resolve_profile(
 }
 
 fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
-    let config = config::load(&target.config_path)?;
+    let config = config::load_client(
+        &target.config_path,
+        if target.codex {
+            config::Client::Codex
+        } else {
+            config::Client::Claude
+        },
+    )?;
     let active: BTreeMap<_, std::collections::BTreeSet<String>> = config
         .profiles
         .iter()

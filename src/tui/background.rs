@@ -67,6 +67,9 @@ impl Background {
 }
 impl App {
     pub(super) fn initialize_background(&mut self) {
+        if self.client_tab() != ClientTab::Claude {
+            return;
+        }
         let paths = self.paths.clone();
         self.background.spawn(move || {
             let status =
@@ -107,6 +110,9 @@ impl App {
     }
 
     pub(super) fn queue_sync(&mut self, explicit: bool, preferred: Option<String>) {
+        if self.client_tab() != ClientTab::Claude {
+            return;
+        }
         if !explicit && !self.background.connected {
             return;
         }
@@ -183,7 +189,7 @@ impl App {
                     }
                     self.background.requests.remove(&id);
                     if self.config.profiles.get(&id) != Some(profile.as_ref())
-                        || config::load(&self.paths.config)
+                        || config::load_client(&self.paths.config, self.config_client())
                             .ok()
                             .and_then(|config| config.profiles.get(&id).cloned())
                             .as_ref()
@@ -199,9 +205,12 @@ impl App {
                                 fetched_at: now_epoch(),
                                 models: models.clone(),
                             };
-                            let persisted = discovery::update_cache(&self.paths.cache, |cache| {
-                                cache.profiles.insert(id.clone(), cached.clone());
-                            });
+                            let persisted = discovery::update_cache(
+                                &self.client_cache_path(self.config_client()),
+                                |cache| {
+                                    cache.profiles.insert(id.clone(), cached.clone());
+                                },
+                            );
                             self.cache.profiles.insert(id.clone(), cached);
                             if target_form && let Some(Modal::Model(current)) = &mut self.modal {
                                 let selected = current

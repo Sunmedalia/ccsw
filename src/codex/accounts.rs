@@ -303,6 +303,7 @@ pub fn activate(paths: &AppPaths, id: &str) -> Result<()> {
         new.remove("model");
     }
     for key in [
+        "model_catalog_json",
         "model_context_window",
         "model_auto_compact_token_limit",
         "model_reasoning_effort",
@@ -382,7 +383,7 @@ pub fn refresh(paths: &AppPaths, id: &str) -> Result<()> {
     )?;
     let result = (|| {
         let mut client = rpc::Client::start(temp.path())?;
-        let info = client.call("account/read", json!({"refreshToken":true}))?;
+        let info = client.call("account/read", json!({"refreshToken":false}))?;
         if info["account"]["type"] != "chatgpt" {
             bail!("Subscription login expired; sign in again");
         }

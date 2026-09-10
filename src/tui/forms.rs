@@ -66,7 +66,7 @@ impl ProxyManager {
         self.port_field = None;
         self.port_changed = true;
         Ok(format!(
-            "Saved {}. Close this panel and press p to start and sync Claude.",
+            "Saved {}. Close this panel and press p to apply the client configuration.",
             status.listen
         ))
     }
@@ -230,7 +230,12 @@ impl ProfileForm {
     }
 
     pub(super) fn to_profile(&self) -> Result<(String, Profile)> {
-        let value = |index: usize| self.fields[index].value.trim().to_owned();
+        let value = |index: usize| {
+            self.fields
+                .get(index)
+                .map(|f| f.value.trim().to_owned())
+                .unwrap_or_default()
+        };
         let id = value(0);
         config::validate_profile_id(&id)?;
         let api_format = match value(2).as_str() {
@@ -1079,7 +1084,12 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
     }
 }
 
-pub(super) fn draw_proxy_manager(frame: &mut ratatui::Frame, area: Rect, manager: &ProxyManager) {
+pub(super) fn draw_proxy_manager(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    manager: &ProxyManager,
+    client: &str,
+) {
     if let Some(port) = &manager.port_field {
         draw_form(
             frame,
@@ -1116,7 +1126,7 @@ pub(super) fn draw_proxy_manager(frame: &mut ratatui::Frame, area: Rect, manager
         .is_some_and(|status| status.installed);
     let runtime_color = if running { CONNECTED } else { WARNING };
     let rail = Line::from(vec![
-        Span::styled("Claude Code", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(client, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled("  ──▶  ", Style::default().fg(MUTED)),
         Span::styled(
             format!("CCSW proxy {}", if running { '●' } else { '○' }),

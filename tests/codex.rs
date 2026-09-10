@@ -165,7 +165,7 @@ fn distinct_workspaces_and_bad_imports_do_not_overwrite_accounts() {
     assert!(!String::from_utf8_lossy(&result.stderr).contains("secret"));
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(s.root.path().join("config.toml")).unwrap()).unwrap();
-    assert_eq!(config["version"].as_integer(), Some(3));
+    assert_eq!(config["version"].as_integer(), Some(4));
     assert_eq!(config["codex"]["accounts"].as_table().unwrap().len(), 2);
 }
 #[test]
@@ -297,4 +297,38 @@ fn official_rpc_shape_supports_login_refresh_and_stale_quota_errors() {
     let limits: Value =
         serde_json::from_str(config["codex"]["accounts"][id]["limits"].as_str().unwrap()).unwrap();
     assert_eq!(limits["rateLimits"]["primary"]["usedPercent"], 25);
+}
+
+#[test]
+fn codex_api_uses_its_own_catalog_and_restores_metadata_on_subscription() {
+    let s = Sandbox::new();
+    let path = s.root.path().join("config.toml");
+    fs::write(&path, "version=4\n[profiles.local]\nname='Claude only'\nbase_url='https://claude.invalid'\ndefault_model='claude-only'\n[codex.profiles.local]\nname='Codex only'\nbase_url='https://codex.invalid'\napi_format='openai-chat'\ndefault_model='deepseek-v4-flash'\n").unwrap();
+    let aid = s.add("A", &auth("a", "workspace", "refresh-a"));
+    let before = fs::read(&path).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    s.ok(&["proxy", "start", "--listen", &address]);
+    let result = std::panic::catch_unwind(|| {
+        s.ok(&["codex", "apply", "--profile", "local"]);
+        let applied: toml::Value =
+            toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
+        assert_eq!(applied["model"].as_str(), Some("deepseek-v4-flash"));
+        let catalog: Value = serde_json::from_slice(
+            &fs::read(applied["model_catalog_json"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(catalog["models"][0]["slug"], "deepseek-v4-flash");
+        assert!(!catalog.to_string().contains("claude-only"));
+        s.ok(&["codex", "accounts", "use", &aid]);
+        let restored: toml::Value =
+            toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
+        assert!(restored.get("model_catalog_json").is_none());
+        let original: toml::Value = toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
+        let after: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(after["profiles"], original["profiles"]);
+    });
+    s.ok(&["proxy", "stop"]);
+    result.unwrap();
 }

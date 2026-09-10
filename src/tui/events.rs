@@ -916,11 +916,15 @@ impl App {
             Modal::Import(candidate) => match key.code {
                 KeyCode::Char('i') | KeyCode::Enter => {
                     let profile = candidate.profile.clone();
-                    self.config = config::try_update(&self.paths.config, |latest| {
-                        let id = unique_profile_id("imported", &latest.profiles);
-                        latest.profiles.insert(id, profile);
-                        Ok(())
-                    })?;
+                    self.config = config::update_client(
+                        &self.paths.config,
+                        self.config_client(),
+                        |latest| {
+                            let id = unique_profile_id("imported", &latest.profiles);
+                            latest.profiles.insert(id, profile);
+                            Ok(())
+                        },
+                    )?;
                     self.profile_idx = 0;
                     self.model_idx = self.default_model_index();
                     self.status =
@@ -949,15 +953,19 @@ impl App {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     if let Some(id) = self.selected_profile_id() {
                         let original = self.config.profiles.get(&id).cloned();
-                        self.config = config::try_update(&self.paths.config, |latest| {
-                            if latest.profiles.get(&id) != original.as_ref() {
-                                anyhow::bail!(
-                                    "provider changed in another CCSW instance; reopen before deleting"
-                                );
-                            }
-                            latest.profiles.remove(&id);
-                            Ok(())
-                        })?;
+                        self.config = config::update_client(
+                            &self.paths.config,
+                            self.config_client(),
+                            |latest| {
+                                if latest.profiles.get(&id) != original.as_ref() {
+                                    anyhow::bail!(
+                                        "provider changed in another CCSW instance; reopen before deleting"
+                                    );
+                                }
+                                latest.profiles.remove(&id);
+                                Ok(())
+                            },
+                        )?;
                         let cache_result = discovery::update_cache(&self.paths.cache, |cache| {
                             cache.profiles.remove(&id);
                         });
@@ -1059,8 +1067,9 @@ impl App {
                                     profile.default_model = replacement.clone();
                                 }
                             }
-                            self.config = config::update_profile(
+                            self.config = config::update_client_profile(
                                 &self.paths.config,
+                                self.config_client(),
                                 &profile_id,
                                 &original,
                                 &edited,
@@ -1146,31 +1155,40 @@ impl App {
                         Ok((id, profile)) => {
                             let original = form.original_id.clone();
                             let original_profile = form.original_profile.clone();
-                            let update = config::try_update(&self.paths.config, |latest| {
-                                let profile = if let (Some(original_id), Some(original_profile)) =
-                                    (&original, &original_profile)
-                                {
-                                    let current = latest
-                                        .profiles
-                                        .get(original_id)
-                                        .context("provider was removed in another CCSW instance")?;
-                                    config::merge_profile(original_profile, &profile, current)?
-                                } else {
-                                    profile
-                                };
-                                if latest.profiles.contains_key(&id)
-                                    && original.as_deref() != Some(id.as_str())
-                                {
-                                    anyhow::bail!("profile id '{id}' already exists");
-                                }
-                                if let Some(original) = &original
-                                    && original != &id
-                                {
-                                    latest.profiles.remove(original);
-                                }
-                                latest.profiles.insert(id.clone(), profile);
-                                Ok(())
-                            });
+                            let update = config::update_client(
+                                &self.paths.config,
+                                self.config_client(),
+                                |latest| {
+                                    let profile =
+                                        if let (Some(original_id), Some(original_profile)) =
+                                            (&original, &original_profile)
+                                        {
+                                            let current =
+                                                latest.profiles.get(original_id).context(
+                                                    "provider was removed in another CCSW instance",
+                                                )?;
+                                            config::merge_profile(
+                                                original_profile,
+                                                &profile,
+                                                current,
+                                            )?
+                                        } else {
+                                            profile
+                                        };
+                                    if latest.profiles.contains_key(&id)
+                                        && original.as_deref() != Some(id.as_str())
+                                    {
+                                        anyhow::bail!("profile id '{id}' already exists");
+                                    }
+                                    if let Some(original) = &original
+                                        && original != &id
+                                    {
+                                        latest.profiles.remove(original);
+                                    }
+                                    latest.profiles.insert(id.clone(), profile);
+                                    Ok(())
+                                },
+                            );
                             self.config = match update {
                                 Ok(config) => config,
                                 Err(error) => {
@@ -1316,8 +1334,9 @@ impl App {
                                 profile.disabled_models.push(saved_model.id.clone());
                             }
                         }
-                        self.config = config::update_profile(
+                        self.config = config::update_client_profile(
                             &self.paths.config,
+                            self.config_client(),
                             &profile_id,
                             &original,
                             &edited,

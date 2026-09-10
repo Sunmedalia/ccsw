@@ -20,7 +20,7 @@ impl App {
         match key.code {
             KeyCode::Char('i') => {
                 self.status = crate::pi::import(&self.paths, false)?.replace('\n', " · ");
-                self.config = config::load(&self.paths.config)?;
+                self.config = config::load_client(&self.paths.config, config::Client::Pi)?;
             }
             KeyCode::Char('p') => self.apply_pi(),
             KeyCode::Char('s') => self.status = crate::pi::status(&self.paths)?,
@@ -47,6 +47,9 @@ impl App {
         }
     }
     pub(super) fn sync_pi_after_edit(&mut self) {
+        if !self.pi_enabled {
+            return;
+        }
         if let Err(error) = crate::pi::sync_if_connected(&self.paths) {
             self.set_error(format!("Pi pending sync: {error:#} · p retry"));
         }

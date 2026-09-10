@@ -182,6 +182,24 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
     for name in STATE_FILES {
         names.insert(paths.state_dir.join(name));
     }
+    for client in ["codex", "pi"] {
+        let cache = paths.cache.with_file_name(format!("{client}-models.json"));
+        names.insert(checked(&cache)?);
+        names.insert(checked(&cache.with_extension("json.lock"))?);
+    }
+    let catalogs = checked(&paths.state_dir.join("codex-model-catalogs"))?;
+    if catalogs.exists() {
+        for entry in fs::read_dir(&catalogs)? {
+            let path = entry?.path();
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if path.extension().is_some_and(|e| e == "json")
+                && stem.len() == 64
+                && stem.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                names.insert(checked(&path)?);
+            }
+        }
+    }
     let mut account_dirs = Vec::new();
     if paths.config.exists() {
         for id in crate::config::load(&paths.config)?.codex.accounts.keys() {

@@ -278,7 +278,11 @@ impl App {
     }
 
     pub(super) fn new_profile(&mut self) {
-        self.modal = Some(Modal::Profile(Box::new(ProfileForm::new())));
+        let mut form = ProfileForm::new();
+        if self.client_tab() != ClientTab::Claude {
+            form.fields.truncate(7);
+        }
+        self.modal = Some(Modal::Profile(Box::new(form)));
     }
 
     pub(super) fn create_route_editor(&self) -> Option<RouteEditor> {
@@ -424,7 +428,13 @@ impl App {
         let mut profile = editor.original_profile.clone();
         apply_route_editor(&mut profile, editor);
         let id = editor.profile_id.clone();
-        match config::update_profile(&self.paths.config, &id, &editor.original_profile, &profile) {
+        match config::update_client_profile(
+            &self.paths.config,
+            self.config_client(),
+            &id,
+            &editor.original_profile,
+            &profile,
+        ) {
             Ok(config) => self.config = config,
             Err(error) => {
                 self.reload_for_edit();
@@ -506,7 +516,7 @@ impl App {
             return;
         }
         let selected = self.selected_profile_id();
-        if let Ok(latest) = config::load(&self.paths.config) {
+        if let Ok(latest) = config::load_client(&self.paths.config, self.config_client()) {
             self.config = latest;
             self.profile_idx = selected
                 .and_then(|id| {
@@ -525,10 +535,18 @@ impl App {
             return;
         };
         let profile = self.config.profiles[&id].clone();
-        self.modal = Some(Modal::Profile(Box::new(ProfileForm::edit(id, &profile))));
+        let mut form = ProfileForm::edit(id, &profile);
+        if self.client_tab() != ClientTab::Claude {
+            form.fields.truncate(7);
+        }
+        self.modal = Some(Modal::Profile(Box::new(form)));
     }
 
     pub(super) fn open_proxy_manager(&mut self) {
+        if self.pi_enabled {
+            self.status = "Pi connects directly to providers; no CCSW proxy required".into();
+            return;
+        }
         let manager = ProxyManager::empty();
         self.modal = Some(Modal::Proxy(manager));
         self.start_proxy_action(ProxyControl::Refresh);
@@ -556,7 +574,7 @@ impl App {
             self.set_error("No models are available; fetch or add a model first");
             return;
         }
-        let update = config::try_update(&self.paths.config, |latest| {
+        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
@@ -624,7 +642,13 @@ impl App {
         let original = self.config.profiles[&profile_id].clone();
         let mut edited = original.clone();
         edited.enabled = enabled;
-        self.config = config::update_profile(&self.paths.config, &profile_id, &original, &edited)?;
+        self.config = config::update_client_profile(
+            &self.paths.config,
+            self.config_client(),
+            &profile_id,
+            &original,
+            &edited,
+        )?;
         self.profile_idx = self
             .profile_ids()
             .iter()
@@ -644,8 +668,9 @@ impl App {
         };
         let profile = self.toggled_global_model_profile(&selected)?;
         let profile_id = selected.profile_id.clone();
-        self.config = config::update_profile(
+        self.config = config::update_client_profile(
             &self.paths.config,
+            self.config_client(),
             &profile_id,
             &self.config.profiles[&profile_id],
             &profile,
@@ -720,7 +745,7 @@ impl App {
             .profiles
             .get(&profile_id)
             .map(|p| p.default_model.clone());
-        let update = config::try_update(&self.paths.config, |latest| {
+        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
@@ -775,7 +800,7 @@ impl App {
         } else {
             format!("{base}[1m]")
         };
-        let update = config::try_update(&self.paths.config, |latest| {
+        let update = config::update_client(&self.paths.config, self.config_client(), |latest| {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)

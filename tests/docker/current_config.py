@@ -98,8 +98,8 @@ with tempfile.TemporaryDirectory(prefix='ccsw-current-') as directory:
             run('codex', 'disconnect')
             restored = tomllib.loads((root / 'codex/config.toml').read_text())
             assert restored == tomllib.loads(original.decode()), 'Configuration restoration mismatch'
-        assert tomllib.loads((root / 'config.toml').read_text())['version'] == 3
-        print('PASS v2 -> v3 migration; original Codex configuration restored after every provider', flush=True)
+        assert tomllib.loads((root / 'config.toml').read_text())['version'] == 4
+        print('PASS v2 -> v4 migration; original Codex configuration restored after every provider', flush=True)
     finally:
         run('proxy', 'stop')
 assert all(hashlib.sha256(p.read_bytes()).digest() == digest for p, digest in before.items())

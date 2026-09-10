@@ -591,7 +591,8 @@ impl App {
             .aliases
             .iter()
             .find(|(_, id)| canonical_model_id(id) == model.id)
-            .map(|(role, _)| role);
+            .map(|(role, _)| role)
+            .filter(|_| self.client_tab() == ClientTab::Claude);
 
         let lines = vec![
             Line::from(format!(
@@ -738,7 +739,9 @@ impl App {
             inner.width,
             inner.height.saturating_sub(button_rows),
         );
-        let api_format = if profile.api_format.is_openai() {
+        let api_format = if self.pi_enabled {
+            format!("{} · direct API", profile.api_format.label())
+        } else if profile.api_format.is_openai() {
             let proxy = self
                 .proxy_status
                 .as_ref()
@@ -776,7 +779,11 @@ impl App {
                 ),
             ),
             detail(
-                "Claude /model",
+                match self.client_tab() {
+                    ClientTab::Claude => "Claude /model",
+                    ClientTab::Codex => "Codex models",
+                    ClientTab::Pi => "Pi /model",
+                },
                 &format!(
                     "{} models across {} providers",
                     self.all_enabled_model_count(),
@@ -785,18 +792,24 @@ impl App {
             ),
             Line::raw(""),
         ];
-        for (role, model) in profile.aliases.iter() {
-            lines.push(detail(&format!("{role} alias"), model));
-        }
-        if let Some(model) = &profile.subagent_model {
-            lines.push(detail("subagent", model));
-        }
-        if !profile.fallback_models.is_empty() {
-            lines.push(detail("fallback", &profile.fallback_models.join(" → ")));
+        if self.client_tab() == ClientTab::Claude {
+            for (role, model) in profile.aliases.iter() {
+                lines.push(detail(&format!("{role} alias"), model));
+            }
+            if let Some(model) = &profile.subagent_model {
+                lines.push(detail("subagent", model));
+            }
+            if !profile.fallback_models.is_empty() {
+                lines.push(detail("fallback", &profile.fallback_models.join(" → ")));
+            }
         }
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            "Sync changes, then run Claude from your terminal.",
+            match self.client_tab() {
+                ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
+                ClientTab::Codex => "Apply changes, then start a new Codex session.",
+                ClientTab::Pi => "Sync changes, then open /model in Pi.",
+            },
             Style::default().fg(MUTED),
         ));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
@@ -813,7 +826,7 @@ impl App {
             frame.render_widget(panel(title, active), area);
             let inner = panel_inner(area);
             frame.render_widget(
-                Paragraph::new("Create a route to connect Claude Code to a gateway.")
+                Paragraph::new("Add a provider for this client to get started.")
                     .style(Style::default().fg(MUTED))
                     .wrap(Wrap { trim: true }),
                 inner,
@@ -1057,7 +1070,16 @@ impl App {
                     ],
                 );
             }
-            Modal::Proxy(manager) => draw_proxy_manager(frame, area, manager),
+            Modal::Proxy(manager) => draw_proxy_manager(
+                frame,
+                area,
+                manager,
+                if self.codex_ui.enabled {
+                    "Codex"
+                } else {
+                    "Claude Code"
+                },
+            ),
             Modal::DeleteProfile => {
                 draw_confirmation(
                     frame,

@@ -902,7 +902,7 @@ mod tests {
             let config_path = temp.path().join("config.toml");
             let mut config = Config::default();
             let profile: Profile = toml::from_str(&format!("name='Test'\nbase_url='http://{address}/v1'\ndefault_model='m'\n[[models]]\nid='m'\nmax_output_tokens=100\n")).unwrap();
-            config.profiles.insert(
+            config.codex.profiles.insert(
                 "test".into(),
                 Profile {
                     api_format: format,

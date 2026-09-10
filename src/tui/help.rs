@@ -13,7 +13,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("p / P", "Connect or sync all models / manage proxy"),
             (
                 "Click top tabs / F2",
-                "Switch Claude Code / Codex / Pi management",
+                "Switch independent Claude Code / Codex / Pi configurations",
             ),
             ("Pi: i / s / D", "Import API config / status / disconnect"),
             ("Pi: p", "Sync enabled models directly to Pi"),

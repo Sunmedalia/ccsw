@@ -1261,6 +1261,8 @@ pub(super) fn persisted_app() -> (tempfile::TempDir, App) {
     };
     config::update(&app.paths.config, |latest| {
         *latest = app.config.clone();
+        latest.codex.profiles = latest.profiles.clone();
+        latest.pi.profiles = latest.profiles.clone();
         Ok(())
     })
     .unwrap();
@@ -1863,4 +1865,50 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
             }
         }
     }
+}
+
+#[test]
+fn client_provider_edits_are_isolated_on_disk_and_screen() {
+    let (_temp, mut app) = persisted_app();
+    let before = config::load(&app.paths.config).unwrap();
+    app.select_client_tab(ClientTab::Codex);
+    let id = app.selected_profile_id().unwrap();
+    let original = app.config.profiles[&id].clone();
+    let mut edited = original.clone();
+    edited.name = "Codex only".into();
+    app.config = config::update_client_profile(
+        &app.paths.config,
+        app.config_client(),
+        &id,
+        &original,
+        &edited,
+    )
+    .unwrap();
+    app.queue_sync(false, None);
+    assert!(app.background.queued_sync.is_none());
+    app.select_client_tab(ClientTab::Pi);
+    assert_ne!(app.config.profiles[&id].name, "Codex only");
+    app.select_client_tab(ClientTab::Claude);
+    assert_eq!(app.config.profiles, before.profiles);
+    let disk = config::load(&app.paths.config).unwrap();
+    assert_eq!(disk.profiles, before.profiles);
+    assert_eq!(disk.pi.profiles, before.pi.profiles);
+    assert_eq!(disk.codex.profiles[&id].name, "Codex only");
+}
+
+#[test]
+fn fresh_client_tabs_start_with_independent_empty_catalogs() {
+    let (_temp, mut app) = persisted_app();
+    config::update(&app.paths.config, |c| {
+        c.codex.profiles.clear();
+        c.pi.profiles.clear();
+        Ok(())
+    })
+    .unwrap();
+    app.select_client_tab(ClientTab::Codex);
+    assert!(app.config.profiles.is_empty());
+    app.select_client_tab(ClientTab::Pi);
+    assert!(app.config.profiles.is_empty());
+    app.select_client_tab(ClientTab::Claude);
+    assert!(!app.config.profiles.is_empty());
 }

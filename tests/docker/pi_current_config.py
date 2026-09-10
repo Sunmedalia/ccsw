@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-current-') as directory:
         skipped=sum(line.startswith('Skipped ') for line in output.splitlines())
         assert imported>0
         run('pi','import')
-        profiles=tomllib.loads((root/'config.toml').read_text())['profiles']
+        profiles=tomllib.loads((root/'config.toml').read_text())['pi']['profiles']
         for name,p in profiles.items():
             if not p.get('enabled',True):continue
             run('pi','apply','--profile',name)

@@ -156,11 +156,17 @@ ccsw import --yes
 
 模型刷新、代理管理和同步在后台执行，等待时仍可导航。重复刷新同一厂商会合并提示；过期请求不会覆盖新表单或已修改的厂商配置。
 
+## 客户端配置隔离
+
+配置版本为 v4：Claude 厂商保存在 `[profiles]`，Codex 保存在 `[codex.profiles]`，Pi 保存在 `[pi.profiles]`。三个标签、CLI 操作及协议路由均读取对应列表，模型缓存也分别保存。新建配置的三个列表独立为空。
+
+旧版 v1–v3 的共享厂商会在迁移时复制为三份独立列表，以保留已添加的模型；之后编辑不再互相影响。Codex/Pi 副本不保留 Claude 角色别名。已有账号和接入快照保留，首次保存写入 v4；旧版本 CCSW 不能编辑 v4 文件。
+
 ## Pi Agent 配置
 
 > 源码版本功能，尚未包含在 v0.1.4 发布包中。使用源码构建的新二进制；当前兼容验证基准为 Pi `0.85.1`。
 
-点击顶部 **Pi** 标签或按 `F2` 切换到 **Pi API**。厂商及模型目录与 Claude/Codex 共用，Pi 的接入和默认模型独立保存。
+点击顶部 **Pi** 标签或按 `F2` 切换到 **Pi API**。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
 
 | 按键 | 操作 |
 | --- | --- |
@@ -206,7 +212,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 > 此功能属于源码版本，尚未包含在 v0.1.4 中。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
-在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。厂商及模型目录共用；Claude 和 Codex 分别保存接入选择。
+在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改、禁用及同步只作用于当前客户端。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
 ### Codex API
 
@@ -216,6 +222,8 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 4. 重启 Codex CLI / ChatGPT App，打开新会话确认模型和请求地址。已有会话不会迁移到新模型。
 
 支持 OpenAI Responses、Chat Completions 和 Anthropic 厂商。Responses 上游直接转发；另外两种格式转换文本、图片（取决于上游能力）、函数工具、命名空间工具、自定义编辑工具与流式输出。无法转换的内容返回明确错误，包括跨协议的加密推理历史、`previous_response_id` 和托管工具；转换型厂商默认关闭 Codex 托管网页搜索。远程 `/responses/compact` 只转发给 Responses 上游，其他上游需客户端本地压缩。
+
+应用时为所选厂商生成 `model_catalog_json`，登记自定义模型 ID，避免 Codex 提示模型元数据缺失。目录使用明确配置的上下文容量；未配置时暂用 128K，`[1m]` 使用 1M。默认只声明文本与基本工具能力，不假定第三方模型支持 Codex 托管工具或原生推理参数。切换订阅及断开管理时恢复原目录设置。
 
 模型 ID 写入时移除 Claude 专用 `[1m]` 后缀。`Max output tokens` 在代理侧限制实际输出，`Context window` 写入 Codex 上下文设置，并将自动压缩阈值设为容量的 90%。推理强度仍需所选上游模型支持。
 
