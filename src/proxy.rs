@@ -39,6 +39,8 @@ const MAX_ERROR_BODY: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RouteTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_profile_id: Option<String>,
     #[serde(default)]
     codex: bool,
     config_path: PathBuf,
@@ -187,12 +189,14 @@ pub fn aggregate_profile(
                 target.config_path == paths.config && target.profile_id.is_none()
             }) {
                 target.models = targets.clone();
+                target.default_profile_id = Some(default_profile_id.into());
                 return id.clone();
             }
             let id = Uuid::new_v4().simple().to_string();
             registry.routes.insert(
                 id.clone(),
                 RouteTarget {
+                    default_profile_id: Some(default_profile_id.into()),
                     codex: false,
                     config_path: paths.config.clone(),
                     profile_id: None,
@@ -782,6 +786,65 @@ fn authenticated_target(
     Ok((target, registry))
 }
 
+// Only recognize role aliases and Claude family IDs, never arbitrary names
+// containing a role (or another provider's namespaced route).
+fn requested_role(model: &str) -> Option<&'static str> {
+    let normalized = model.to_ascii_lowercase();
+    let normalized = strip_1m(&normalized);
+    let family = normalized.strip_prefix("claude-").unwrap_or(&normalized);
+    for role in ["opus", "sonnet", "haiku", "fable"] {
+        if let Some(suffix) = family.strip_prefix(role)
+            && (suffix.is_empty()
+                || suffix == "-latest"
+                || suffix
+                    .trim_start_matches('-')
+                    .starts_with(|c: char| c.is_ascii_digit()))
+            && suffix.trim_start_matches('-').split('-').all(|part| {
+                part.is_empty()
+                    || part == "latest"
+                    || part.chars().all(|c| c.is_ascii_digit() || c == '.')
+            })
+        {
+            return Some(role);
+        }
+        // Older Claude IDs put the version before the family: claude-3-5-sonnet-…
+        if normalized.starts_with("claude-") {
+            let parts: Vec<_> = family.split('-').collect();
+            if let Some(index) = parts.iter().position(|part| *part == role)
+                && index > 0
+                && parts[..index].iter().all(|part| {
+                    !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || c == '.')
+                })
+                && parts[index + 1..].iter().all(|part| {
+                    *part == "latest"
+                        || (!part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+                })
+            {
+                return Some(role);
+            }
+        }
+    }
+    None
+}
+
+fn role_target<'a>(
+    target: &'a RouteTarget,
+    config: &Config,
+    requested: &str,
+) -> Option<&'a AggregateModelTarget> {
+    if target.codex {
+        return None;
+    }
+    let role = requested_role(requested)?;
+    let profile_id = target.default_profile_id.as_ref()?;
+    let profile = config.profiles.get(profile_id)?;
+    let (_, model_id) = profile.aliases.iter().find(|(name, _)| *name == role)?;
+    target.models.values().find(|mapped| {
+        mapped.profile_id == *profile_id
+            && config::canonical_model_id(&mapped.model_id) == config::canonical_model_id(model_id)
+    })
+}
+
 fn resolve_profile(
     target: &RouteTarget,
     requested_model: Option<&str>,
@@ -809,7 +872,8 @@ fn resolve_profile(
                     .find(|(exposed, _)| strip_1m(exposed) == canonical)
                     .map(|(_, mapped)| mapped)
             })
-            .with_context(|| format!("model '{requested}' is not synced by CCSW"))?;
+            .or_else(|| role_target(target, &config, requested))
+            .with_context(|| format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p"))?;
         (mapped.profile_id.as_str(), mapped.model_id.as_str())
     };
     let profile = config
@@ -983,6 +1047,22 @@ async fn messages(
         }
     };
     let status = response.status();
+    let upstream_headers = forwarding_response_headers(response.headers());
+    // Native responses keep the upstream body and status, including errors.
+    if anthropic && (!stream || !status.is_success()) {
+        return match tokio::time::timeout_at(deadline, read_body(response, BODY_LIMIT, false)).await
+        {
+            Ok(Ok(bytes)) => {
+                let mut result = (status, bytes).into_response();
+                result.headers_mut().extend(upstream_headers);
+                result
+            }
+            _ => anthropic_error(
+                StatusCode::BAD_GATEWAY,
+                anyhow::anyhow!("upstream body failed, exceeded limit or timed out"),
+            ),
+        };
+    }
     if !status.is_success() {
         let bytes = tokio::time::timeout_at(deadline, read_body(response, ERROR_LIMIT, true)).await;
         let text = match bytes {
@@ -990,16 +1070,28 @@ async fn messages(
             _ => "could not read upstream error within limits".into(),
         };
         let text = truncate_utf8(&text, MAX_ERROR_BODY);
-        return anthropic_error(
+        let mut result = anthropic_error(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             anyhow::anyhow!("upstream returned HTTP {status}: {text}"),
         );
+        result.headers_mut().extend(upstream_headers);
+        result.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return result;
     }
     if stream {
         if anthropic {
             return passthrough_response(response);
         }
-        stream_response(response, profile.api_format)
+        let mut result = stream_response(response, profile.api_format);
+        result.headers_mut().extend(upstream_headers);
+        result.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/event-stream"),
+        );
+        result
     } else {
         let value =
             match tokio::time::timeout_at(deadline, read_body(response, BODY_LIMIT, false)).await {
@@ -1020,7 +1112,15 @@ async fn messages(
             return Json(value).into_response();
         }
         match translate_response(&value, profile.api_format) {
-            Ok(value) => Json(value).into_response(),
+            Ok(value) => {
+                let mut result = Json(value).into_response();
+                result.headers_mut().extend(upstream_headers);
+                result.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("application/json"),
+                );
+                result
+            }
             Err(error) => anthropic_error(StatusCode::BAD_GATEWAY, error),
         }
     }
@@ -1029,8 +1129,32 @@ async fn messages(
 fn passthrough_response(response: reqwest::Response) -> Response {
     passthrough_with_idle(response, IDLE_TIMEOUT)
 }
+
+fn forwarding_response_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut forwarded = HeaderMap::new();
+    for (name, value) in headers {
+        let key = name.as_str();
+        let connection_specific = headers.get_all(header::CONNECTION).iter().any(|v| {
+            v.to_str().is_ok_and(|v| {
+                v.split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case(key))
+            })
+        });
+        if !connection_specific
+            && (matches!(
+                key,
+                "content-type" | "retry-after" | "request-id" | "x-request-id" | "cache-control"
+            ) || key.starts_with("x-ratelimit-")
+                || key.starts_with("anthropic-ratelimit-"))
+        {
+            forwarded.append(name.clone(), value.clone());
+        }
+    }
+    forwarded
+}
 fn passthrough_with_idle(response: reqwest::Response, idle: Duration) -> Response {
     let status = response.status();
+    let forwarded = forwarding_response_headers(response.headers());
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -1057,11 +1181,13 @@ fn passthrough_with_idle(response: reqwest::Response, idle: Duration) -> Respons
             }
         }
     };
-    Response::builder()
+    let mut result = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type)
         .body(Body::from_stream(output))
-        .expect("valid upstream response")
+        .expect("valid upstream response");
+    result.headers_mut().extend(forwarded);
+    result
 }
 
 fn anthropic_error(status: StatusCode, error: anyhow::Error) -> Response {
@@ -1091,11 +1217,12 @@ fn completion_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
     api_endpoint(base, wanted)
 }
 
-pub fn models_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
-    if matches!(format, ApiFormat::Anthropic) {
-        return api_endpoint(base, "models");
+pub fn models_endpoint(base: &str, _format: ApiFormat) -> Result<Url> {
+    let mut endpoint = api_endpoint(base, "models")?;
+    if endpoint.host_str() == Some("api.deepseek.com") {
+        endpoint.set_path("/models");
     }
-    api_endpoint(base, "models")
+    Ok(endpoint)
 }
 
 fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
@@ -1105,11 +1232,12 @@ fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
     }
     let path = url.path().trim_end_matches('/');
     let known = ["/chat/completions", "/responses", "/messages", "/models"];
+    let explicit_endpoint = known.iter().any(|suffix| path.ends_with(suffix));
     let root = known
         .iter()
         .find_map(|suffix| path.strip_suffix(suffix))
         .unwrap_or(path);
-    let next = if root.ends_with("/v1") {
+    let next = if explicit_endpoint || root.ends_with("/v1") {
         format!("{root}/{wanted}")
     } else {
         format!("{root}/v1/{wanted}")
@@ -2030,6 +2158,7 @@ pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String
         registry.routes.insert(
             id.clone(),
             RouteTarget {
+                default_profile_id: None,
                 codex: true,
                 config_path: paths.config.clone(),
                 profile_id: Some(profile_id.into()),
@@ -2048,6 +2177,172 @@ pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deepseek_catalog_uses_root_without_changing_messages_endpoint() {
+        for suffix in [
+            "",
+            "/",
+            "/anthropic",
+            "/anthropic/",
+            "/anthropic/v1",
+            "/anthropic/v1/messages",
+        ] {
+            let base = format!("https://api.deepseek.com{suffix}");
+            assert_eq!(
+                models_endpoint(&base, ApiFormat::Anthropic)
+                    .unwrap()
+                    .as_str(),
+                "https://api.deepseek.com/models"
+            );
+        }
+        assert_eq!(
+            api_endpoint("https://api.deepseek.com/anthropic", "messages")
+                .unwrap()
+                .as_str(),
+            "https://api.deepseek.com/anthropic/v1/messages"
+        );
+        assert_eq!(
+            models_endpoint("https://gateway.example/anthropic", ApiFormat::Anthropic)
+                .unwrap()
+                .as_str(),
+            "https://gateway.example/anthropic/v1/models"
+        );
+        assert_eq!(
+            models_endpoint(
+                "https://api.deepseek.com.evil.example/anthropic",
+                ApiFormat::Anthropic
+            )
+            .unwrap()
+            .host_str(),
+            Some("api.deepseek.com.evil.example")
+        );
+    }
+
+    #[test]
+    fn builtin_role_patterns_are_bounded() {
+        for model in [
+            "sonnet",
+            "claude-sonnet",
+            "sonnet5",
+            "claude-sonnet-5",
+            "claude-sonnet-4-6",
+            "claude-3-5-sonnet-20241022",
+            "SONNET[1m]",
+        ] {
+            assert_eq!(super::requested_role(model), Some("sonnet"), "{model}");
+        }
+        assert_eq!(super::requested_role("claude-opus-4-6"), Some("opus"));
+        assert_eq!(
+            super::requested_role("claude-3-haiku-20240307"),
+            Some("haiku")
+        );
+        for model in [
+            "other::sonnet5",
+            "my-sonnet",
+            "sonnetish",
+            "sonnet5-custom",
+            "gpt-5",
+            "",
+        ] {
+            assert_eq!(super::requested_role(model), None, "{model}");
+        }
+    }
+
+    #[test]
+    fn role_routes_respect_exact_matches_and_live_model_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        config::update(&path, |config| {
+            let profile: Profile = toml::from_str("name='One'\nbase_url='https://example.invalid'\ndefault_model='a'\nenabled_models=['b']\n[aliases]\nsonnet='a'\nopus='b'\n")?;
+            config.profiles.insert("one".into(), profile);
+            Ok(())
+        }).unwrap();
+        let mut target = RouteTarget {
+            default_profile_id: Some("one".into()),
+            codex: false,
+            config_path: path.clone(),
+            profile_id: None,
+            models: ["a", "b"]
+                .into_iter()
+                .map(|id| {
+                    (
+                        format!("one::{id}"),
+                        AggregateModelTarget {
+                            profile_id: "one".into(),
+                            model_id: id.into(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "a");
+        assert_eq!(
+            resolve_profile(&target, Some("claude-opus-4-6")).unwrap().1,
+            "b"
+        );
+        assert!(resolve_profile(&target, Some("haiku")).is_err());
+        assert!(resolve_profile(&target, Some("other::sonnet5")).is_err());
+        target.models.insert(
+            "sonnet5".into(),
+            AggregateModelTarget {
+                profile_id: "one".into(),
+                model_id: "b".into(),
+            },
+        );
+        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "b");
+        config::update(&path, |config| {
+            config
+                .profiles
+                .get_mut("one")
+                .unwrap()
+                .disabled_models
+                .push("a".into());
+            Ok(())
+        })
+        .unwrap();
+        assert!(resolve_profile(&target, Some("sonnet")).is_err());
+        target.default_profile_id = None;
+        assert!(resolve_profile(&target, Some("opus")).is_err());
+        target.default_profile_id = Some("one".into());
+        target.models.clear();
+        assert!(resolve_profile(&target, Some("opus")).is_err());
+    }
+
+    #[test]
+    fn explicit_endpoints_preserve_gateway_prefix_and_query() {
+        for endpoint in ["messages", "responses", "chat/completions", "models"] {
+            let base = format!("https://example.com/gateway/{endpoint}?api-version=test");
+            assert_eq!(
+                super::api_endpoint(&base, "models").unwrap().as_str(),
+                "https://example.com/gateway/models?api-version=test"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_retry_metadata_without_hop_headers_or_cookies() {
+        let mut headers = super::HeaderMap::new();
+        for (key, value) in [
+            ("retry-after", "15"),
+            ("x-request-id", "req-123"),
+            ("anthropic-ratelimit-tokens-remaining", "0"),
+            ("set-cookie", "secret"),
+            ("content-length", "100"),
+            ("connection", "x-ratelimit-private"),
+            ("x-ratelimit-private", "hidden"),
+        ] {
+            headers.insert(
+                super::header::HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        let output = super::forwarding_response_headers(&headers);
+        assert_eq!(output["retry-after"], "15");
+        assert_eq!(output["x-request-id"], "req-123");
+        assert_eq!(output["anthropic-ratelimit-tokens-remaining"], "0");
+        assert_eq!(output.len(), 3);
+    }
+
     use super::*;
     use crate::config::{Config, RoleModels};
     use std::{
@@ -2243,6 +2538,7 @@ mod tests {
             registry.routes.insert(
                 "aggregate".into(),
                 RouteTarget {
+                    default_profile_id: None,
                     codex: false,
                     config_path: paths.config.clone(),
                     profile_id: None,
@@ -2451,6 +2747,7 @@ mod tests {
             registry.routes.insert(
                 "route-test".into(),
                 RouteTarget {
+                    default_profile_id: None,
                     codex: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
@@ -2503,6 +2800,15 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_proxy_passes_namespaced_model_to_anthropic_provider() {
+        check_anthropic_model_forwarding("anthropic::claude-test").await;
+    }
+
+    #[tokio::test]
+    async fn aggregate_proxy_maps_builtin_sonnet_to_upstream_model() {
+        check_anthropic_model_forwarding("sonnet5").await;
+    }
+
+    async fn check_anthropic_model_forwarding(requested: &str) {
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_address = upstream.local_addr().unwrap();
         let (request_tx, request_rx) = mpsc::channel();
@@ -2537,7 +2843,10 @@ mod tests {
                 value: "anthropic-secret".into(),
             },
             default_model: "claude-test[1m]".into(),
-            aliases: RoleModels::default(),
+            aliases: RoleModels {
+                sonnet: Some("claude-test[1m]".into()),
+                ..Default::default()
+            },
             subagent_model: None,
             fallback_models: vec![],
             enabled_models: vec![],
@@ -2558,6 +2867,7 @@ mod tests {
             registry.routes.insert(
                 "aggregate-test".into(),
                 RouteTarget {
+                    default_profile_id: Some("anthropic".into()),
                     codex: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
@@ -2584,7 +2894,7 @@ mod tests {
                 .bearer_auth(&registry.local_token)
                 .json(&json!({
                     // Claude strips its [1m] context hint before sending the request.
-                    "model":"anthropic::claude-test",
+                    "model":requested,
                     "max_tokens":20,
                     "messages":[{"role":"user","content":"hello"}]
                 }))
@@ -2623,6 +2933,7 @@ enabled_models = ["b"]
         )
         .unwrap();
         let target = RouteTarget {
+            default_profile_id: None,
             codex: false,
             config_path: path.clone(),
             profile_id: None,

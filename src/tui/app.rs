@@ -308,6 +308,37 @@ impl App {
 
     pub(super) fn new_profile(&mut self) {
         let mut form = ProfileForm::new();
+        form.template_selected = Some(0);
+        if self.client_tab() != ClientTab::Claude {
+            form.fields.truncate(7);
+        }
+        self.modal = Some(Modal::Profile(Box::new(form)));
+    }
+
+    pub(super) fn use_provider_template(&mut self, index: usize) {
+        let mut form = ProfileForm::new();
+        if let Some(template) = index
+            .checked_sub(1)
+            .and_then(|index| PROVIDER_TEMPLATES.get(index))
+        {
+            let mut id = template.id.to_owned();
+            let mut suffix = 2;
+            while self.config.profiles.contains_key(&id) {
+                id = format!("{}-{suffix}", template.id);
+                suffix += 1;
+            }
+            for (index, value) in [
+                (0, id.as_str()),
+                (1, template.name),
+                (2, template.format),
+                (3, template.url),
+                (4, "bearer"),
+            ] {
+                form.fields[index].value = value.into();
+                form.fields[index].cursor = form.fields[index].char_count();
+            }
+            form.selected = 5;
+        }
         if self.client_tab() != ClientTab::Claude {
             form.fields.truncate(7);
         }

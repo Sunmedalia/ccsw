@@ -3,6 +3,244 @@ use ratatui::{Terminal, backend::TestBackend};
 use std::path::PathBuf;
 
 #[test]
+fn vim_keys_navigate_templates_and_picker_without_interfering_with_search() {
+    let mut app = interactive_test_app();
+    app.new_profile();
+    for c in ['j', 'j', 'k', 'l'] {
+        app.handle_modal(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+            .unwrap();
+    }
+    let Some(Modal::Profile(form)) = &mut app.modal else {
+        panic!("missing form");
+    };
+    assert_eq!(form.fields[3].value, PROVIDER_TEMPLATES[0].url);
+    form.selected = 8;
+    let mut picker = ModelForm::with_api_models(
+        ["first", "hjkl-model"]
+            .into_iter()
+            .map(|id| ModelEntry {
+                id: id.into(),
+                label: None,
+                description: None,
+                max_output_tokens: None,
+                context_window: None,
+            })
+            .collect(),
+    );
+    picker.focus_api_search = true;
+    form.picker = Some(picker);
+    app.handle_modal(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(&app.modal, Some(Modal::Profile(form)) if form.picker.as_ref().unwrap().api_selected == 1)
+    );
+    for c in ['/', 'h', 'j', 'k', 'l'] {
+        app.handle_modal(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+            .unwrap();
+    }
+    assert!(
+        matches!(&app.modal, Some(Modal::Profile(form)) if form.picker.as_ref().unwrap().api_query == "hjkl")
+    );
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_modal(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
+        .unwrap();
+    let Some(Modal::Profile(form)) = &app.modal else {
+        panic!("draft lost");
+    };
+    assert_eq!(form.fields[8].value, "hjkl-model");
+    assert!(form.picker.is_none());
+}
+
+#[test]
+fn provider_templates_need_only_key_and_model_and_avoid_duplicate_ids() {
+    for (index, template) in PROVIDER_TEMPLATES.iter().enumerate() {
+        let mut app = interactive_test_app();
+        let existing = app.config.profiles.values().next().unwrap().clone();
+        app.config
+            .profiles
+            .insert(template.id.into(), existing.clone());
+        app.config
+            .profiles
+            .insert(format!("{}-2", template.id), existing);
+        let before = app.config.clone();
+        app.new_profile();
+        for _ in 0..=index {
+            app.handle_modal(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+                .unwrap();
+        }
+        app.handle_modal(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        let Some(Modal::Profile(form)) = &mut app.modal else {
+            panic!("missing template form");
+        };
+        assert!(form.template_selected.is_none());
+        assert_eq!(form.selected, 5);
+        assert_eq!(form.fields[0].value, format!("{}-3", template.id));
+        assert_eq!(form.fields[1].value, template.name);
+        assert_eq!(form.fields[3].value, template.url);
+        assert!(form.fields[5].value.is_empty());
+        assert!(form.fields[6].value.is_empty());
+        assert!(form.models.is_empty());
+        form.fields[5].value = "new-key".into();
+        form.fields[6].value = "new-model".into();
+        let (_, profile) = form.to_profile().unwrap();
+        assert_eq!(profile.credential.value(), Some("new-key"));
+        assert_eq!(profile.default_model, "new-model");
+        assert_eq!(app.config, before);
+    }
+}
+
+#[test]
+fn template_picker_mouse_selection_and_custom_form_work() {
+    let mut app = interactive_test_app();
+    app.new_profile();
+    let screen = Rect::new(0, 0, 80, 24);
+    let area = modal_area(screen);
+    let inner = panel_inner(area);
+    let click = |column, row| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_modal_mouse(click(inner.x, inner.y + 5), screen)
+        .unwrap();
+    let use_button = modal_button_rects(area, 3)[0];
+    app.handle_modal_mouse(click(use_button.x + 1, use_button.y), screen)
+        .unwrap();
+    assert!(
+        matches!(&app.modal, Some(Modal::Profile(form)) if form.fields[3].value == "https://api.deepseek.com/anthropic")
+    );
+    app.new_profile();
+    app.handle_modal(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(&app.modal, Some(Modal::Profile(form)) if form.fields[0].value.is_empty() && form.template_selected.is_none())
+    );
+}
+
+#[test]
+fn provider_catalog_mouse_selects_then_uses_model_in_target_field() {
+    for screen in [Rect::new(0, 0, 120, 30), Rect::new(0, 0, 48, 18)] {
+        let mut app = interactive_test_app();
+        let mut form = ProfileForm::new();
+        form.selected = 8; // Sonnet
+        form.picker = Some(ModelForm::with_api_models(vec![ModelEntry {
+            id: "remote-sonnet".into(),
+            label: None,
+            description: None,
+            max_output_tokens: None,
+            context_window: None,
+        }]));
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        let outer = panel_inner(modal_area(screen));
+        let list = panel_inner(Rect::new(
+            outer.x,
+            outer.y,
+            outer.width,
+            outer.height.saturating_sub(2),
+        ));
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: list.x,
+            row: list.y + 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_modal_mouse(click, screen).unwrap();
+        let Some(Modal::Profile(form)) = &app.modal else {
+            panic!("closed on first click");
+        };
+        assert!(form.picker.is_some());
+        assert!(form.fields[8].value.is_empty());
+        app.handle_modal_mouse(click, screen).unwrap();
+        let Some(Modal::Profile(form)) = &app.modal else {
+            panic!("draft lost");
+        };
+        assert!(form.picker.is_none());
+        assert_eq!(form.fields[8].value, "remote-sonnet");
+        assert!(form.fields[6].value.is_empty());
+    }
+}
+
+#[test]
+fn provider_discovery_uses_unsaved_connection_without_requiring_default() {
+    let mut form = ProfileForm::new();
+    form.fields[3].value = "https://example.com/gateway/messages".into();
+    form.fields[5].value = "draft-key".into();
+    assert!(form.to_profile().is_err());
+    let profile = form.discovery_profile().unwrap();
+    assert_eq!(profile.base_url, form.fields[3].value);
+    assert_eq!(profile.credential.value(), Some("draft-key"));
+    assert!(form.fields[6].value.is_empty());
+    assert!(form.fields[0].value.is_empty());
+}
+
+#[test]
+fn provider_picker_selects_default_without_saving_and_cancel_keeps_draft() {
+    check_provider_picker_target(0);
+}
+
+#[test]
+fn provider_picker_fills_each_model_field_and_preserves_other_values() {
+    for selected in 6..=12 {
+        check_provider_picker_target(selected);
+    }
+}
+
+fn check_provider_picker_target(selected: usize) {
+    let mut app = interactive_test_app();
+    let mut form = ProfileForm::new();
+    form.selected = selected;
+    form.fields[12].value = "existing-model".into();
+    let original_fields = form.fields.clone();
+    let target = selected.max(6);
+    let expected = if target == 12 {
+        "existing-model,chosen-model"
+    } else {
+        "chosen-model"
+    };
+    form.fields[5].value = "draft-secret".into();
+    let mut picker = ModelForm::with_api_models(vec![ModelEntry {
+        id: "chosen-model".into(),
+        label: None,
+        description: None,
+        max_output_tokens: None,
+        context_window: None,
+    }]);
+    picker.focus_api_search = true;
+    form.picker = Some(picker.clone());
+    app.modal = Some(Modal::Profile(Box::new(form)));
+    app.handle_modal(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    let Some(Modal::Profile(form)) = &mut app.modal else {
+        panic!("draft closed");
+    };
+    assert_eq!(form.fields[target].value, expected);
+    assert_eq!(form.selected, target);
+    for (index, original) in original_fields.iter().enumerate() {
+        if index != target && index != 5 {
+            assert_eq!(form.fields[index].value, original.value);
+        }
+    }
+    assert!(form.picker.is_none());
+    // Selecting the same fallback twice must not duplicate it.
+    if target == 12 {
+        form.fill_selected_model("chosen-model");
+        assert_eq!(form.fields[target].value, expected);
+    }
+    form.picker = Some(picker);
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    let Some(Modal::Profile(form)) = &app.modal else {
+        panic!("draft closed");
+    };
+    assert_eq!(form.fields[5].value, "draft-secret");
+    assert_eq!(form.fields[target].value, expected);
+    assert!(form.picker.is_none());
+}
+
+#[test]
 fn renders_empty_state_in_narrow_terminal() {
     let paths = AppPaths {
         config: PathBuf::from("/tmp/config"),

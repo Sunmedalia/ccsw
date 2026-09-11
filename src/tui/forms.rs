@@ -1,5 +1,37 @@
 use super::*;
 
+pub(super) struct ProviderTemplate {
+    pub(super) title: &'static str,
+    pub(super) id: &'static str,
+    pub(super) name: &'static str,
+    pub(super) url: &'static str,
+    pub(super) format: &'static str,
+}
+
+pub(super) const PROVIDER_TEMPLATES: [ProviderTemplate; 3] = [
+    ProviderTemplate {
+        title: "CommandCode",
+        id: "command_goat",
+        name: "command_goat",
+        url: "https://api.commandcode.ai/provider/v1",
+        format: "openai-chat",
+    },
+    ProviderTemplate {
+        title: "Volcengine",
+        id: "volcengine",
+        name: "Volcengine Ark",
+        url: "https://ark.cn-beijing.volces.com/api/coding",
+        format: "anthropic",
+    },
+    ProviderTemplate {
+        title: "DeepSeek",
+        id: "deepseek",
+        name: "deepseek",
+        url: "https://api.deepseek.com/anthropic",
+        format: "anthropic",
+    },
+];
+
 impl ProxyManager {
     pub(super) const CONTROLS: [ProxyControl; 7] = [
         ProxyControl::Start,
@@ -116,6 +148,36 @@ impl ProxyManager {
 }
 
 impl ProfileForm {
+    pub(super) fn model_target_field(&self) -> usize {
+        if (6..self.fields.len()).contains(&self.selected) {
+            self.selected
+        } else {
+            6
+        }
+    }
+
+    pub(super) fn fill_selected_model(&mut self, id: &str) {
+        let index = self.model_target_field();
+        let target = &mut self.fields[index];
+        if target.label == "Fallbacks (comma)" {
+            let mut models: Vec<_> = target
+                .value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if !models.iter().any(|model| model == id) {
+                models.push(id.to_owned());
+            }
+            target.value = models.join(",");
+        } else {
+            target.value = id.to_owned();
+        }
+        target.cursor = target.char_count();
+        self.selected = index;
+    }
+
     pub(super) fn new() -> Self {
         Self::from_values(
             None,
@@ -219,6 +281,10 @@ impl ProfileForm {
         ];
         Self {
             original_id,
+            template_selected: None,
+            instance: uuid::Uuid::new_v4(),
+            picker: None,
+            picker_search: false,
             original_profile: None,
             provider_enabled: true,
             models,
@@ -282,10 +348,32 @@ impl ProfileForm {
         profile.validate()?;
         Ok((id, profile))
     }
+
+    pub(super) fn discovery_profile(&self) -> Result<Profile> {
+        let mut draft = self.clone();
+        draft.fields[0] = field("ID", "discovery");
+        draft.fields[1] = field("Name", "Model discovery");
+        draft.fields[6] = field("Default model", "discovery");
+        draft.provider_enabled = true;
+        for entry in &mut draft.fields[7..] {
+            entry.value.clear();
+        }
+        draft.to_profile().map(|(_, profile)| profile)
+    }
 }
 
 impl ModelForm {
+    pub(super) fn click_api_model(&mut self, index: usize) -> Option<String> {
+        let id = self.filtered_api_models().get(index)?.id.clone();
+        let use_model = self.api_selected == index && self.api_clicked.as_ref() == Some(&id);
+        self.api_selected = index;
+        self.focus_api_search = true;
+        self.api_clicked = Some(id.clone());
+        use_model.then_some(id)
+    }
+
     pub(super) fn handle_key(&mut self, key: KeyEvent, visible: usize) -> FormOutcome {
+        self.api_clicked = None;
         if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('1') {
             toggle_form_field(&mut self.fields[3]);
             return FormOutcome::Stay;
@@ -382,6 +470,7 @@ impl ModelForm {
             api_query_cursor: 0,
             api_scroll: 0,
             api_selected: 0,
+            api_clicked: None,
             focus_api_search: false,
             api_status,
         }
@@ -959,6 +1048,10 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
         !form.focus_api_search,
     );
 
+    draw_api_models(frame, api_area, form);
+}
+
+pub(super) fn draw_api_models(frame: &mut ratatui::Frame, api_area: Rect, form: &ModelForm) {
     let api_count = form.api_models.len();
     let filtered = form.filtered_api_models();
     let filtered_count = filtered.len();
@@ -974,7 +1067,7 @@ pub(super) fn draw_model_form(frame: &mut ratatui::Frame, area: Rect, form: &Mod
             Line::raw(""),
             Line::styled(" No cached API models", Style::default().fg(MUTED)),
             Line::raw(""),
-            Line::styled(" Use Fetch API (Ctrl+F)", Style::default().fg(ROUTE)),
+            Line::styled(" Use Fetch API (Alt+F)", Style::default().fg(ROUTE)),
             Line::styled(
                 " to load the provider’s model catalog.",
                 Style::default().fg(ROUTE),

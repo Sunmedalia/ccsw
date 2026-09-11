@@ -170,6 +170,10 @@ pub(super) struct ProxyManager {
 
 #[derive(Clone)]
 pub(super) struct ProfileForm {
+    pub(super) template_selected: Option<usize>,
+    pub(super) instance: uuid::Uuid,
+    pub(super) picker: Option<ModelForm>,
+    pub(super) picker_search: bool,
     pub(super) original_id: Option<String>,
     pub(super) original_profile: Option<Profile>,
     pub(super) provider_enabled: bool,
@@ -192,6 +196,7 @@ pub(super) struct ModelForm {
     pub(super) api_query_cursor: usize,
     pub(super) api_scroll: usize,
     pub(super) api_selected: usize,
+    pub(super) api_clicked: Option<String>,
     pub(super) focus_api_search: bool,
     pub(super) api_status: String,
 }

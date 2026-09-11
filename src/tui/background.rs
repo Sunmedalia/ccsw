@@ -10,6 +10,11 @@ pub(super) struct SyncRequest {
     preferred: Option<String>,
 }
 enum Completion {
+    ProfileDiscover {
+        instance: uuid::Uuid,
+        profile: Box<Profile>,
+        result: Result<Vec<ModelEntry>>,
+    },
     Inspect(Result<sync::Status>, Option<proxy::ProxyStatus>),
     Discover {
         request: u64,
@@ -66,6 +71,31 @@ impl Background {
     }
 }
 impl App {
+    pub(super) fn fetch_profile_models(&mut self) {
+        let Some(Modal::Profile(form)) = &mut self.modal else {
+            return;
+        };
+        let profile = match form.discovery_profile() {
+            Ok(profile) => profile,
+            Err(error) => {
+                self.set_error(format!("Check URL and credentials: {error:#}"));
+                return;
+            }
+        };
+        let mut picker = ModelForm::with_api_models(vec![]);
+        picker.focus_api_search = true;
+        picker.api_status = "Fetching models…".into();
+        form.picker = Some(picker);
+        form.picker_search = false;
+        form.instance = uuid::Uuid::new_v4();
+        let instance = form.instance;
+        self.background.spawn(move || Completion::ProfileDiscover {
+            instance,
+            result: discovery::discover(&profile),
+            profile: Box::new(profile),
+        });
+    }
+
     pub(super) fn initialize_background(&mut self) {
         if self.client_tab() != ClientTab::Claude {
             return;
@@ -156,6 +186,31 @@ impl App {
         while let Ok(completion) = self.background.receiver.try_recv() {
             changed = true;
             match completion {
+                Completion::ProfileDiscover {
+                    instance,
+                    profile,
+                    result,
+                } => {
+                    if let Some(Modal::Profile(form)) = &mut self.modal
+                        && form.instance == instance
+                        && form.discovery_profile().ok().as_ref() == Some(profile.as_ref())
+                        && let Some(picker) = &mut form.picker
+                    {
+                        match result {
+                            Ok(models) => {
+                                picker.api_status = format!(
+                                    "{} models · Enter selects · Esc returns",
+                                    models.len()
+                                );
+                                picker.api_models = models;
+                            }
+                            Err(error) => {
+                                picker.api_status =
+                                    format!("{error:#} · Ctrl+R retry · Esc returns")
+                            }
+                        }
+                    }
+                }
                 Completion::Inspect(status, proxy) => {
                     self.proxy_status = proxy;
                     match status {

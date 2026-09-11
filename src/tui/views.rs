@@ -1082,14 +1082,112 @@ impl App {
                 draw_modal_buttons(frame, area, &["Import", "Skip"]);
             }
             Modal::Profile(form) => {
+                if let Some(selected) = form.template_selected {
+                    frame.render_widget(panel(" New provider · choose a template ", true), area);
+                    let inner = panel_inner(area);
+                    let mut lines = vec![
+                        Line::styled(
+                            " j/k select · l/Enter use · h/Esc back",
+                            Style::default().fg(MUTED),
+                        ),
+                        Line::raw(""),
+                    ];
+                    for index in 0..=PROVIDER_TEMPLATES.len() {
+                        let label = if index == 0 {
+                            "Custom · enter URL and settings manually".to_owned()
+                        } else {
+                            let template = &PROVIDER_TEMPLATES[index - 1];
+                            format!("{} · {}", template.title, template.format)
+                        };
+                        lines.push(Line::styled(
+                            format!("{} {label}", if selected == index { "▶" } else { " " }),
+                            Style::default().fg(if selected == index {
+                                WARNING
+                            } else {
+                                Color::White
+                            }),
+                        ));
+                    }
+                    frame.render_widget(
+                        Paragraph::new(lines),
+                        Rect::new(
+                            inner.x,
+                            inner.y,
+                            inner.width,
+                            inner.height.saturating_sub(2),
+                        ),
+                    );
+                    if let Some(template) = selected
+                        .checked_sub(1)
+                        .and_then(|index| PROVIDER_TEMPLATES.get(index))
+                    {
+                        frame.render_widget(
+                            Paragraph::new(format!(
+                                "Name: {}\nURL: {}\nFill Key and model, then Ctrl+S to save.",
+                                template.name, template.url
+                            ))
+                            .wrap(Wrap { trim: false }),
+                            Rect::new(
+                                inner.x,
+                                inner.y + 7,
+                                inner.width,
+                                inner.height.saturating_sub(9),
+                            ),
+                        );
+                    }
+                    draw_modal_buttons(frame, area, &["Use template", "Custom", "Cancel"]);
+                    return;
+                }
+                if let Some(picker) = &form.picker {
+                    frame.render_widget(
+                        panel(
+                            &format!(
+                                " {} · {} ",
+                                form.fields[form.model_target_field()].label,
+                                if form.picker_search {
+                                    "Search · Esc: navigation"
+                                } else {
+                                    "j/k: select · l: use · h: back · /: search"
+                                }
+                            ),
+                            true,
+                        ),
+                        area,
+                    );
+                    let inner = panel_inner(area);
+                    draw_api_models(
+                        frame,
+                        Rect::new(
+                            inner.x,
+                            inner.y,
+                            inner.width,
+                            inner.height.saturating_sub(2),
+                        ),
+                        picker,
+                    );
+                    draw_modal_buttons(frame, area, &["Refresh", "Select", "Back"]);
+                    return;
+                }
                 draw_form(
                     frame,
                     area,
-                    " Profile · click a field to edit ",
+                    " Provider · Alt+F: model for selected field ",
                     &form.fields,
                     form.selected,
                 );
-                draw_modal_buttons(frame, area, &["Save", "Cancel"]);
+                draw_modal_buttons(
+                    frame,
+                    area,
+                    &[
+                        if area.width < 64 {
+                            "Fetch models"
+                        } else {
+                            "Fetch models (Alt+F)"
+                        },
+                        "Save",
+                        "Cancel",
+                    ],
+                );
             }
             Modal::Model(form) => {
                 draw_model_form(frame, area, form);
@@ -1100,7 +1198,7 @@ impl App {
                         if area.width < 64 {
                             "Fetch API"
                         } else {
-                            "Fetch API (Ctrl+F)"
+                            "Fetch API (Alt+F)"
                         },
                         "Save",
                         "Cancel",

@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.7。Release 已包含 Claude Code、Codex、Pi Agent 配置隔离，以及 Codex 订阅账号导入和切换功能。
+> 本文对应 v0.1.8。新增 provider 模板、模型选择与角色转发映射，并改进上游兼容性和键盘导航。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -20,7 +20,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-当前 v0.1.7 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
+当前 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
 
 ```sh
 # macOS Apple Silicon
@@ -68,7 +68,7 @@ ccsw          # 打开 TUI
 
 首次使用时：
 
-1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和默认模型。
+1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；点击底部 `Fetch models` 按钮或按 `Alt+F` 从该站点 API 获取模型，输入关键词搜索、用方向键选择、按 `Enter` 或点击 `Select` 回填默认模型。无需先保存厂商，`Esc` 或 `Back` 返回表单，获取失败可点击 `Refresh` 或按 `Ctrl+R` 重试，也可手填模型 ID。
 2. 进入厂商详情，按 `r` 获取 API 模型目录；按 `a` 从候选列表添加模型，也可以手动填写模型 ID。
 3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
 4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
@@ -141,6 +141,26 @@ ccsw import --yes
 
 ### Forms · 表单
 
+模板和厂商的获取模型页面支持 `j/k` 下/上、`l` 使用、`h` 返回。获取模型页面按 `/` 或点击搜索栏进入搜索，`Esc` 返回导航；搜索和表单文本输入中 `hjkl` 按普通字母输入。帮助面板支持 `h/l` 切换分区、`j/k` 滚动；代理面板支持 `h/k` 上一项、`j/l` 下一项。
+
+按 `n` 新建厂商时先选择模板：CommandCode、Volcengine、DeepSeek，或选择 `Custom` 手动填写。方向键或鼠标选择，按 `Enter` 或点击 `Use template` 使用。模板预填名称、URL、协议和 Bearer 认证方式，自动生成不冲突的 ID；仅需填写 Key 和默认模型（也可从 API 获取），按 `Ctrl+S` 保存。模板不包含密钥、已有模型或角色映射，预填字段仍可编辑。
+
+| 模板 | URL | 协议 |
+| --- | --- | --- |
+| CommandCode | `https://api.commandcode.ai/provider/v1` | OpenAI Chat |
+| Volcengine | `https://ark.cn-beijing.volces.com/api/coding` | Anthropic |
+| DeepSeek | `https://api.deepseek.com/anthropic` | Anthropic |
+
+API 模型列表支持鼠标：单击选中，再次单击同一模型使用；也可以按 `Enter` 或点击 `Select` 使用。厂商表单会回填选定的目标字段。
+
+DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获取模型时使用 `https://api.deepseek.com/models`，目录请求使用 Bearer 认证；对话仍使用配置的 Anthropic 地址和认证方式。
+
+获取模型会回填当前选中的模型字段：先选中 `Default model`、`Opus`、`Sonnet`、`Haiku`、`Fable`、`Subagent` 或 `Fallbacks`，再点击 `Fetch models` 或按 `Alt+F`。选择界面标题会显示目标字段；`Fallbacks` 追加且不重复添加，其他字段替换当前值。焦点在地址、凭据等非模型字段时，默认回填 `Default model`。
+
+厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。同步时默认厂商的角色配置既写入 Claude 环境变量，也用于代理端兜底：例如 `Sonnet = my-model` 后，`sonnet`、`sonnet5`、`claude-sonnet-…` 和 `claude-3-5-sonnet-…` 会转发为上游 `my-model`。这里的模型 ID 仅说明匹配格式，不表示上游支持这些模型。
+
+已同步的精确路由优先；带其他厂商前缀的 ID 不会跨厂商兜底。角色未配置、目标模型未同步或已禁用时仍报错，不自动换模型。升级后需重启本地代理并按 `p` 重新同步，使现有路由记录默认厂商。
+
 | 按键 | 操作 |
 | --- | --- |
 | `↑/↓`、`Tab/Shift+Tab` | 切换字段 |
@@ -148,7 +168,7 @@ ccsw import --yes
 | `←/→`、`Home/End` | 移动文本光标 |
 | `Backspace/Delete`、`Ctrl+U` | 删除字符 / 清空字段 |
 | `Space`、`←/→` | 切换开关或选项 |
-| `Ctrl+F`、`Ctrl+R` | 在自定义模型表单中，从厂商 API 刷新可选模型 |
+| `Alt+F`、`Ctrl+R` | 在厂商或自定义模型表单中，从厂商 API 获取可选模型 |
 | `Alt+1` | 在模型表单任意字段或 API 搜索中切换 1M 标记 |
 | `Ctrl+S` / `Esc` | 保存 / 取消 |
 

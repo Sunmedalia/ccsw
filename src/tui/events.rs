@@ -96,10 +96,10 @@ impl App {
                 KeyCode::Char('?') => self.open_help(),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-                KeyCode::Enter if self.home_all_selected => {
+                KeyCode::Enter | KeyCode::Char('l') if self.home_all_selected => {
                     self.enter_all_enabled_view();
                 }
-                KeyCode::Enter if self.selected_profile().is_some() => {
+                KeyCode::Enter | KeyCode::Char('l') if self.selected_profile().is_some() => {
                     self.enter_provider_view();
                 }
                 KeyCode::Char('n') => self.new_profile(),
@@ -119,7 +119,7 @@ impl App {
             ViewMode::AllEnabled => match key.code {
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('?') => self.open_help(),
-                KeyCode::Esc => self.return_home(),
+                KeyCode::Esc | KeyCode::Char('h') => self.return_home(),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::PageUp => {
@@ -136,7 +136,7 @@ impl App {
                 KeyCode::Char(' ') => {
                     self.toggle_selected_global_model()?;
                 }
-                KeyCode::Enter => self.open_selected_global_model(),
+                KeyCode::Enter | KeyCode::Char('l') => self.open_selected_global_model(),
                 KeyCode::Char('p') => self.sync_all_to_claude(),
                 KeyCode::Char('P') => self.open_proxy_manager(),
                 _ => {}
@@ -826,7 +826,7 @@ impl App {
         let button_count = match self.modal.as_ref() {
             Some(Modal::Help(_)) => 1,
             Some(Modal::Proxy(_)) => 0,
-            Some(Modal::Model(_)) => 3,
+            Some(Modal::Model(_) | Modal::Profile(_)) => 3,
             Some(_) => 2,
             None => 0,
         };
@@ -835,6 +835,24 @@ impl App {
             .position(|rect| contains(*rect, mouse.column, mouse.row))
         {
             let key = match (self.modal.as_ref(), button) {
+                (Some(Modal::Profile(form)), button) if form.template_selected.is_some() => {
+                    match button {
+                        0 => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                        1 => {
+                            self.use_provider_template(0);
+                            return Ok(());
+                        }
+                        _ => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                    }
+                }
+                (Some(Modal::Profile(_)), 0) => {
+                    self.fetch_profile_models();
+                    return Ok(());
+                }
+                (Some(Modal::Profile(form)), 1) if form.picker.is_some() => {
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+                }
+                (Some(Modal::Profile(_)), 2) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                 (Some(Modal::Model(_)), 0) => {
                     self.fetch_api_models_for_form();
                     return Ok(());
@@ -847,7 +865,7 @@ impl App {
                 | (Some(Modal::DeleteProfile | Modal::DeleteModel), 0) => {
                     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
                 }
-                (Some(Modal::Profile(_)), 0) => {
+                (Some(Modal::Profile(_)), 1) => {
                     KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
                 }
                 (Some(Modal::Help(_)), 0) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -863,6 +881,37 @@ impl App {
             .then(|| usize::from(mouse.row.saturating_sub(inner.y)));
         match self.modal.as_mut() {
             Some(Modal::Profile(form)) => {
+                if let Some(selected) = &mut form.template_selected {
+                    if contains(inner, mouse.column, mouse.row) && mouse.row >= inner.y + 2 {
+                        let index = usize::from(mouse.row - inner.y - 2);
+                        if index <= PROVIDER_TEMPLATES.len() {
+                            *selected = index;
+                        }
+                    }
+                    return Ok(());
+                }
+                if let Some(picker) = &mut form.picker {
+                    let api_area = Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
+                    let api_inner = panel_inner(api_area);
+                    if contains(api_inner, mouse.column, mouse.row) && mouse.row == api_inner.y {
+                        form.picker_search = true;
+                    }
+                    if contains(api_inner, mouse.column, mouse.row)
+                        && mouse.row >= api_inner.y.saturating_add(2)
+                    {
+                        let index = picker.api_scroll + usize::from(mouse.row - api_inner.y - 2);
+                        if let Some(id) = picker.click_api_model(index) {
+                            form.fill_selected_model(&id);
+                            form.picker = None;
+                        }
+                    }
+                    return Ok(());
+                }
                 let content = Rect::new(
                     inner.x,
                     inner.y,
@@ -907,13 +956,17 @@ impl App {
                     let api_inner = panel_inner(api_area);
                     if mouse.row == api_inner.y {
                         form.focus_api_search = true;
-                    } else if mouse.row >= api_inner.y.saturating_add(2) {
+                    } else if contains(api_inner, mouse.column, mouse.row)
+                        && mouse.row >= api_inner.y.saturating_add(2)
+                    {
                         let list_row =
                             usize::from(mouse.row.saturating_sub(api_inner.y.saturating_add(2)));
                         let item_idx = form.api_scroll + list_row;
-                        form.api_selected = item_idx;
-                        form.pick_api_model(item_idx);
-                        form.focus_api_search = false;
+                        if form.click_api_model(item_idx).is_some() {
+                            form.pick_api_model(item_idx);
+                            form.focus_api_search = false;
+                            form.api_clicked = None;
+                        }
                     }
                 }
             }
@@ -958,10 +1011,10 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
                     return Ok(());
                 }
-                KeyCode::Tab | KeyCode::Right => help.move_section(true),
-                KeyCode::BackTab | KeyCode::Left => help.move_section(false),
-                KeyCode::Down | KeyCode::PageDown => help.scroll(true),
-                KeyCode::Up | KeyCode::PageUp => help.scroll(false),
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => help.move_section(true),
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => help.move_section(false),
+                KeyCode::Down | KeyCode::PageDown | KeyCode::Char('j') => help.scroll(true),
+                KeyCode::Up | KeyCode::PageUp | KeyCode::Char('k') => help.scroll(false),
                 KeyCode::Char('1') => help.select(0),
                 KeyCode::Char('2') => help.select(1),
                 KeyCode::Char('3') => help.select(2),
@@ -1120,11 +1173,11 @@ impl App {
                 }
                 let control = match key.code {
                     KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
+                    KeyCode::Tab | KeyCode::Right | KeyCode::Down | KeyCode::Char('j' | 'l') => {
                         manager.move_selection(true);
                         None
                     }
-                    KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
+                    KeyCode::BackTab | KeyCode::Left | KeyCode::Up | KeyCode::Char('h' | 'k') => {
                         manager.move_selection(false);
                         None
                     }
@@ -1155,6 +1208,83 @@ impl App {
                 }
             }
             Modal::Profile(form) => {
+                if let Some(selected) = &mut form.template_selected {
+                    match key.code {
+                        KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                            *selected = selected.checked_sub(1).unwrap_or(PROVIDER_TEMPLATES.len())
+                        }
+                        KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+                            *selected = (*selected + 1) % (PROVIDER_TEMPLATES.len() + 1)
+                        }
+                        KeyCode::Enter | KeyCode::Char('l') => {
+                            let index = *selected;
+                            self.use_provider_template(index);
+                            return Ok(());
+                        }
+                        KeyCode::Esc | KeyCode::Char('h') => return Ok(()),
+                        _ => {}
+                    }
+                    self.modal = Some(modal);
+                    return Ok(());
+                }
+                if (key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('f'))
+                    || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('r'))
+                {
+                    self.modal = Some(modal);
+                    self.fetch_profile_models();
+                    return Ok(());
+                }
+                if let Some(picker) = &mut form.picker {
+                    let mut key = key;
+                    if key.modifiers.is_empty() {
+                        if form.picker_search {
+                            if key.code == KeyCode::Esc {
+                                form.picker_search = false;
+                                self.modal = Some(modal);
+                                return Ok(());
+                            }
+                        } else {
+                            key.code = match key.code {
+                                KeyCode::Char('j') => KeyCode::Down,
+                                KeyCode::Char('k') => KeyCode::Up,
+                                KeyCode::Char('h') => KeyCode::Esc,
+                                KeyCode::Char('l') => KeyCode::Enter,
+                                KeyCode::Char('/') => {
+                                    form.picker_search = true;
+                                    self.modal = Some(modal);
+                                    return Ok(());
+                                }
+                                KeyCode::Char(c) => {
+                                    form.picker_search = true;
+                                    KeyCode::Char(c)
+                                }
+                                other => other,
+                            };
+                        }
+                    }
+                    match key.code {
+                        KeyCode::Esc => form.picker = None,
+                        KeyCode::Enter => {
+                            if let Some(model) =
+                                picker.filtered_api_models().get(picker.api_selected)
+                            {
+                                let id = model.id.clone();
+                                form.fill_selected_model(&id);
+                                form.picker = None;
+                            }
+                        }
+                        KeyCode::Tab | KeyCode::BackTab => {}
+                        _ => {
+                            picker.handle_key(
+                                key,
+                                usize::from(modal_area(self.screen).height.saturating_sub(8))
+                                    .max(1),
+                            );
+                        }
+                    }
+                    self.modal = Some(modal);
+                    return Ok(());
+                }
                 let outcome = handle_form_key(&mut form.fields, &mut form.selected, key);
                 if outcome == FormOutcome::Close {
                     return Ok(());
@@ -1247,8 +1377,8 @@ impl App {
                 }
             }
             Modal::Model(form) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && (key.code == KeyCode::Char('f') || key.code == KeyCode::Char('r'))
+                if (key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('f'))
+                    || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('r'))
                 {
                     self.modal = Some(modal);
                     self.fetch_api_models_for_form();

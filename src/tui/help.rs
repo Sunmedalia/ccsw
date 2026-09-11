@@ -46,6 +46,10 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
         ],
         HelpSection::Forms => &[
             (
+                "h j k l",
+                "Template/model picker: back, down, up, use; / searches models",
+            ),
+            (
                 "↑↓ / Tab",
                 "Next field; Shift+Tab returns to previous field",
             ),
@@ -57,8 +61,8 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ),
             ("Space / ←→", "Change toggle or option"),
             (
-                "Ctrl+F / Ctrl+R",
-                "Model form: fetch available models from the provider API",
+                "Alt+F / Ctrl+R",
+                "Provider/model forms: fetch models from the provider API",
             ),
             (
                 "Alt+1",

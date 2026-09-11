@@ -41,10 +41,14 @@ pub fn discover(profile: &Profile) -> Result<Vec<ModelEntry>> {
 
 fn discover_with_client(client: &Client, profile: &Profile) -> Result<Vec<ModelEntry>> {
     let endpoint = crate::proxy::models_endpoint(&profile.base_url, profile.api_format)?;
+    let deepseek = endpoint.host_str() == Some("api.deepseek.com");
     let mut request = client
         .get(endpoint)
         .header("anthropic-version", "2023-06-01");
     request = match &profile.credential {
+        Credential::XApiKey { value } | Credential::ApiKey { value } if deepseek => {
+            request.bearer_auth(value)
+        }
         Credential::Bearer { value } => request.bearer_auth(value),
         Credential::XApiKey { value } => request.header("x-api-key", value),
         Credential::ApiKey { value } => request.header("api-key", value),
@@ -69,11 +73,17 @@ pub fn parse_models(value: &Value) -> Result<Vec<ModelEntry>> {
     let rows = value
         .get("data")
         .or_else(|| value.get("models"))
+        .or_else(|| value.as_array().map(|_| value))
         .and_then(Value::as_array)
         .context("response has neither a data nor models array")?;
     let mut models = Vec::new();
     for row in rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
+        let Some(id) = row
+            .as_str()
+            .or_else(|| row.get("id").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
             continue;
         };
         let label = row
@@ -336,6 +346,17 @@ mod tests {
         let models = parse_models(&json!({"models": [{"id": "b", "name": "B"}]})).unwrap();
         assert_eq!(data[0].label.as_deref(), Some("A"));
         assert_eq!(models[0].id, "b");
+    }
+
+    #[test]
+    fn parses_string_catalogs_and_skips_empty_ids() {
+        let models =
+            parse_models(&json!(["model-a", "", {"id":"  "}, {"id":"model-b"}, "model-a"]))
+                .unwrap();
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["model-a", "model-b"]
+        );
     }
 
     #[test]

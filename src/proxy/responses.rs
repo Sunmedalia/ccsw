@@ -926,6 +926,7 @@ mod tests {
                     routes: BTreeMap::from([(
                         "route".into(),
                         RouteTarget {
+                            default_profile_id: None,
                             codex: true,
                             config_path,
                             profile_id: Some("test".into()),
