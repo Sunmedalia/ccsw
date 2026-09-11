@@ -938,6 +938,7 @@ mod tests {
             )
             .unwrap();
             let state = ServerState {
+                sessions: Default::default(),
                 shutdown: Default::default(),
                 registry,
                 client: Client::new(),

@@ -216,15 +216,13 @@ pub fn aggregate_profile(
         value: registry.local_token,
     };
     routed.default_model = default_model;
-    for model in [
-        &mut routed.aliases.opus,
-        &mut routed.aliases.sonnet,
-        &mut routed.aliases.haiku,
-        &mut routed.aliases.fable,
-        &mut routed.subagent_model,
-    ] {
-        *model = model.as_deref().and_then(expose);
-    }
+    routed.aliases = config::RoleModels {
+        opus: Some("ccsw-role::opus".into()),
+        sonnet: Some("ccsw-role::sonnet".into()),
+        haiku: Some("ccsw-role::haiku".into()),
+        fable: Some("ccsw-role::fable".into()),
+    };
+    routed.subagent_model = routed.subagent_model.as_deref().and_then(expose);
     routed.fallback_models = routed
         .fallback_models
         .iter()
@@ -658,6 +656,7 @@ fn update_registry<T>(
 
 #[derive(Clone)]
 struct ServerState {
+    sessions: std::sync::Arc<std::sync::Mutex<SessionProviders>>,
     shutdown: std::sync::Arc<tokio::sync::Notify>,
     registry: PathBuf,
     client: Client,
@@ -692,6 +691,7 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to bind {address}"))?;
     let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let state = ServerState {
+        sessions: Default::default(),
         shutdown: shutdown.clone(),
         registry: registry_path,
         client: Client::builder()
@@ -789,6 +789,7 @@ fn authenticated_target(
 // Only recognize role aliases and Claude family IDs, never arbitrary names
 // containing a role (or another provider's namespaced route).
 fn requested_role(model: &str) -> Option<&'static str> {
+    let model = model.strip_prefix("ccsw-role::").unwrap_or(model);
     let normalized = model.to_ascii_lowercase();
     let normalized = strip_1m(&normalized);
     let family = normalized.strip_prefix("claude-").unwrap_or(&normalized);
@@ -898,6 +899,72 @@ fn resolve_profile(
     Ok((profile, effective))
 }
 
+#[derive(Default)]
+struct SessionProviders {
+    entries: BTreeMap<(String, String), (String, std::time::Instant)>,
+}
+
+fn request_session(body: &Value) -> Option<String> {
+    let user = body.get("metadata")?.get("user_id")?.as_str()?;
+    let session = serde_json::from_str::<Value>(user)
+        .ok()
+        .and_then(|value| value.get("session_id")?.as_str().map(str::to_owned))
+        .or_else(|| {
+            user.rsplit_once("_session_")
+                .map(|(_, session)| session.to_owned())
+        })?;
+    uuid::Uuid::parse_str(&session)
+        .ok()
+        .map(|id| id.to_string())
+}
+
+impl SessionProviders {
+    fn resolve(
+        &mut self,
+        route: &str,
+        target: &RouteTarget,
+        body: &Value,
+        remember: bool,
+    ) -> Result<(Profile, String)> {
+        let now = std::time::Instant::now();
+        self.entries
+            .retain(|_, (_, used)| now.duration_since(*used) < Duration::from_secs(24 * 60 * 60));
+        let session = request_session(body).map(|session| (route.to_owned(), session));
+        let mut effective = target.clone();
+        if let Some((provider, used)) = session.as_ref().and_then(|key| self.entries.get_mut(key)) {
+            effective.default_profile_id = Some(provider.clone());
+            *used = now;
+        }
+        let requested = body.get("model").and_then(Value::as_str);
+        let resolved = resolve_profile(&effective, requested)?;
+        if remember
+            && !target.codex
+            && target.profile_id.is_none()
+            && let Some(key) = session
+            && let Some(mapped) = requested.and_then(|requested| {
+                target
+                    .models
+                    .iter()
+                    .find(|(id, _)| strip_1m(id) == strip_1m(requested))
+                    .map(|(_, mapped)| mapped)
+            })
+        {
+            if self.entries.len() >= 4096
+                && !self.entries.contains_key(&key)
+                && let Some(oldest) = self
+                    .entries
+                    .iter()
+                    .min_by_key(|(_, (_, used))| *used)
+                    .map(|(key, _)| key.clone())
+            {
+                self.entries.remove(&oldest);
+            }
+            self.entries.insert(key, (mapped.profile_id.clone(), now));
+        }
+        Ok(resolved)
+    }
+}
+
 fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
     let config = config::load_client(
         &target.config_path,
@@ -969,7 +1036,11 @@ async fn count_tokens(
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
     if target.profile_id.is_none()
-        && let Err(error) = resolve_profile(&target, body.get("model").and_then(Value::as_str))
+        && let Err(error) = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resolve(&route, &target, &body, false)
     {
         return anthropic_error(StatusCode::BAD_REQUEST, error);
     }
@@ -989,11 +1060,15 @@ async fn messages(
         Ok(value) => value,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
-    let (profile, upstream_model) =
-        match resolve_profile(&target, body.get("model").and_then(Value::as_str)) {
-            Ok(value) => value,
-            Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
-        };
+    let (profile, upstream_model) = match state
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .resolve(&route, &target, &body, true)
+    {
+        Ok(value) => value,
+        Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
+    };
     if target.profile_id.is_none() {
         body["model"] = Value::String(strip_1m(&upstream_model).to_owned());
     }
@@ -2177,6 +2252,100 @@ pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn roles_follow_models_per_session_and_never_cross_routes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        config::update(&path, |config| {
+            for id in ["a", "b"] {
+                let profile: Profile = toml::from_str(&format!("name='{id}'\nbase_url='https://example.invalid'\ndefault_model='x'\n[aliases]\nsonnet='{id}-sonnet'\nopus='{id}-opus'\n"))?;
+                config.profiles.insert(id.into(), profile);
+            }
+            Ok(())
+        }).unwrap();
+        let config = config::load(&path).unwrap();
+        let mut target = RouteTarget {
+            default_profile_id: Some("a".into()),
+            codex: false,
+            config_path: path.clone(),
+            profile_id: None,
+            models: BTreeMap::new(),
+        };
+        for (id, profile) in &config.profiles {
+            for model in crate::discovery::active_models(profile, &[]) {
+                target.models.insert(
+                    format!("{id}::{}", model.id),
+                    AggregateModelTarget {
+                        profile_id: id.clone(),
+                        model_id: model.id,
+                    },
+                );
+            }
+        }
+        let first = uuid::Uuid::new_v4().to_string();
+        let second = uuid::Uuid::new_v4().to_string();
+        let body = |session: &str, model: &str| json!({"model":model,"metadata":{"user_id":json!({"session_id":session}).to_string()}});
+        let mut sessions = SessionProviders::default();
+        sessions
+            .resolve("route", &target, &body(&first, "b::x"), true)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &body(&first, "ccsw-role::sonnet"), true)
+                .unwrap()
+                .1,
+            "b-sonnet"
+        );
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &body(&second, "ccsw-role::opus"), true)
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        assert_eq!(
+            sessions
+                .resolve("other", &target, &body(&first, "sonnet5"), true)
+                .unwrap()
+                .1,
+            "a-sonnet"
+        );
+        sessions
+            .resolve("route", &target, &body(&first, "a::x"), false)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &body(&first, "opus"), true)
+                .unwrap()
+                .1,
+            "b-opus"
+        );
+        sessions
+            .resolve("route", &target, &body(&first, "a::x"), true)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &body(&first, "opus"), true)
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &json!({"model":"sonnet"}), true)
+                .unwrap()
+                .1,
+            "a-sonnet"
+        );
+        assert_eq!(
+            request_session(
+                &json!({"metadata":{"user_id":format!("user_test_account_test_session_{first}")}})
+            ),
+            Some(first)
+        );
+        assert!(request_session(&json!({"metadata":{"user_id":"shared-user"}})).is_none());
+    }
+
     #[test]
     fn deepseek_catalog_uses_root_without_changing_messages_endpoint() {
         for suffix in [

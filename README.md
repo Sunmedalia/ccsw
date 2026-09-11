@@ -157,9 +157,11 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 获取模型会回填当前选中的模型字段：先选中 `Default model`、`Opus`、`Sonnet`、`Haiku`、`Fable`、`Subagent` 或 `Fallbacks`，再点击 `Fetch models` 或按 `Alt+F`。选择界面标题会显示目标字段；`Fallbacks` 追加且不重复添加，其他字段替换当前值。焦点在地址、凭据等非模型字段时，默认回填 `Default model`。
 
-厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。同步时默认厂商的角色配置既写入 Claude 环境变量，也用于代理端兜底：例如 `Sonnet = my-model` 后，`sonnet`、`sonnet5`、`claude-sonnet-…` 和 `claude-3-5-sonnet-…` 会转发为上游 `my-model`。这里的模型 ID 仅说明匹配格式，不表示上游支持这些模型。
+厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。Claude 会话发送 `A::x` 请求后，该会话后续角色请求使用 A 的配置；发送 `B::y` 后切换到 B。同步写入 `ccsw-role::sonnet` 等角色标识，让代理根据会话选择上游模型；也兼容 `sonnet`、`sonnet5`、`claude-sonnet-…` 和旧式 Claude 模型 ID。
 
-已同步的精确路由优先；带其他厂商前缀的 ID 不会跨厂商兜底。角色未配置、目标模型未同步或已禁用时仍报错，不自动换模型。升级后需重启本地代理并按 `p` 重新同步，使现有路由记录默认厂商。
+会话识别支持 `metadata.user_id` 中 JSON 的 `session_id` 和旧式 `_session_<UUID>`。没有可识别会话、会话尚未发送具体模型请求时，使用同步时的默认厂商。不同会话及不同代理路由分别记录，角色请求和 token 计数不切换厂商。仅在模型请求实际到达代理后切换；模型选择菜单本身不会通知代理。新子会话使用自己的记录，不自动继承父会话。记录在内存中保存，24 小时不活动或代理重启后重置，最多保存 4096 个会话。
+
+已同步的精确路由优先；带其他厂商前缀的 ID 不会跨厂商兜底。当前会话厂商的角色未配置、目标模型未同步或已禁用时仍报错，不自动换厂商。升级后需重启本地代理、按 `p` 重新同步并重启 Claude，使角色请求使用新的角色标识。
 
 | 按键 | 操作 |
 | --- | --- |

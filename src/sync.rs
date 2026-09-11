@@ -449,10 +449,9 @@ default_model = "model-z"
         assert_eq!(inspect(paths, settings).unwrap(), Status::Synced);
         assert_eq!(fixture.value()["theme"], "dark");
         assert_eq!(fixture.value()["env"]["KEEP_ME"], "yes");
-        assert!(
-            fixture.value()["env"]
-                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-                .is_none()
+        assert_eq!(
+            fixture.value()["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+            "ccsw-role::haiku"
         );
         assert!(
             !fs::read_to_string(settings)
