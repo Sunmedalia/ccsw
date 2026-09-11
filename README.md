@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.6。Release 已包含 Claude Code、Codex、Pi Agent 配置隔离，以及 Codex 订阅账号导入和切换功能。
+> 本文对应 v0.1.7。Release 已包含 Claude Code、Codex、Pi Agent 配置隔离，以及 Codex 订阅账号导入和切换功能。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -20,7 +20,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-当前 v0.1.6 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
+当前 v0.1.7 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
 
 ```sh
 # macOS Apple Silicon
@@ -164,7 +164,7 @@ ccsw import --yes
 
 ## Pi Agent 配置
 
-> 原生文件管理为当前源码版本功能，尚未包含在 v0.1.6 发布包中；兼容验证基准为 Pi `0.85.1`。
+> v0.1.7 包含 Pi 原生文件管理；兼容验证基准为 Pi `0.85.1`。
 
 点击顶部 **Pi** 标签或按 `F2` 切换到 Pi 配置管理。首页与 Claude Code 使用相同的 `CCSW Providers · F2 <下一个 Agent> · N providers` 标题和厂商布局。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
 
@@ -223,7 +223,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 ## Codex 配置与账号
 
-> Codex 配置随 v0.1.6 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
+> Codex 配置随 v0.1.7 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
 在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
