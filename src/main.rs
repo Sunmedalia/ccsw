@@ -3,6 +3,7 @@ mod codex;
 mod config;
 mod discovery;
 mod import;
+mod managed_process;
 mod pi;
 mod platform;
 mod proxy;
@@ -124,20 +125,33 @@ enum InternalCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // A daemon is completely described by its registry. Login managers do not
+    // necessarily inherit the interactive shell's directory overrides.
+    if let Some(Commands::Internal {
+        command: InternalCommand::ProxyServe { registry },
+    }) = &cli.command
+    {
+        return tokio::runtime::Runtime::new()?.block_on(proxy::serve(registry.clone()));
+    }
     let paths = AppPaths::discover()?;
+    #[cfg(windows)]
+    let paths = {
+        let mut paths = paths;
+        if let Some(Commands::Internal {
+            command: InternalCommand::ProxyStart { registry },
+        }) = &cli.command
+        {
+            paths.state_dir = std::path::absolute(registry)?
+                .parent()
+                .context("registry has no parent")?
+                .to_path_buf();
+        }
+        paths
+    };
     if let Some(Commands::Uninstall { yes, .. }) = &cli.command {
         return uninstall::run(&paths, *yes);
     }
-    let _session = if matches!(
-        cli.command,
-        Some(Commands::Internal {
-            command: InternalCommand::ProxyServe { .. }
-        })
-    ) {
-        None
-    } else {
-        Some(uninstall::session(&paths)?)
-    };
+    let _session = uninstall::session(&paths)?;
     match cli.command {
         Some(Commands::Uninstall { .. }) => unreachable!(),
         None => {
@@ -163,18 +177,11 @@ fn main() -> Result<()> {
         Some(Commands::Import { yes }) => import_existing(&paths, yes),
         #[cfg(windows)]
         Some(Commands::Internal {
-            command: InternalCommand::ProxyStart { registry },
-        }) => {
-            let mut paths = paths;
-            paths.state_dir = registry
-                .parent()
-                .context("registry has no parent")?
-                .to_path_buf();
-            proxy::start(&paths, None).map(|_| ())
-        }
+            command: InternalCommand::ProxyStart { .. },
+        }) => proxy::start(&paths, None).map(|_| ()),
         Some(Commands::Internal {
-            command: InternalCommand::ProxyServe { registry },
-        }) => tokio::runtime::Runtime::new()?.block_on(proxy::serve(registry)),
+            command: InternalCommand::ProxyServe { .. },
+        }) => unreachable!("daemon handled before application path discovery"),
     }
 }
 
@@ -274,10 +281,14 @@ fn import_existing(paths: &AppPaths, yes: bool) -> Result<()> {
 fn doctor(paths: &AppPaths) -> Result<()> {
     let mut failed = false;
     println!("CCSW doctor\n");
-    let claude_bin = std::env::var_os("CCSW_CLAUDE_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("claude"));
-    match Command::new(&claude_bin).arg("--version").output() {
+    let claude_bin = platform::nonempty_env("CCSW_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
+    let version = platform::resolve_program(&claude_bin).and_then(|program| {
+        managed_process::output_timeout(
+            Command::new(program).arg("--version"),
+            std::time::Duration::from_secs(10),
+        )
+    });
+    match version {
         Ok(output) if output.status.success() => {
             let version_text = String::from_utf8_lossy(&output.stdout);
             let parsed = version_text.split_whitespace().find_map(|word| {
@@ -301,7 +312,7 @@ fn doctor(paths: &AppPaths) -> Result<()> {
         }
         Err(error) => {
             failed = true;
-            println!("✗ Claude executable not found: {error}");
+            println!("✗ Claude could not start: {error:#}");
         }
     }
 

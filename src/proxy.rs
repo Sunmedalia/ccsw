@@ -371,12 +371,8 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     let executable = std::env::current_exe().context("cannot resolve ccsw executable")?;
     let mut command = Command::new(executable);
     command
-        .args([
-            "internal",
-            "proxy-serve",
-            "--registry",
-            proxy_paths.registry.to_string_lossy().as_ref(),
-        ])
+        .args(["internal", "proxy-serve", "--registry"])
+        .arg(&proxy_paths.registry)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -388,8 +384,6 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     ] {
         command.env_remove(name);
     }
-    #[cfg(windows)]
-    crate::windows::background(&mut command)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -404,6 +398,9 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         }
     }
     drop(probe);
+    #[cfg(windows)]
+    crate::windows::spawn_background(&mut command).context("failed to start CCSW proxy")?;
+    #[cfg(not(windows))]
     command.spawn().context("failed to start CCSW proxy")?;
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));

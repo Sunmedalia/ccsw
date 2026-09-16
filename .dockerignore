@@ -5,3 +5,8 @@
 !src/**
 !tests/
 !tests/**
+!build.rs
+!resources/
+!resources/**
+!.cargo/
+!.cargo/**

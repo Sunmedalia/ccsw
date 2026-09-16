@@ -404,7 +404,10 @@ fn validate_service(service: &Snapshot, paths: &AppPaths) -> Result<()> {
     let registry = paths.state_dir.join("proxy.json");
     #[cfg(windows)]
     {
-        if checked(&crate::windows::startup_registry(&service.path)?)? != registry {
+        if !crate::platform::same_path(
+            &checked(&crate::windows::startup_registry(&service.path)?)?,
+            &registry,
+        )? {
             bail!("startup belongs to another configuration");
         }
     }
@@ -586,6 +589,9 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
         service.verify()?;
         fs::remove_file(&service.path)?;
     }
+    // All data deletion is complete. Close handles so Windows can finish pending
+    // lock-file deletions before removing the now-empty directories.
+    drop(locks);
     for dir in &plan.account_dirs {
         let _ = fs::remove_dir(checked(dir)?);
     }
@@ -616,7 +622,6 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
             }
         }
     }
-    drop(locks);
     println!("CCSW configuration removed. Unrelated files and the program binary were preserved.");
     Ok(())
 }

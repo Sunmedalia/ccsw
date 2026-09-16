@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
@@ -47,10 +47,10 @@ pub struct ApplyResult {
 }
 
 pub fn settings_path() -> Result<PathBuf> {
-    if let Some(directory) = env::var_os("CLAUDE_CONFIG_DIR") {
-        return Ok(PathBuf::from(directory).join("settings.json"));
-    }
-    Ok(crate::platform::home()?.join(".claude/settings.json"))
+    Ok(crate::platform::override_path("CLAUDE_CONFIG_DIR", || {
+        Ok(crate::platform::home()?.join(".claude"))
+    })?
+    .join("settings.json"))
 }
 
 #[cfg(test)]

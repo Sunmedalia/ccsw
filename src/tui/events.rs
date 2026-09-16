@@ -33,7 +33,7 @@ impl App {
             let input = event::read()?;
             redraw = true;
             if self.screen.width < 40 || self.screen.height < 12 {
-                if matches!(input, Event::Key(key) if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)))
+                if matches!(input, Event::Key(key) if key.kind == event::KeyEventKind::Press && (key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))))
                 {
                     closing = true;
                 }

@@ -1,7 +1,5 @@
-use std::{
-    fs,
-    process::{Command, Output},
-};
+mod support;
+use std::{fs, process::Output};
 
 struct Sandbox {
     root: tempfile::TempDir,
@@ -15,7 +13,7 @@ impl Sandbox {
         sandbox
     }
     fn command(&self, args: &[&str]) -> Output {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(self.root.path())
             .args(args)
             .env("HOME", self.root.path())
             .env("USERPROFILE", self.root.path())

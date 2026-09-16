@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.8。新增 provider 模板、模型选择与角色转发映射，并改进上游兼容性和键盘导航。
+> 本文对应 v0.1.9。新增 Windows x64 支持，完善环境变量、路径转义、子进程管理与后台代理自启，并保留 provider 模板和模型角色转发功能。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -20,7 +20,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-当前 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
+已有 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。本分支已恢复 Windows x64 ZIP 的构建和后续标签发布；不会修改已有 Release。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -33,19 +33,18 @@ chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
 ```
 
-### Windows（从源码安装）
+### Windows（x64 ZIP）
+
+从包含 Windows 产物的 Release 或 CI 构建产物中取得 `ccsw-windows-x86_64.zip`：
 
 ```powershell
-git clone https://github.com/Sunmedalia/ccsw.git
-cd ccsw
-cargo install --path .
+Expand-Archive -LiteralPath '.\ccsw-windows-x86_64.zip' -DestinationPath "$env:LOCALAPPDATA\Programs\ccsw" -Force
+& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe"
 ```
 
-Windows 二进制构建将在后续 Release 恢复；Windows 配置路径仍为 `%APPDATA%\ccsw\config.toml`。
+无需管理员权限，CCSW 自身无需 Node、Git Bash 或 Visual C++ 运行库。完整的 PowerShell/CMD 示例、目录覆盖优先级、字符转义、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
 
-配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`；`CCSW_CONFIG` 和 XDG 路径覆盖仍然有效。Claude 设置默认使用 `%USERPROFILE%\.claude\settings.json`，优先遵循 `CLAUDE_CONFIG_DIR`。
-
-代理面板按 `P` 打开，按 `e` 修改端口；启用登录自启会在当前用户 Startup 目录创建 `CCSW Proxy.lnk`。关闭 TUI 不会停止后台代理，使用面板 Stop 或 `ccsw proxy stop` 停止。移动可执行文件后，需要禁用并重新启用登录自启。更新前先停止旧代理，再覆盖程序文件。
+配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`。关闭 TUI 不会停止后台代理；更新前先执行 `ccsw proxy stop`，移动程序前先卸载旧位置的自启项。
 
 ### 从源码安装
 
@@ -478,7 +477,7 @@ cargo test --locked --all-targets
 cargo build --locked --release
 ```
 
-CI 在 Pull Request、版本标签推送或手动触发时运行：在 Ubuntu 与 macOS 上执行检查并生成对应平台二进制，同时执行依赖安全审计和 Docker 安全回归。Windows Release 构建暂时停用。版本标签通过全部发布门禁后生成 Release；普通 main 推送不会自动运行当前工作流。
+CI 在 Pull Request、版本标签推送或手动触发时运行：Ubuntu、macOS 与 Windows 执行检查，Windows 额外验证 Rust 1.88、npm 启动器、MSVC 静态运行库及解压后的 ZIP。版本标签通过跨平台测试、依赖安全审计和 Docker 安全回归后生成 Release；普通 main 推送不自动运行当前工作流。Windows ZIP 附带 SHA-256 校验文件。
 
 Codex 的自动测试使用隔离 HOME、模拟登录凭据和本地上游，不读取真实账号。可另行安装 Codex CLI 后运行真实进程冒烟测试（无 API 调用费用）：
 

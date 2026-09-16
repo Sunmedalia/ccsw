@@ -226,20 +226,19 @@ fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let mut command = std::process::Command::new("open");
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut c = std::process::Command::new("rundll32.exe");
-        c.arg("url.dll,FileProtocolHandler");
-        c
-    };
+    return crate::windows::open_browser(url);
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let mut command = std::process::Command::new("xdg-open");
-    command
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        command
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        Ok(())
+    }
 }
 pub(super) fn capture_current(paths: &AppPaths, auth: Option<&Value>) -> Result<()> {
     let Some(auth) = auth else {
@@ -564,5 +563,41 @@ pub fn live_login() -> Result<(Option<String>, String)> {
             None,
             format!("Provider: {mode} · No readable subscription identity · n login"),
         )),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_keyring_tests {
+    use super::*;
+    #[test]
+    fn credential_manager_round_trip_uses_only_unique_temporary_home() {
+        let root = tempfile::tempdir().unwrap();
+        let entry = keyring_entry(root.path()).unwrap();
+        struct Cleanup(keyring::Entry);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.delete_credential();
+            }
+        }
+        let cleanup = Cleanup(entry);
+        assert!(matches!(
+            cleanup.0.get_password(),
+            Err(keyring::Error::NoEntry)
+        ));
+        let doc: DocumentMut = "cli_auth_credentials_store = 'keyring'".parse().unwrap();
+        let auth = json!({"test_only": "值 %PATH% !x! & \\\""});
+        write_live_auth(root.path(), &doc, &auth).unwrap();
+        assert_eq!(read_live_auth(root.path(), &doc).unwrap(), Some(auth));
+        assert!(!root.path().join("auth.json").exists());
+        cleanup.0.set_password("invalid-json").unwrap();
+        assert!(read_live_auth(root.path(), &doc).is_err());
+        cleanup.0.delete_credential().unwrap();
+        assert_eq!(read_live_auth(root.path(), &doc).unwrap(), None);
+        let auto: DocumentMut = "cli_auth_credentials_store = 'auto'".parse().unwrap();
+        atomic_write(&root.path().join("auth.json"), b"{\"file_fallback\":true}").unwrap();
+        assert_eq!(
+            read_live_auth(root.path(), &auto).unwrap(),
+            Some(json!({"file_fallback":true}))
+        );
     }
 }

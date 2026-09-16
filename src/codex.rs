@@ -151,12 +151,9 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
     Ok(())
 }
 pub fn home() -> Result<PathBuf> {
-    let path = std::env::var_os("CODEX_HOME")
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(crate::platform::home()?.join(".codex"));
-    Ok(std::path::absolute(path)?)
+    crate::platform::override_path("CODEX_HOME", || Ok(crate::platform::home()?.join(".codex")))
 }
+
 pub(super) fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -262,7 +259,7 @@ fn binding(paths: &AppPaths) -> Result<Option<Binding>> {
     }
 }
 fn check_managed(binding: &Binding, home: &Path, doc: &DocumentMut) -> Result<()> {
-    if binding.home != home {
+    if !crate::platform::same_path(&binding.home, home)? {
         bail!("CODEX_HOME changed; disconnect the previous home before applying to another home");
     }
     for (key, expected) in &binding.managed {
@@ -354,7 +351,7 @@ pub fn recover(paths: &AppPaths) -> Result<()> {
     let transaction: Transaction = serde_json::from_slice(
         &fs::read(journal_path(paths)).context("No recovery journal exists")?,
     )?;
-    if transaction.home != home()? {
+    if !crate::platform::same_path(&transaction.home, &home()?)? {
         bail!("Use the original CODEX_HOME to recover this transaction");
     }
     rollback(paths, &transaction)
@@ -695,7 +692,7 @@ pub(crate) fn execute_detach(plan: &DetachPlan) -> Result<()> {
 pub fn disconnect(paths: &AppPaths) -> Result<()> {
     let _guard = lock(paths)?;
     let plan = prepare_detach(paths)?.context("Codex is not managed by CCSW")?;
-    if plan.home != home()? {
+    if !crate::platform::same_path(&plan.home, &home()?)? {
         bail!("Use the original CODEX_HOME to disconnect");
     }
     accounts::capture_current(paths, plan.live_auth.as_ref())?;

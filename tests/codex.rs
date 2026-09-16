@@ -1,11 +1,8 @@
 //! Real CLI processes against isolated homes; never uses a developer's Codex login.
+mod support;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    path::PathBuf,
-    process::{Command, Output},
-};
+use std::{fs, path::PathBuf, process::Output};
 struct Sandbox {
     root: tempfile::TempDir,
 }
@@ -21,7 +18,7 @@ impl Sandbox {
         self.root.path().join("codex")
     }
     fn command(&self, args: &[&str]) -> Output {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(self.root.path())
             .args(args)
             .env("HOME", self.root.path())
             .env("USERPROFILE", self.root.path())
@@ -247,18 +244,54 @@ fn uninstall_detaches_codex_and_removes_only_registered_account_files() {
     assert_eq!(restored["model"].as_str(), Some("original-model"));
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, feature = "test-support"))]
 #[test]
 fn official_rpc_shape_supports_login_refresh_and_stale_quota_errors() {
+    rpc_scenario(false);
+}
+
+#[cfg(all(windows, feature = "test-support"))]
+#[test]
+fn npm_style_batch_rpc_supports_login_and_refresh() {
+    rpc_scenario(true);
+}
+
+#[cfg(any(unix, feature = "test-support"))]
+fn rpc_scenario(batch: bool) {
+    #[cfg(not(windows))]
+    let _ = batch;
+    #[cfg(all(unix, not(feature = "test-support")))]
     use std::os::unix::fs::PermissionsExt;
     let s = Sandbox::new();
     let fixture = s.root.path().join("mock-auth.json");
     fs::write(&fixture, auth("a", "workspace", "refresh-a").to_string()).unwrap();
-    let script = s.root.path().join("codex-mock");
-    fs::write(&script, include_str!("fixtures/codex_rpc.py")).unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    #[cfg(feature = "test-support")]
+    let script = {
+        let script = s.root.path().join(if cfg!(windows) {
+            "codex mock.exe"
+        } else {
+            "codex-mock"
+        });
+        fs::copy(env!("CARGO_BIN_EXE_ccsw-test-helper"), &script).unwrap();
+        script
+    };
+    #[cfg(all(unix, not(feature = "test-support")))]
+    let script = {
+        let script = s.root.path().join("codex-mock");
+        fs::write(&script, include_str!("fixtures/codex_rpc.py")).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        script
+    };
+    #[cfg(windows)]
+    let script = if batch {
+        let shim = s.root.path().join("codex shim.cmd");
+        fs::write(&shim, "@echo off\r\n\"%~dp0codex mock.exe\" %*\r\n").unwrap();
+        shim
+    } else {
+        script
+    };
     let run = |args: &[&str]| {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(s.root.path())
             .args(args)
             .env("HOME", s.root.path())
             .env("USERPROFILE", s.root.path())

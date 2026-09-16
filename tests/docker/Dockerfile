@@ -2,7 +2,9 @@ FROM rust:1.95.0-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 RUN rustup component add rustfmt clippy
 WORKDIR /work
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY resources ./resources
+COPY .cargo ./.cargo
 COPY src ./src
 COPY tests ./tests
 RUN cargo fmt --check && cargo clippy --locked --all-targets --all-features -- -D warnings && cargo test --locked --all-targets && cargo build --locked

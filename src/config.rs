@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -342,9 +341,8 @@ pub struct AppPaths {
 impl AppPaths {
     pub fn discover() -> Result<Self> {
         let (config_dir, state_dir, cache_dir) = crate::platform::directories()?;
-        let config = env::var_os("CCSW_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config_dir.join("config.toml"));
+        let config =
+            crate::platform::override_path("CCSW_CONFIG", || Ok(config_dir.join("config.toml")))?;
         let cache = cache_dir.join("models.json");
         Ok(Self {
             config,
@@ -850,5 +848,32 @@ value = "secret"
         let error = try_update(&path, |_| Ok(())).unwrap_err();
         assert!(error.to_string().contains("configuration is busy"));
         assert!(!path.exists());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_file_tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn replacement_failure_preserves_original_then_retry_succeeds() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("用户 %literal% !& config.toml");
+        let mut config = Config::default();
+        write_unlocked(&path, &config).unwrap();
+        let before = fs::read(&path).unwrap();
+        // Deny FILE_SHARE_DELETE to simulate a Windows editor holding the target.
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        config.profiles.insert("test".into(), serde_json::from_value(serde_json::json!({"name":"test", "base_url":"https://example.invalid", "default_model":"test"})).unwrap());
+        assert!(write_unlocked(&path, &config).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        drop(handle);
+        write_unlocked(&path, &config).unwrap();
+        assert_ne!(fs::read(&path).unwrap(), before);
     }
 }

@@ -57,15 +57,9 @@ impl Status {
 }
 
 fn identity(path: &Path) -> Result<PathBuf> {
-    if let Ok(path) = fs::canonicalize(path) {
-        return Ok(path);
-    }
-    let absolute = std::path::absolute(path)?;
-    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
-        return Ok(identity(parent)?.join(name));
-    }
-    Ok(absolute)
+    crate::platform::identity(path)
 }
+
 fn read_settings(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(json!({}));

@@ -1,3 +1,4 @@
+mod support;
 use std::{fs, process::Command};
 
 #[test]
@@ -58,6 +59,7 @@ value = "anthropic-upstream-secret"
     drop(listener);
     let binary = assert_cmd::cargo::cargo_bin("ccsw");
     let common = |command: &mut Command| {
+        support::isolate(command, temp.path());
         command
             .env("CCSW_CONFIG", &config)
             .env("HOME", temp.path())
@@ -106,19 +108,15 @@ value = "anthropic-upstream-secret"
 fn separate_user_state_can_use_distinct_ports_without_stopping_each_other() {
     struct Sandbox {
         root: tempfile::TempDir,
-        binary: std::path::PathBuf,
     }
     impl Sandbox {
         fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             fs::write(root.path().join("config.toml"), "version = 2\n[profiles.local]\nname = 'Local'\nbase_url = 'https://upstream.invalid'\ndefault_model = 'test-model'\n").unwrap();
-            Self {
-                root,
-                binary: assert_cmd::cargo::cargo_bin("ccsw"),
-            }
+            Self { root }
         }
         fn command(&self, args: &[&str]) -> std::process::Output {
-            Command::new(&self.binary)
+            support::command(self.root.path())
                 .args(args)
                 .env("HOME", self.root.path())
                 .env("USERPROFILE", self.root.path())
@@ -184,7 +182,7 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
     let root = temp.path().join("用户 space");
     fs::create_dir_all(&root).unwrap();
     let command = |args: &[&str]| {
-        let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("ccsw"));
+        let mut cmd = support::command(&root);
         cmd.args(args)
             .env_remove("HOME")
             .env_remove("CCSW_CONFIG")
@@ -250,7 +248,7 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
 fn windows_login_install_and_uninstall_use_isolated_startup_directory() {
     let root = tempfile::tempdir().unwrap();
     let command = |args: &[&str]| {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(root.path())
             .args(args)
             .env("USERPROFILE", root.path())
             .env("APPDATA", root.path().join("roaming"))
@@ -274,6 +272,40 @@ fn windows_login_install_and_uninstall_use_isolated_startup_directory() {
         .path()
         .join("roaming/Microsoft/Windows/Start Menu/Programs/Startup/CCSW Proxy.lnk");
     assert!(shortcut.exists());
+    assert!(command(&["proxy", "stop"]).status.success());
+    // Launch the actual link from the test process, which does NOT carry the
+    // sandbox's directory overrides. Only the absolute registry selects state.
+    {
+        use ::windows::{
+            Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_HIDE},
+            core::{PCWSTR, w},
+        };
+        use std::os::windows::ffi::OsStrExt;
+        let filename: Vec<u16> = shortcut.as_os_str().encode_wide().chain(Some(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR(filename.as_ptr()),
+                None,
+                None,
+                SW_HIDE,
+            )
+        };
+        assert!(result.0 as isize > 32);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let status = command(&["proxy", "status"]);
+            if String::from_utf8_lossy(&status.stdout).starts_with("running at ") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shortcut did not start the isolated proxy"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     let removed = command(&["proxy", "uninstall"]);
     assert!(
         removed.status.success(),
