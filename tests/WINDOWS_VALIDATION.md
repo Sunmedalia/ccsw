@@ -1,5 +1,13 @@
 # Windows 验证记录
 
+## v0.1.10 原生 CI 补充（2026-09-16）
+
+[原生验证运行](https://github.com/Sunmedalia/ccsw/actions/runs/35046297299) 对应提交 `8700d5ed8edced0d6fb9c02c54bc5ccce98d5169`。Windows Server 2022 的 185 项测试全部通过（153 单元、11 Codex、5 隔离、5 Pi、3 卸载、8 Windows 集成），包括 junction、长路径、实际快捷方式、锁文件和进程树清理；真实 npm `.cmd` shim 也通过。Rust 1.88、macOS/Linux 测试、卸载安全套件及安全审计通过。原生 release 构建、PE 导入检查、ZIP 打包和解压后运行验证也通过。
+
+本次原生验证发现并修复 Windows 强制字节范围锁导致的卸载读取失败，同时升级 rustls 至 0.23.45 以修复 RUSTSEC-2026-0285。Git 推送认证可用，GitHub CLI 可通过同一凭据访问 CI；下方初始记录中的认证和原生 CI 限制已解除。Windows 10/11 桌面交互、真实认证、注销登录自启动和实际 UNC 共享仍需桌面验收。
+
+## 初始交叉构建记录（保留历史）
+
 日期：2026-09-15。版本：0.1.8。基础提交：`afd58f0034f5390bebe53c7664dce1de34e914c5`。
 本记录对应包含 Windows 适配的未提交工作区；基础提交本身不能复现此构建。
 

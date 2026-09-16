@@ -20,7 +20,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-已有 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。本分支已恢复 Windows x64 ZIP 的构建和后续标签发布；不会修改已有 Release。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.10 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
