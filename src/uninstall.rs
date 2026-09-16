@@ -142,7 +142,15 @@ impl Snapshot {
         if meta.len() > 64 * 1024 * 1024 {
             bail!("file too large for safe uninstall: {}", path.display());
         }
-        let bytes = if let Some(mut handle) = handle {
+        let bytes = if path
+            .file_name()
+            .is_some_and(|name| name == "proxy.daemon.lock")
+        {
+            // The live daemon holds a mandatory Windows lock during planning.
+            // This coordination file has no payload to compare. Validate its
+            // type/boundary here; execution acquires its lock before deletion.
+            Vec::new()
+        } else if let Some(mut handle) = handle {
             // Windows byte-range locks are mandatory, including reads made by
             // this process through another handle. Use the owning handle.
             handle.seek(SeekFrom::Start(0))?;
