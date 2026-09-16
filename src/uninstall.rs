@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -121,6 +121,9 @@ struct Snapshot {
 }
 impl Snapshot {
     fn read(path: &Path) -> Result<Option<Self>> {
+        Self::read_with_handle(path, None)
+    }
+    fn read_with_handle(path: &Path, handle: Option<&File>) -> Result<Option<Self>> {
         let path = checked(path)?;
         if !path.exists() {
             return Ok(None);
@@ -139,11 +142,31 @@ impl Snapshot {
         if meta.len() > 64 * 1024 * 1024 {
             bail!("file too large for safe uninstall: {}", path.display());
         }
-        let bytes = fs::read(&path)?;
+        let bytes = if let Some(mut handle) = handle {
+            // Windows byte-range locks are mandatory, including reads made by
+            // this process through another handle. Use the owning handle.
+            handle.seek(SeekFrom::Start(0))?;
+            let mut bytes = Vec::new();
+            handle.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+            if bytes.len() > 64 * 1024 * 1024 {
+                bail!("file too large for safe uninstall: {}", path.display());
+            }
+            bytes
+        } else {
+            fs::read(&path)?
+        };
         Ok(Some(Self { path, bytes }))
     }
     fn verify(&self) -> Result<()> {
-        let current = Self::read(&self.path)?.context("file disappeared during uninstall")?;
+        self.verify_with_locks(&[])
+    }
+    fn verify_with_locks(&self, locks: &[(PathBuf, File)]) -> Result<()> {
+        let handle = locks
+            .iter()
+            .find(|(path, _)| path == &self.path)
+            .map(|(_, file)| file);
+        let current = Self::read_with_handle(&self.path, handle)?
+            .context("file disappeared during uninstall")?;
         if current.bytes != self.bytes {
             bail!("file changed during uninstall: {}", self.path.display());
         }
@@ -502,16 +525,16 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     );
     for path in lock_paths {
         if path.exists() {
-            checked(&path)?;
+            let path = checked(&path)?;
             let file = OpenOptions::new().read(true).write(true).open(&path)?;
             FileExt::try_lock_exclusive(&file).with_context(|| {
                 format!("CCSW is busy; close other instances: {}", path.display())
             })?;
-            locks.push(file);
+            locks.push((path, file));
         }
     }
     for file in &plan.files {
-        file.verify()?;
+        file.verify_with_locks(&locks)?;
     }
     for settings in &plan.settings {
         settings.original.verify()?;
@@ -542,7 +565,7 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        locks.push(daemon);
+        locks.push((checked(&daemon_path)?, daemon));
     }
     for settings in &plan.settings {
         if let Some(value) = &settings.replacement {
@@ -576,7 +599,7 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
         {
             Snapshot::read(&file.path)?;
         } else {
-            file.verify()?;
+            file.verify_with_locks(&locks)?;
         }
         fs::remove_file(&file.path).with_context(|| {
             format!(
