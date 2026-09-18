@@ -10,6 +10,10 @@ use std::{
 
 pub const FILE: &str = "usage.sqlite3";
 
+// SQLite has one writer. Serialize this process's writes (including schema
+// initialization) on blocking workers, rather than racing short busy timeouts.
+static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -25,7 +29,7 @@ fn open(path: &Path) -> Result<Connection> {
     crate::config::set_private(path)?;
     drop(file);
     let db = Connection::open(path)?;
-    db.busy_timeout(Duration::from_millis(500))?;
+    db.busy_timeout(Duration::from_secs(2))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (
@@ -42,6 +46,7 @@ fn open(path: &Path) -> Result<Connection> {
 }
 
 pub fn recover(path: &Path) -> Result<()> {
+    let _writer = WRITER.lock().unwrap_or_else(|e| e.into_inner());
     let db = open(path)?;
     db.execute(
         "UPDATE requests SET outcome='interrupted' WHERE outcome='pending'",
@@ -78,6 +83,7 @@ impl Ticket {
         };
         let now = Utc::now();
         let result = tokio::task::spawn_blocking(move || -> Result<()> {
+            let _writer = WRITER.lock().unwrap_or_else(|e| e.into_inner());
             let db = open(&path)?;
             let offset: i32 = db.query_row("SELECT value FROM settings WHERE key='offset'", [], |r| r.get(0))?;
             let day = now.with_timezone(&FixedOffset::east_opt(offset).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())).format("%Y-%m-%d").to_string();
@@ -98,6 +104,7 @@ impl Ticket {
 }
 
 fn finish(path: &Path, id: &str, outcome: &str, tokens: &Tokens) -> Result<()> {
+    let _writer = WRITER.lock().unwrap_or_else(|e| e.into_inner());
     let db = Connection::open(path)?;
     db.busy_timeout(Duration::from_secs(2))?;
     db.execute("UPDATE requests SET outcome=?2,input=?3,output=?4,cache_read=?5,cache_write=?6 WHERE id=?1",
