@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.10。新增 Windows x64 支持，完善环境变量、路径转义、子进程管理与后台代理自启，并保留 provider 模板和模型角色转发功能。
+> 本文对应 v0.1.12。新增 Windows x64 支持，完善环境变量、路径转义、子进程管理与后台代理自启，并保留 provider 模板和模型角色转发功能。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -20,7 +20,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-v0.1.10 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.12 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -418,6 +418,24 @@ ccsw proxy uninstall
 ```
 
 默认地址是 `127.0.0.1:17321`；指定过自定义监听地址后，停止并重启会保留该地址。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
+
+### Provider 用量统计
+
+日期显示在 `‹ / ›` 之间。`1 day / 1 week / 1 month / All time` 分别统计所选日期当天、截至该日最近 7 天、最近 30 天和全部记录；快捷键为 `d / w / m / y`。摘要及各表格按所选范围汇总，累计列保留全部记录。All time 时日期切换禁用。
+
+点击 **Chart 5** 或按 `5` 查看时间用量柱状图，`Calls c / Tokens v` 切换调用次数和 tokens。1 day 按小时，其他范围按天；窗口较窄或数据较长时自动合并相邻时段，并标注每柱跨度，始终展示完整范围。无调用时段标记为 `0`，缺失 token 用量标记为 `?`。图表遵循当前客户端和 provider 筛选以及账本固定时区，旧记录也可按小时查看。Usage 按钮统一使用对称内边距和固定间隔，窄屏自动压缩。
+
+在 Usage 页点击 **Models 4** 或按 `4` 查看具体调用模型：按客户端、provider、模型分别展示当日/累计调用次数与 tokens，沿用当前日期和 provider 筛选。选中行下方显示模型及 provider 标识，窄屏也可查看 tokens。已有账本记录可以直接显示，无需重新开始统计；这里展示的是路由选择的上游模型，不是供应商内部实际执行模型的验证结果。
+
+Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude Code / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4` 切换 Provider、历史、指标、模型；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。统计每两秒自动刷新。
+
+- 覆盖经过 CCSW 本地代理的 Claude Code 和 Codex API 请求，按实际路由的 provider ID 和客户端分别归属。一条对话可能产生多次请求；每次向上游发起请求计一次，包括失败请求。成功、失败、中断、进行中分别显示。
+- 每日按请求开始时间归属；首次创建用量库时保存本机 UTC 偏移，此后固定使用该偏移，界面显示具体时区。累计为启用记录以来的总数，不回填历史数据。改名保留历史；删除 provider 不删除账本，复用同一 ID 会接续原有累计。
+- 输入、输出、缓存读取和缓存写入 tokens 来自上游原始 `usage`。流式响应在结束事件确认结果，同一请求的累计 usage 不重复相加。缺失值显示 `unknown` 或 `+ ?`，缓存计数单列，不重复加进 tokens 合计；不同协议的输入/缓存口径可能不同。
+- 远程 Responses 压缩调用单独计数，不混入生成调用。模型目录刷新、健康检查和本地 token 估算不计数。Pi 直连和 ChatGPT 账号显示未接入统计。
+- 账本存于 CCSW 状态目录的 `usage.sqlite3`（默认 `~/.local/state/ccsw/`）；仅保存请求时间、客户端、provider、模型、结果和 token 数，不保存对话、请求头或密钥。代理异常退出留下的进行中记录在下次启动时标记为中断。数据库读写失败会提示/记入代理日志，不阻止 API 转发；失败期间统计可能不完整。
+
+升级后需重启旧的后台代理，新的请求才会开始记录：先等待正在运行的请求结束，再执行 `ccsw proxy stop` 和 `ccsw proxy start`。
 
 ### 请求处理与停止
 

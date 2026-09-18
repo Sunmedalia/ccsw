@@ -271,6 +271,7 @@ fn renders_empty_state_in_narrow_terminal() {
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     };
     let backend = TestBackend::new(72, 22);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1502,8 +1503,149 @@ fn interactive_test_app() -> App {
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     }
 }
+#[test]
+fn usage_page_opens_filters_and_renders_at_supported_sizes() {
+    use ratatui::backend::TestBackend;
+    let mut app = interactive_test_app();
+    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.usage.active);
+    for (width, height) in [(40, 12), (80, 24), (120, 40)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Usage"));
+        assert!(text.contains("scroll"));
+    }
+    for key in [
+        KeyCode::Char('a'),
+        KeyCode::Right,
+        KeyCode::Tab,
+        KeyCode::Tab,
+        KeyCode::Tab,
+    ] {
+        app.handle_key(KeyEvent::new(key, KeyModifiers::NONE))
+            .unwrap();
+    }
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("Pi: not tracked"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_none());
+}
+
+#[test]
+fn usage_tab_opens_tables_and_click_filters() {
+    use ratatui::backend::TestBackend;
+    let mut app = interactive_test_app();
+    let day = app.usage.snapshot.today();
+    app.usage.snapshot.rows.push(crate::usage::Row {
+        hour: 12,
+        model: "gpt-test-model".into(),
+        day: day.clone(),
+        client: "Claude".into(),
+        provider: "usage-fixture".into(),
+        name: "Usage fixture".into(),
+        kind: "generation".into(),
+        totals: crate::usage::Totals {
+            calls: 123,
+            success: 120,
+            failed: 3,
+            input: 10000,
+            output: 2000,
+            ..Default::default()
+        },
+    });
+    for width in [40, 72, 120] {
+        let screen = Rect::new(0, 0, width, 24);
+        let (_, rect) = client_tabs(screen)
+            .into_iter()
+            .find(|(tab, _)| *tab == ClientTab::Usage)
+            .expect("Usage remains visible");
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(app.usage.active);
+        app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE))
+            .unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Usage fixture"));
+        assert!(rendered.contains("123"));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains(&day));
+        assert!(rendered.to_ascii_lowercase().contains("tokens"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Success"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Models 4") || rendered.contains("Models4"));
+        assert!(rendered.contains("gpt-test-model"));
+        assert!(rendered.contains("123"));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+    }
+}
+
 pub(super) fn persisted_app() -> (tempfile::TempDir, App) {
     let temp = tempfile::tempdir().unwrap();
     let mut app = interactive_test_app();
@@ -2061,6 +2203,9 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
+    assert_eq!(app.client_tab(), ClientTab::Usage);
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
     assert!(!app.pi_enabled);
     assert!(!app.codex_ui.enabled);
 }
@@ -2108,7 +2253,12 @@ fn client_tabs_click_from_accounts_and_preserve_active_view_and_modal() {
 fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
     let (_temp, mut app) = persisted_app();
     for (width, height) in [(40, 12), (80, 24), (120, 36)] {
-        for tab in [ClientTab::Claude, ClientTab::Codex, ClientTab::Pi] {
+        for tab in [
+            ClientTab::Claude,
+            ClientTab::Codex,
+            ClientTab::Pi,
+            ClientTab::Usage,
+        ] {
             app.select_client_tab(tab);
             for accounts in [false, true] {
                 app.codex_ui.accounts = accounts;
@@ -2118,7 +2268,7 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
                 let first_row = (0..width)
                     .map(|x| buffer[(x, 0)].symbol())
                     .collect::<String>();
-                for label in ["Claude Code", "Codex", "Pi"] {
+                for label in ["Claude Code", "Codex", "Pi", "Usage"] {
                     assert!(first_row.contains(label));
                 }
                 for (candidate, rect) in client_tabs(Rect::new(0, 0, width, height)) {
@@ -2342,7 +2492,7 @@ fn pi_uses_provider_layout_without_proxy_controls() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Providers · F2 Claude Code"));
+        assert!(text.contains("Providers · F2 Usage"));
         let area = Rect::new(0, 0, width, height);
         let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
         assert!(

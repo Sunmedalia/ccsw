@@ -51,7 +51,7 @@ async fn serve(
     {
         return error(StatusCode::BAD_REQUEST, "A configured model is required");
     }
-    let (profile, model) = match resolve_profile(&target, body["model"].as_str()) {
+    let (profile, model, profile_id) = match resolve_profile(&target, body["model"].as_str()) {
         Ok(v) => v,
         Err(e) => return error(StatusCode::BAD_REQUEST, e),
     };
@@ -165,6 +165,15 @@ async fn serve(
         Credential::ApiKey { value } => request.header("api-key", value),
         Credential::None => request,
     };
+    let ticket = metering::begin(
+        &state,
+        &target,
+        &profile_id,
+        &profile,
+        &model,
+        if compact { "compact" } else { "generation" },
+    )
+    .await;
     let response = match tokio::time::timeout(HEADER_TIMEOUT, request.send()).await {
         Ok(Ok(v)) => v,
         _ => {
@@ -174,6 +183,7 @@ async fn serve(
             );
         }
     };
+    let response = metering::observe(response, ticket, streaming);
     if !response.status().is_success() {
         return error(
             response.status(),
@@ -928,7 +938,7 @@ mod tests {
                         RouteTarget {
                             default_profile_id: None,
                             codex: true,
-                            config_path,
+                            config_path: config_path.clone(),
                             profile_id: Some("test".into()),
                             models: BTreeMap::new(),
                         },
@@ -964,6 +974,18 @@ mod tests {
                 .unwrap();
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(value["output"][0]["call_id"], "call_1");
+            let usage = crate::usage::tests::settled_for(
+                &temp.path().join(crate::usage::FILE),
+                &config_path,
+                1,
+            )
+            .await;
+            let totals = usage.total(Some("Codex"), Some("test"), None, "generation");
+            assert_eq!((totals.calls, totals.success), (1, 1));
+            assert_eq!(
+                usage.total(Some("Claude"), None, None, "generation").calls,
+                0
+            );
             let (headers, request) = receiver.recv().await.unwrap();
             assert_eq!(headers[header::AUTHORIZATION], "Bearer upstream-only");
             assert_eq!(

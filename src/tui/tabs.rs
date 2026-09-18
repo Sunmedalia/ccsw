@@ -5,6 +5,7 @@ pub(super) enum ClientTab {
     Claude,
     Codex,
     Pi,
+    Usage,
 }
 
 impl ClientTab {
@@ -12,7 +13,8 @@ impl ClientTab {
         match self {
             Self::Claude => Self::Codex,
             Self::Codex => Self::Pi,
-            Self::Pi => Self::Claude,
+            Self::Pi => Self::Usage,
+            Self::Usage => Self::Claude,
         }
     }
 
@@ -21,16 +23,18 @@ impl ClientTab {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Pi => "Pi",
+            Self::Usage => "Usage",
         }
     }
 }
 
-pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 3] {
+pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 4] {
     let mut x = area.x.saturating_add(1);
     [
-        (ClientTab::Claude, 15),
-        (ClientTab::Codex, 9),
-        (ClientTab::Pi, 6),
+        (ClientTab::Claude, if area.width < 48 { 12 } else { 15 }),
+        (ClientTab::Codex, if area.width < 48 { 7 } else { 9 }),
+        (ClientTab::Pi, if area.width < 48 { 4 } else { 6 }),
+        (ClientTab::Usage, 8),
     ]
     .map(|(tab, width)| {
         let rect = Rect::new(
@@ -45,6 +49,12 @@ pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 3] {
 }
 impl App {
     pub(super) fn client_tab(&self) -> ClientTab {
+        if self.usage.active {
+            return ClientTab::Usage;
+        }
+        self.config_tab()
+    }
+    pub(super) fn config_tab(&self) -> ClientTab {
         if self.pi_enabled {
             ClientTab::Pi
         } else if self.codex_ui.enabled {
@@ -55,6 +65,14 @@ impl App {
     }
     pub(super) fn select_client_tab(&mut self, tab: ClientTab) {
         if self.modal.is_some() || self.codex_navigation_blocked() || tab == self.client_tab() {
+            return;
+        }
+        if tab == ClientTab::Usage {
+            self.open_usage();
+            return;
+        }
+        if self.usage.active && tab == self.config_tab() {
+            self.usage.active = false;
             return;
         }
         if self.background.sync_running
@@ -68,6 +86,7 @@ impl App {
             ClientTab::Claude => config::Client::Claude,
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
+            ClientTab::Usage => unreachable!(),
         };
         let config = match if tab == ClientTab::Pi {
             crate::pi::native::load(&self.pi_home)
@@ -81,6 +100,7 @@ impl App {
             }
         };
         self.config = config;
+        self.usage.active = false;
         self.cache = discovery::load_cache(&self.client_cache_path(client));
         self.background = Background::default();
         self.proxy_status = None;
@@ -98,6 +118,7 @@ impl App {
             ClientTab::Claude => "Claude Code · p sync · F2 next tab",
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
+            ClientTab::Usage => unreachable!(),
         }
         .into();
         if tab == ClientTab::Pi {
@@ -128,10 +149,11 @@ impl App {
 
 impl App {
     pub(super) fn config_client(&self) -> config::Client {
-        match self.client_tab() {
+        match self.config_tab() {
             ClientTab::Claude => config::Client::Claude,
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
+            ClientTab::Usage => unreachable!(),
         }
     }
     pub(super) fn client_cache_path(&self, client: config::Client) -> std::path::PathBuf {

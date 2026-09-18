@@ -18,6 +18,9 @@ const STATE_FILES: &[&str] = &[
     "proxy.lifecycle.lock",
     "proxy.pid",
     "proxy.log",
+    "usage.sqlite3",
+    "usage.sqlite3-wal",
+    "usage.sqlite3-shm",
     "sync-state.json",
     "sync-state.lock",
     "session.lock",
@@ -598,16 +601,22 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     // Keep operation locks through deletion. Partial I/O failures are reported;
     // remaining files can be safely processed on a later retry.
     for file in &plan.files {
-        if !file.path.exists() && file.path.file_name().is_some_and(|n| n == "proxy.pid") {
+        if !file.path.exists()
+            && file.path.file_name().is_some_and(|n| {
+                n == "proxy.pid" || n == "usage.sqlite3-wal" || n == "usage.sqlite3-shm"
+            })
+        {
             continue;
         }
         // Logs and PID may change during graceful shutdown; validate file type
         // and boundary again, but do not require their old contents.
-        if file
-            .path
-            .file_name()
-            .is_some_and(|n| n == "proxy.log" || n == "proxy.pid")
-        {
+        if file.path.file_name().is_some_and(|n| {
+            n == "proxy.log"
+                || n == "proxy.pid"
+                || n == "usage.sqlite3"
+                || n == "usage.sqlite3-wal"
+                || n == "usage.sqlite3-shm"
+        }) {
             Snapshot::read(&file.path)?;
         } else {
             file.verify_with_locks(&locks)?;

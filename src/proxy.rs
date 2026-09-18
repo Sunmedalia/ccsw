@@ -1,3 +1,4 @@
+mod metering;
 mod responses;
 mod transport;
 use std::{
@@ -706,6 +707,9 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     singleton
         .try_lock_exclusive()
         .context("another CCSW proxy is already running")?;
+    if crate::usage::recover(&registry_path.with_file_name(crate::usage::FILE)).is_err() {
+        eprintln!("CCSW usage: database unavailable; request statistics may be incomplete");
+    }
     let registry = load_registry(&proxy_paths)?;
     let address: SocketAddr = registry.listen.parse()?;
     if !address.ip().is_loopback() {
@@ -876,7 +880,7 @@ fn role_target<'a>(
 fn resolve_profile(
     target: &RouteTarget,
     requested_model: Option<&str>,
-) -> Result<(Profile, String)> {
+) -> Result<(Profile, String, String)> {
     let config = config::load_client(
         &target.config_path,
         if target.codex {
@@ -923,7 +927,7 @@ fn resolve_profile(
         bail!("model '{model_id}' is disabled or no longer configured");
     }
     let effective = effective.map(|model| model.id).unwrap_or_default();
-    Ok((profile, effective))
+    Ok((profile, effective, profile_id.to_owned()))
 }
 
 #[derive(Default)]
@@ -952,7 +956,7 @@ impl SessionProviders {
         target: &RouteTarget,
         body: &Value,
         remember: bool,
-    ) -> Result<(Profile, String)> {
+    ) -> Result<(Profile, String, String)> {
         let now = std::time::Instant::now();
         self.entries
             .retain(|_, (_, used)| now.duration_since(*used) < Duration::from_secs(24 * 60 * 60));
@@ -1087,7 +1091,7 @@ async fn messages(
         Ok(value) => value,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
-    let (profile, upstream_model) = match state
+    let (profile, upstream_model, profile_id) = match state
         .sessions
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1150,6 +1154,15 @@ async fn messages(
         Credential::ApiKey { value } => request.header("api-key", value),
         Credential::None => request,
     };
+    let ticket = metering::begin(
+        &state,
+        &target,
+        &profile_id,
+        &profile,
+        &upstream_model,
+        "generation",
+    )
+    .await;
     let response = match tokio::time::timeout(HEADER_TIMEOUT, request.send()).await {
         Ok(Ok(response)) => response,
         error => {
@@ -1159,6 +1172,7 @@ async fn messages(
             );
         }
     };
+    let response = metering::observe(response, ticket, stream);
     let status = response.status();
     let upstream_headers = forwarding_response_headers(response.headers());
     // Native responses keep the upstream body and status, including errors.
@@ -1417,6 +1431,9 @@ fn translate_request_with_effort(input: &Value, format: ApiFormat, maximum: &str
     match format {
         ApiFormat::OpenaiChat => {
             let mut converted = Vec::new();
+            if object.get("stream").and_then(Value::as_bool) == Some(true) {
+                result.insert("stream_options".into(), json!({"include_usage":true}));
+            }
             if !system.is_empty() {
                 converted.push(json!({"role":"system","content":system}));
             }
@@ -3039,6 +3056,17 @@ mod tests {
         assert!(upstream_request.contains("authorization: Bearer upstream-secret"));
         assert!(upstream_request.contains("\"model\":\"gpt-test\""));
         assert!(!upstream_request.contains(&registry.local_token));
+        let usage = crate::usage::tests::settled_for(
+            &app_paths.state_dir.join(crate::usage::FILE),
+            &app_paths.config,
+            1,
+        )
+        .await;
+        let totals = usage.total(Some("Claude"), Some("openai"), None, "generation");
+        assert_eq!(
+            (totals.calls, totals.success, totals.input, totals.output),
+            (1, 1, 4, 1)
+        );
         server.abort();
         upstream_task.join().unwrap();
     }

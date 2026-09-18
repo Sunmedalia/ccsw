@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)] {
     match section {
         HelpSection::Home => &[
+            ("F6", "Provider usage: daily / total calls and tokens"),
             ("↑↓ / j k", "Select All Models or a provider"),
             ("Enter / Click", "Open selection"),
             ("Space", "Toggle provider; auto-sync after connection"),
@@ -22,6 +23,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("q", "Quit CCSW"),
         ],
         HelpSection::AllEnabled => &[
+            ("F6", "Provider usage: daily / total calls and tokens"),
             ("↑↓ / j k", "Select a model across providers"),
             (
                 "PgUp / PgDn",
@@ -37,6 +39,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("Esc", "Return to providers"),
         ],
         HelpSection::Provider => &[
+            ("F6", "Selected provider usage and daily history"),
             (
                 "↑↓ / j k",
                 "Browse models; Tab switches panels in narrow windows",

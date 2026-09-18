@@ -12,6 +12,7 @@ mod state;
 mod tabs;
 #[cfg(test)]
 mod tests;
+mod usage;
 mod views;
 
 use background::Background;
@@ -101,6 +102,7 @@ pub struct App {
     pi_enabled: bool,
     pi_home: std::path::PathBuf,
     screen: Rect,
+    usage: usage::UsageUi,
 }
 
 pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> Result<()> {
@@ -126,6 +128,7 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         pi_home: crate::pi::home()?,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     };
     if app.config.profiles.is_empty()
         && let Some(candidate) = import

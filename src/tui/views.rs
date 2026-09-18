@@ -21,6 +21,13 @@ impl App {
             );
             return;
         }
+        if self.usage.active {
+            self.draw_client_tabs(frame, area);
+            if let Some(page) = &self.usage.page {
+                self.draw_usage(frame, usage::page_area(area), page);
+            }
+            return;
+        }
         if self.codex_ui.enabled && self.codex_ui.accounts {
             self.draw_codex_accounts(frame, area);
             if let Some(modal) = &self.modal {
@@ -757,6 +764,8 @@ impl App {
                     "○ disabled"
                 },
             ),
+            detail("Calls", &self.provider_usage_label(false)),
+            detail("Tokens", &self.provider_usage_label(true)),
             detail("API format", &api_format),
             detail("Endpoint", &profile.base_url),
             detail("Credential", &profile.credential.masked()),
@@ -774,10 +783,11 @@ impl App {
                 },
             ),
             detail(
-                match self.client_tab() {
+                match self.config_tab() {
                     ClientTab::Claude => "Claude /model",
                     ClientTab::Codex => "Codex models",
                     ClientTab::Pi => "Pi /model",
+                    ClientTab::Usage => unreachable!(),
                 },
                 &format!(
                     "{} models across {} providers",
@@ -800,10 +810,11 @@ impl App {
         }
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            match self.client_tab() {
+            match self.config_tab() {
                 ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
                 ClientTab::Codex => "Apply changes, then start a new Codex session.",
                 ClientTab::Pi => "Sync changes, then open /model in Pi.",
+                ClientTab::Usage => unreachable!(),
             },
             Style::default().fg(MUTED),
         ));
@@ -941,7 +952,9 @@ impl App {
             FooterControl::Help => ("Help", "?"),
             FooterControl::Quit => ("Quit", "q"),
         };
-        let label = if tiny {
+        let label = if tiny && matches!(control, FooterControl::Sync) {
+            name.to_owned()
+        } else if tiny {
             format!("({shortcut})")
         } else {
             format!("{name} ({shortcut})")

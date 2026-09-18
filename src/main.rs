@@ -11,6 +11,7 @@ mod proxy;
 mod sync;
 mod tui;
 mod uninstall;
+mod usage;
 #[cfg(windows)]
 mod windows;
 

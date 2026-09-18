@@ -8,6 +8,7 @@ impl App {
         loop {
             redraw |= self.poll_background();
             redraw |= self.poll_codex();
+            redraw |= self.poll_usage();
             if redraw {
                 terminal.draw(|frame| self.draw(frame))?;
                 redraw = false;
@@ -70,6 +71,13 @@ impl App {
     }
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.usage.active {
+            return Ok(self.usage_key(key));
+        }
+        if self.modal.is_none() && key.code == KeyCode::F(6) {
+            self.open_usage();
+            return Ok(false);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
             && self.view_mode == ViewMode::Home
@@ -363,6 +371,10 @@ impl App {
                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
         {
             self.select_client_tab(tab);
+            return Ok(MouseAction::None);
+        }
+        if self.usage.active {
+            self.usage_mouse(mouse, area);
             return Ok(MouseAction::None);
         }
         if self.codex_mouse(mouse, area)? {
