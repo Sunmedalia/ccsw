@@ -185,6 +185,7 @@ pub fn update(
                 label: None,
                 description: None,
                 context_window: None,
+                reasoning_max: None,
                 max_output_tokens: None,
             });
         }

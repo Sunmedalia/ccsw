@@ -7,6 +7,7 @@ mod help;
 mod layout;
 mod models;
 mod pi;
+mod preferences;
 mod state;
 mod tabs;
 #[cfg(test)]
@@ -18,6 +19,7 @@ use forms::*;
 use help::*;
 use layout::*;
 use models::*;
+use preferences::*;
 use state::*;
 use tabs::*;
 

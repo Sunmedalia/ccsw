@@ -90,6 +90,14 @@ impl App {
             self.handle_modal(key)?;
             return Ok(false);
         }
+        if key.code == KeyCode::F(4) && !self.pi_enabled && !self.codex_ui.enabled {
+            self.open_preferences();
+            return Ok(false);
+        }
+        if key.code == KeyCode::F(5) {
+            self.start_model_test();
+            return Ok(false);
+        }
         match self.view_mode {
             ViewMode::Home => match key.code {
                 KeyCode::Char('q') => return Ok(true),
@@ -566,6 +574,10 @@ impl App {
                             self.open_proxy_manager();
                             MouseAction::None
                         }
+                        FooterControl::Settings => {
+                            self.open_preferences();
+                            MouseAction::None
+                        }
                         FooterControl::Help => {
                             self.open_help();
                             MouseAction::None
@@ -697,6 +709,10 @@ impl App {
                                         self.toggle_selected_model_1m();
                                         return Ok(MouseAction::None);
                                     }
+                                    ShowcaseControl::Test => {
+                                        self.start_model_test();
+                                        return Ok(MouseAction::None);
+                                    }
                                     ShowcaseControl::Delete => {
                                         self.delete_selected_model();
                                         return Ok(MouseAction::None);
@@ -823,6 +839,61 @@ impl App {
             return Ok(());
         }
 
+        if matches!(&self.modal, Some(Modal::Preferences(form)) if form.discard) {
+            if let Some(button) = modal_button_rects(area, 2)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                self.handle_modal(KeyEvent::new(
+                    KeyCode::Char(if button == 0 { 'y' } else { 'n' }),
+                    KeyModifiers::NONE,
+                ))?;
+            }
+            return Ok(());
+        }
+        if matches!(self.modal, Some(Modal::Preferences(_))) {
+            if let Some(action) = preference_actions(area)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                self.handle_modal(KeyEvent::new(
+                    KeyCode::Char(['d', 'v', 'x'][action]),
+                    KeyModifiers::ALT,
+                ))?;
+                return Ok(());
+            }
+            if let Some(button) = modal_button_rects(area, 4)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                let key = match button {
+                    0 => KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+                    1 => KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+                    2 => KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+                    _ => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                };
+                self.handle_modal(key)?;
+            } else if let Some(Modal::Preferences(form)) = self.modal.as_mut() {
+                let inner = panel_inner(area);
+                let content = Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width,
+                    inner.height.saturating_sub(4),
+                );
+                if contains(content, mouse.column, mouse.row) {
+                    let (_, offset) = form_viewport(content, form.selected);
+                    let index = offset + usize::from(mouse.row - content.y);
+                    if index < form.fields.len() {
+                        form.selected = index;
+                        if !form.fields[index].choices.is_empty() {
+                            cycle_choice(&mut form.fields[index], true);
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
         let button_count = match self.modal.as_ref() {
             Some(Modal::Help(_)) => 1,
             Some(Modal::Proxy(_)) => 0,
@@ -925,7 +996,35 @@ impl App {
                     && index < form.fields.len()
                 {
                     form.selected = index;
-                    if !form.fields[index].choices.is_empty() {
+                    if index == 3
+                        && contains(
+                            profile_test_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        self.start_profile_connection_test();
+                        return Ok(());
+                    }
+                    if index >= 6
+                        && contains(
+                            profile_test_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        self.start_profile_model_test();
+                        return Ok(());
+                    }
+                    if index >= 6
+                        && contains(
+                            profile_1m_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        form.toggle_model_field_1m(index);
+                    } else if !form.fields[index].choices.is_empty() {
                         cycle_choice(&mut form.fields[index], true);
                     }
                 }
@@ -989,6 +1088,11 @@ impl App {
             return Ok(());
         };
         match &mut modal {
+            Modal::Preferences(form) => {
+                if self.preferences_key(form, key) {
+                    return Ok(());
+                }
+            }
             Modal::Import(candidate) => match key.code {
                 KeyCode::Char('i') | KeyCode::Enter => {
                     let profile = candidate.profile.clone();
@@ -1282,6 +1386,21 @@ impl App {
                             );
                         }
                     }
+                    self.modal = Some(modal);
+                    return Ok(());
+                }
+                if key.code == KeyCode::F(5) {
+                    let connection = form.selected == 3;
+                    self.modal = Some(modal);
+                    if connection {
+                        self.start_profile_connection_test();
+                    } else {
+                        self.start_profile_model_test();
+                    }
+                    return Ok(());
+                }
+                if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('1') {
+                    form.toggle_model_field_1m(form.selected);
                     self.modal = Some(modal);
                     return Ok(());
                 }

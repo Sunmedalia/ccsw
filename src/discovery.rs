@@ -99,6 +99,7 @@ pub fn parse_models(value: &Value) -> Result<Vec<ModelEntry>> {
         models.push(ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: id.to_owned(),
             label,
             description,
@@ -145,6 +146,7 @@ pub fn merged_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelE
         let entry = models.entry(canonical).or_insert_with(|| model.clone());
         entry.max_output_tokens = model.max_output_tokens;
         entry.context_window = model.context_window;
+        entry.reasoning_max = model.reasoning_max.clone();
         if model.label.is_some() {
             entry.label.clone_from(&model.label);
         }
@@ -159,6 +161,7 @@ pub fn merged_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<ModelE
             .or_insert_with(|| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: canonical,
                 label: None,
                 description: None,
@@ -278,6 +281,7 @@ pub fn configured_models(profile: &Profile, discovered: &[ModelEntry]) -> Vec<Mo
             result.push(ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: orig_id,
                 label: None,
                 description: None,
@@ -330,6 +334,141 @@ pub fn update_cache(path: &Path, edit: impl FnOnce(&mut ModelCache)) -> Result<M
     Ok(latest)
 }
 
+/// Check the draft Base URL itself without inference or requiring a model catalog.
+pub fn test_connection(profile: &Profile) -> Result<(u16, u128)> {
+    let endpoint =
+        url::Url::parse(&profile.base_url).map_err(|_| anyhow::anyhow!("Invalid Base URL"))?;
+    if !matches!(endpoint.scheme(), "http" | "https") {
+        bail!("Base URL must use HTTP or HTTPS");
+    }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let mut request = client
+        .get(endpoint)
+        .header("anthropic-version", "2023-06-01");
+    request = match &profile.credential {
+        Credential::Bearer { value } => request.bearer_auth(value),
+        Credential::XApiKey { value } => request.header("x-api-key", value),
+        Credential::ApiKey { value } => request.header("api-key", value),
+        Credential::None => request,
+    };
+    let started = std::time::Instant::now();
+    let response = request.send().map_err(|error| {
+        anyhow::anyhow!(if error.is_timeout() {
+            "connection timed out after 8 seconds"
+        } else {
+            "connection failed; check URL, DNS, TLS and network"
+        })
+    })?;
+    Ok((response.status().as_u16(), started.elapsed().as_millis()))
+}
+
+/// One small inference request; never changes routing, defaults, or client settings.
+pub fn test_model(profile: &Profile, model: &str) -> Result<u128> {
+    use crate::config::ApiFormat;
+    use serde_json::json;
+    use std::io::Read;
+    let model = canonical_model_id(model);
+    if model.is_empty() {
+        bail!("model ID is empty");
+    }
+    let (endpoint, body) = match profile.api_format {
+        ApiFormat::Anthropic => (
+            crate::proxy::api_endpoint(&profile.base_url, "messages")?,
+            json!({"model":model,"max_tokens":64,"messages":[{"role":"user","content":"Reply OK."}]}),
+        ),
+        ApiFormat::OpenaiChat => (
+            crate::proxy::completion_endpoint(&profile.base_url, profile.api_format)?,
+            json!({"model":model,"max_tokens":64,"stream":false,"messages":[{"role":"user","content":"Reply OK."}]}),
+        ),
+        ApiFormat::OpenaiResponses => (
+            crate::proxy::completion_endpoint(&profile.base_url, profile.api_format)?,
+            json!({"model":model,"max_output_tokens":64,"stream":false,"store":false,"input":"Reply OK."}),
+        ),
+    };
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let mut request = client
+        .post(endpoint)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body);
+    request = match &profile.credential {
+        Credential::Bearer { value } => request.bearer_auth(value),
+        Credential::XApiKey { value } => request.header("x-api-key", value),
+        Credential::ApiKey { value } => request.header("api-key", value),
+        Credential::None => request,
+    };
+    let started = std::time::Instant::now();
+    let response = request.send().map_err(|e| {
+        anyhow::anyhow!(if e.is_timeout() {
+            "timed out after 30 seconds"
+        } else {
+            "connection failed; check provider URL and network"
+        })
+    })?;
+    if !response.status().is_success() {
+        bail!(
+            "HTTP {} (check credentials, model ID and provider availability)",
+            response.status()
+        );
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("could not read model response"))?;
+    if bytes.len() > 1024 * 1024 {
+        bail!("model response exceeded 1 MiB");
+    }
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("provider returned invalid JSON"))?;
+    if !has_model_response(&value, profile.api_format) {
+        bail!("provider returned no model output");
+    }
+    Ok(started.elapsed().as_millis())
+}
+
+fn has_model_response(value: &Value, format: crate::config::ApiFormat) -> bool {
+    let nonempty = |v: &Value| v.as_str().is_some_and(|s| !s.trim().is_empty());
+    if value.get("error").is_some_and(|v| !v.is_null()) {
+        return false;
+    }
+    match format {
+        crate::config::ApiFormat::Anthropic => value["content"].as_array().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|b| nonempty(&b["text"]) || nonempty(&b["thinking"]))
+        }),
+        crate::config::ApiFormat::OpenaiChat => {
+            value["choices"].as_array().is_some_and(|choices| {
+                choices.iter().any(|c| {
+                    nonempty(&c["message"]["content"])
+                        || nonempty(&c["message"]["reasoning_content"])
+                        || nonempty(&c["message"]["refusal"])
+                })
+            })
+        }
+        crate::config::ApiFormat::OpenaiResponses => {
+            nonempty(&value["output_text"])
+                || value["output"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        ["content", "summary"].iter().any(|key| {
+                            item[*key].as_array().is_some_and(|blocks| {
+                                blocks
+                                    .iter()
+                                    .any(|b| nonempty(&b["text"]) || nonempty(&b["refusal"]))
+                            })
+                        })
+                    })
+                })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +478,137 @@ mod tests {
         net::TcpListener,
         thread,
     };
+
+    #[test]
+    fn base_url_connectivity_reports_http_errors_without_inference() {
+        for code in [200, 401, 404] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut data = Vec::new();
+                let mut byte = [0; 1];
+                while !data.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    data.push(byte[0]);
+                }
+                let request = String::from_utf8(data).unwrap();
+                assert!(request.starts_with("GET /custom/v1 "));
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer draft-token")
+                );
+                write!(
+                    stream,
+                    "HTTP/1.1 {code} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            let mut profile: Profile = toml::from_str(
+                "name='draft'\nbase_url='http://localhost'\ndefault_model='placeholder'\n",
+            )
+            .unwrap();
+            profile.base_url = format!("http://{address}/custom/v1");
+            profile.credential = Credential::Bearer {
+                value: "draft-token".into(),
+            };
+            assert_eq!(test_connection(&profile).unwrap().0, code);
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn minimal_model_test_sends_one_request_for_each_protocol() {
+        use crate::config::ApiFormat;
+        for (format, path, body) in [
+            (
+                ApiFormat::Anthropic,
+                "/v1/messages",
+                json!({"content":[{"type":"text","text":"OK"}]}),
+            ),
+            (
+                ApiFormat::OpenaiChat,
+                "/v1/chat/completions",
+                json!({"choices":[{"message":{"content":"OK"}}]}),
+            ),
+            (
+                ApiFormat::OpenaiResponses,
+                "/v1/responses",
+                json!({"output":[{"content":[{"type":"output_text","text":"OK"}]}]}),
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut data = Vec::new();
+                let mut byte = [0; 1];
+                while !data.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    data.push(byte[0]);
+                }
+                let headers = String::from_utf8(data).unwrap();
+                assert!(headers.starts_with(&format!("POST {path} ")));
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(str::to_owned)
+                    })
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                let mut data = vec![0; length];
+                stream.read_exact(&mut data).unwrap();
+                let request: Value = serde_json::from_slice(&data).unwrap();
+                assert_eq!(request["model"], "test-model");
+                assert!(request.get("tools").is_none());
+                let body = body.to_string();
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            });
+            let mut profile: Profile = toml::from_str(
+                "name='test'\nbase_url='http://localhost'\ndefault_model='test-model'\n",
+            )
+            .unwrap();
+            profile.api_format = format;
+            profile.base_url = format!("http://{address}");
+            test_model(&profile, "test-model[1m]").unwrap();
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn model_test_rejects_empty_and_error_responses() {
+        use crate::config::ApiFormat;
+        for format in [
+            ApiFormat::Anthropic,
+            ApiFormat::OpenaiChat,
+            ApiFormat::OpenaiResponses,
+        ] {
+            assert!(!has_model_response(&json!({}), format));
+            assert!(!has_model_response(
+                &json!({"error":{"message":"bad"},"output_text":"OK"}),
+                format
+            ));
+        }
+        assert!(!has_model_response(
+            &json!({"choices":[{"message":{"content":""}}]}),
+            ApiFormat::OpenaiChat
+        ));
+        assert!(has_model_response(
+            &json!({"choices":[{"message":{"reasoning_content":"thinking"}}]}),
+            ApiFormat::OpenaiChat
+        ));
+    }
 
     #[test]
     fn parses_both_gateway_shapes() {
@@ -436,6 +706,7 @@ mod tests {
             .map(|id| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -482,6 +753,7 @@ mod tests {
                 ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "model-b[1m]".into(),
                     label: Some("Model B · 1M".into()),
                     description: None,
@@ -489,6 +761,7 @@ mod tests {
                 ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "model-c[1m]".into(),
                     label: Some("Model C · 1M".into()),
                     description: None,
@@ -500,6 +773,7 @@ mod tests {
             .map(|id| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -535,6 +809,7 @@ mod tests {
                 ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "model-a[1m]".into(),
                     label: Some("Model A · 1M".into()),
                     description: None,
@@ -542,6 +817,7 @@ mod tests {
                 ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "model-b".into(),
                     label: Some("Model B".into()),
                     description: None,
@@ -553,6 +829,7 @@ mod tests {
             .map(|id| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: id.into(),
                 label: None,
                 description: None,
@@ -588,6 +865,7 @@ mod tests {
             models: vec![ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: "manual-x".into(),
                 label: Some("Manual X".into()),
                 description: None,
@@ -598,6 +876,7 @@ mod tests {
             .map(|id| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: id.into(),
                 label: Some(format!("Discovered {id}")),
                 description: None,

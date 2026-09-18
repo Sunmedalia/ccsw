@@ -177,6 +177,7 @@ impl App {
             let model = &editor.catalog[idx];
             let effective = editor.effective_id(&model.id);
             Some(ModelEntry {
+                reasoning_max: None,
                 max_output_tokens: model.max_output_tokens,
                 context_window: model.context_window,
                 id: effective,
@@ -420,6 +421,9 @@ impl App {
             .is_none_or(|editor| editor.is_enabled(&canonical_model_id(&model.id)));
         self.open_add_model_modal();
         if let Some(Modal::Model(form)) = &mut self.modal {
+            if let Some(field) = form.fields.iter_mut().find(|f| f.label == "Reasoning max") {
+                field.value = model.reasoning_max.clone().unwrap_or_else(|| "high".into());
+            }
             form.original_model_id = Some(canonical_model_id(&model.id));
             if let Some(field) = form
                 .fields
@@ -463,7 +467,8 @@ impl App {
             .unwrap_or_default();
         let mut form = ModelForm::with_api_models(cached);
         if self.pi_enabled {
-            form.fields.retain(|field| field.label != "Enable now");
+            form.fields
+                .retain(|field| field.label != "Enable now" && field.label != "Reasoning max");
         }
         form.original_profile = self.selected_profile().cloned().map(Box::new);
         self.modal = Some(Modal::Model(form));

@@ -35,6 +35,7 @@ pub(super) enum FooterControl {
     Models,
     Details,
     AddProfile,
+    Settings,
     Sync,
     Proxy,
     Help,
@@ -49,6 +50,7 @@ pub(super) enum DetailControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ShowcaseControl {
+    Test,
     Toggle,
     Default,
     OneM,
@@ -68,6 +70,7 @@ pub(super) enum ProxyControl {
 
 #[derive(Clone)]
 pub(super) enum Modal {
+    Preferences(PreferencesForm),
     Import(Box<ImportCandidate>),
     Profile(Box<ProfileForm>),
     Model(ModelForm),

@@ -24,6 +24,7 @@ fn vim_keys_navigate_templates_and_picker_without_interfering_with_search() {
                 description: None,
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
             })
             .collect(),
     );
@@ -132,6 +133,7 @@ fn provider_catalog_mouse_selects_then_uses_model_in_target_field() {
             description: None,
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
         }]));
         app.modal = Some(Modal::Profile(Box::new(form)));
         let outer = panel_inner(modal_area(screen));
@@ -207,6 +209,7 @@ fn check_provider_picker_target(selected: usize) {
         description: None,
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
     }]);
     picker.focus_api_search = true;
     form.picker = Some(picker.clone());
@@ -708,6 +711,7 @@ fn route_editor_searches_toggles_and_changes_default() {
         .map(|id| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: id.into(),
             label: Some(id.to_uppercase()),
             description: None,
@@ -943,6 +947,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "default-m".into(),
             label: None,
             description: None,
@@ -950,6 +955,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "m-1".into(),
             label: None,
             description: None,
@@ -957,6 +963,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "m-2".into(),
             label: None,
             description: None,
@@ -1253,6 +1260,7 @@ fn model_can_be_disabled_and_enabled_freely() {
     let single_catalog = vec![ModelEntry {
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
         id: "only-model".into(),
         label: None,
         description: None,
@@ -1336,6 +1344,7 @@ fn model_form_api_model_picker_populates_fields() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "qwen-max-latest".into(),
             label: Some("Qwen Max Latest".into()),
             description: Some("Alibaba Cloud flagship model".into()),
@@ -1343,6 +1352,7 @@ fn model_form_api_model_picker_populates_fields() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "deepseek-v4-flash[1m]".into(),
             label: Some("DeepSeek V4 Flash".into()),
             description: Some("Fast reasoning model".into()),
@@ -1376,6 +1386,7 @@ fn model_form_search_and_scrolling() {
         .map(|i| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: format!("model-{i:02}"),
             label: Some(format!("Model {i}")),
             description: None,
@@ -1419,6 +1430,7 @@ fn provider_catalog_only_shows_added_models_not_unselected_gateway_models() {
         .map(|i| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: format!("gateway-model-{i}"),
             label: Some(format!("Gateway Model {i}")),
             description: None,
@@ -1443,6 +1455,7 @@ fn interactive_test_app() -> App {
     let model = |id: &str| ModelEntry {
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
         id: id.into(),
         label: None,
         description: None,
@@ -1524,7 +1537,7 @@ fn model_modal_keyboard_sequence_keeps_input_until_explicit_close() {
     let (_temp, mut app) = persisted_app();
     app.enter_provider_view();
     app.open_add_model_modal();
-    for _ in 0..7 {
+    for _ in 0..8 {
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
     }
@@ -1672,6 +1685,7 @@ fn api_selection_clears_previous_context_and_description() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "a[1m]".into(),
             label: None,
             description: Some("Old description".into()),
@@ -1679,6 +1693,7 @@ fn api_selection_clears_previous_context_and_description() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "b".into(),
             label: None,
             description: None,
@@ -1870,13 +1885,13 @@ fn model_token_form_validates_and_round_trips() {
     let mut form = ModelForm::new();
     form.fields[0].value = "m".into();
     for invalid in ["0", "-1", "1.5", "4294967296", "no"] {
-        form.fields[5].value = invalid.into();
+        form.fields[6].value = invalid.into();
         assert!(form.validate_tokens().is_err());
     }
-    form.fields[5].value = "8192".into();
-    form.fields[6].value = "4096".into();
+    form.fields[6].value = "8192".into();
+    form.fields[7].value = "4096".into();
     assert!(form.validate_tokens().is_err());
-    form.fields[6].value = "32768".into();
+    form.fields[7].value = "32768".into();
     form.validate_tokens().unwrap();
     let model = form.to_model();
     let roundtrip: ModelEntry = toml::from_str(&toml::to_string(&model).unwrap()).unwrap();
@@ -1923,8 +1938,8 @@ fn editing_tokens_keeps_disabled_model_disabled() {
         panic!("model editor missing");
     };
     assert!(!form.enable_now());
-    form.fields[5].value = "8192".into();
-    form.fields[6].value = "32768".into();
+    form.fields[6].value = "8192".into();
+    form.fields[7].value = "32768".into();
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
         .unwrap();
     let selected = app.selected_profile().unwrap();
@@ -2336,7 +2351,7 @@ fn pi_uses_provider_layout_without_proxy_controls() {
                 .any(|(control, _)| *control == FooterControl::Proxy)
         );
         for pair in controls.windows(2) {
-            assert_eq!(pair[0].1.right() + 1, pair[1].1.x);
+            assert_eq!(pair[0].1.right() + u16::from(width >= 55), pair[1].1.x);
         }
         app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
             .unwrap();
@@ -2536,4 +2551,314 @@ fn pi_views_and_help_use_configured_model_labels() {
         assert!(!rendered.contains(" disabled"));
         assert!(!rendered.contains("role dependency"));
     }
+}
+
+#[test]
+fn provider_context_controls_toggle_each_role_and_fallbacks() {
+    let mut app = interactive_test_app();
+    for edit in [false, true] {
+        let mut form = if edit {
+            ProfileForm::edit("one".into(), &app.config.profiles["one"])
+        } else {
+            ProfileForm::new()
+        };
+        for index in 6..form.fields.len() {
+            form.fields[index].value = if index == 12 {
+                "alpha[1m], beta"
+            } else {
+                "alpha"
+            }
+            .into();
+        }
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        for index in 6..13 {
+            let Some(Modal::Profile(form)) = &mut app.modal else {
+                panic!()
+            };
+            form.selected = index;
+            app.handle_modal(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT))
+                .unwrap();
+            let Some(Modal::Profile(form)) = &app.modal else {
+                panic!()
+            };
+            assert!(form.model_field_is_1m(index));
+            assert_eq!(form.selected, index);
+            assert_eq!(
+                form.fields[index].value,
+                if index == 12 {
+                    "alpha[1m],beta[1m]"
+                } else {
+                    "alpha[1m]"
+                }
+            );
+            app.handle_modal(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT))
+                .unwrap();
+            let Some(Modal::Profile(form)) = &app.modal else {
+                panic!()
+            };
+            assert!(!form.model_field_is_1m(index));
+        }
+    }
+    let mut form = ProfileForm::new();
+    form.toggle_model_field_1m(6);
+    assert!(form.fields[6].value.is_empty());
+}
+
+#[test]
+fn provider_context_checkbox_click_matches_scrolled_row() {
+    for screen in [Rect::new(0, 0, 120, 30), Rect::new(0, 0, 48, 18)] {
+        let mut app = interactive_test_app();
+        let mut form = ProfileForm::new();
+        form.selected = 12;
+        form.fields[12].value = "alpha,beta".into();
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        let inner = panel_inner(modal_area(screen));
+        let content = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(4),
+        );
+        let (_, offset) = form_viewport(content, 12);
+        let checkbox = profile_1m_rect(content, (12 - offset) as u16);
+        app.handle_modal_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: checkbox.x + 2,
+                row: checkbox.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        let Some(Modal::Profile(form)) = &app.modal else {
+            panic!()
+        };
+        assert_eq!(form.fields[12].value, "alpha[1m],beta[1m]");
+        assert!(form.fields[11].value.is_empty());
+    }
+}
+
+#[test]
+fn claude_preferences_save_presets_and_custom_values_without_changing_routes() {
+    let (_temp, mut app) = persisted_app();
+    let profiles = app.config.profiles.clone();
+    app.modal = Some(Modal::Preferences(PreferencesForm::new(
+        app.config.claude.clone(),
+        serde_json::json!({}),
+    )));
+    for key in [
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+    ] {
+        app.handle_key(key).unwrap();
+    }
+    let Some(Modal::Preferences(form)) = &mut app.modal else {
+        panic!()
+    };
+    form.fields[6].value = "CUSTOM".into();
+    form.fields[7].value = "$(literal)".into();
+    assert!(form.fields[7].secret);
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(app.modal.is_none(), "{}", app.status);
+    assert_eq!(app.config.profiles, profiles);
+    assert_eq!(app.config.claude.env["CUSTOM"], "$(literal)");
+    assert_eq!(app.config.claude.env["CLAUDE_CODE_EFFORT_LEVEL"], "max");
+    assert_eq!(app.config.claude.hide_attribution, Some(true));
+    assert_eq!(
+        config::load(&app.paths.config).unwrap().claude,
+        app.config.claude
+    );
+    let settings = app.config.claude.clone();
+    app.select_client_tab(ClientTab::Codex);
+    app.config = app
+        .update_client_config(|c| {
+            c.profiles.get_mut("one").unwrap().name = "Changed".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(config::load(&app.paths.config).unwrap().claude, settings);
+}
+
+#[test]
+fn claude_preferences_mouse_scroll_masking_validation_and_discard() {
+    let (_temp, mut app) = persisted_app();
+    let screen = Rect::new(0, 0, 48, 18);
+    app.modal = Some(Modal::Preferences(PreferencesForm::new(
+        app.config.claude.clone(),
+        serde_json::json!({}),
+    )));
+    let area = modal_area(screen);
+    let add = modal_button_rects(area, 4)[1];
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: add.x,
+            row: add.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Preferences(form)) = &mut app.modal else {
+        panic!()
+    };
+    form.fields[6].value = "ANTHROPIC_BASE_URL".into();
+    form.fields[7].value = "very-private-value".into();
+    form.selected = 7;
+    app.handle_modal(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Preferences(_))));
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).unwrap();
+    let Some(Modal::Preferences(form)) = &app.modal else {
+        panic!()
+    };
+    terminal
+        .draw(|frame| draw_preferences(frame, area, form))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!content.contains("very-private-value"));
+    assert!(content.contains("Save"));
+    let remove = preference_actions(area)[0];
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: remove.x,
+            row: remove.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Preferences(form)) = &app.modal else {
+        panic!()
+    };
+    assert_eq!(form.fields.len(), 6);
+    app.handle_modal(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT))
+        .unwrap();
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_some());
+    app.handle_modal(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_some());
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_modal(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_none());
+    assert!(app.config.claude.env.is_empty());
+}
+
+#[test]
+fn provider_form_tests_use_unsaved_connection_and_target_model() {
+    let mut form = ProfileForm::new();
+    form.fields[3].value = "https://draft.example/v1".into();
+    form.fields[5].value = "draft-key".into();
+    form.selected = 8;
+    form.fields[8].value = "draft-sonnet[1m]".into();
+    let (profile, models) = form.model_test_request().unwrap();
+    assert_eq!(profile.base_url, "https://draft.example/v1");
+    assert_eq!(profile.credential.value(), Some("draft-key"));
+    assert_eq!(models, ["draft-sonnet[1m]"]);
+    assert!(form.fields[0].value.is_empty());
+    assert!(form.fields[6].value.is_empty());
+    form.selected = 12;
+    form.fields[12].value = "fallback-a, fallback-b".into();
+    assert_eq!(
+        form.model_test_request().unwrap().1,
+        ["fallback-a", "fallback-b"]
+    );
+    form.fields[12].value.clear();
+    assert!(form.model_test_request().is_err());
+}
+
+#[test]
+fn provider_model_test_button_and_1m_color_work_in_narrow_form() {
+    let mut app = interactive_test_app();
+    let mut form = ProfileForm::new();
+    form.selected = 12;
+    app.modal = Some(Modal::Profile(Box::new(form)));
+    let screen = Rect::new(0, 0, 48, 18);
+    let inner = panel_inner(modal_area(screen));
+    let content = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(4),
+    );
+    let (_, offset) = form_viewport(content, 12);
+    let row = (12 - offset) as u16;
+    let button = profile_test_rect(content, row);
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: button.x + 1,
+            row: button.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    assert!(app.status.contains("Enter a model name"));
+    let Some(Modal::Profile(form)) = &mut app.modal else {
+        panic!()
+    };
+    assert_eq!(form.selected, 12);
+    form.fields[12].value = "model[1m]".into();
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let checkbox = profile_1m_rect(content, row);
+    let cell = &terminal.backend().buffer()[(checkbox.x, checkbox.y)];
+    assert_eq!(cell.symbol(), "[");
+    assert_eq!(cell.bg, ROUTE);
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: checkbox.x + 1,
+            row: checkbox.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(checkbox.x, checkbox.y)].fg,
+        MUTED
+    );
+}
+
+#[test]
+fn base_url_test_accepts_blank_credentials_without_relaxing_model_validation() {
+    let mut form = ProfileForm::new();
+    form.fields[3].value = "https://example.com/v1".into();
+    for kind in ["bearer", "x-api-key", "api-key", "none"] {
+        form.fields[4].value = kind.into();
+        for blank in ["", "   "] {
+            form.fields[5].value = blank.into();
+            let profile = form.connection_test_profile().unwrap();
+            assert_eq!(profile.credential, Credential::None);
+            assert_eq!(profile.base_url, "https://example.com/v1");
+            assert_eq!(form.fields[4].value, kind);
+            assert_eq!(form.fields[5].value, blank);
+        }
+    }
+    form.fields[4].value = "bearer".into();
+    form.fields[5].value.clear();
+    assert!(form.discovery_profile().is_err());
+    form.fields[5].value = "provided-token".into();
+    assert_eq!(
+        form.connection_test_profile().unwrap().credential.value(),
+        Some("provided-token")
+    );
+    form.fields[3].value = "not a URL".into();
+    assert!(form.connection_test_profile().is_err());
 }

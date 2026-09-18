@@ -96,6 +96,7 @@ fn imported_models(
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id,
             label,
             description: None,

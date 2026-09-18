@@ -368,6 +368,8 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
                 })
                 .and_then(|b| b.get("managed"))
                 .filter(|v| v.is_object());
+            let recovered = crate::claude_config::recover_preferences(&path, &value)?;
+            let saved = recovered.as_ref().or(saved);
             if saved.is_none() {
                 println!(
                     "Preserve unverified legacy model fields: {}",
@@ -393,6 +395,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
             for extra in [
                 path.with_extension("json.ccsw-backup"),
                 path.with_extension("json.ccsw.lock"),
+                path.with_extension("json.ccsw-preferences-journal"),
             ] {
                 if let Some(file) = Snapshot::read(&extra)? {
                     files.push(file);

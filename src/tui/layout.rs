@@ -80,6 +80,7 @@ pub(super) fn footer_controls(
         (FooterControl::AddProfile, 13),
         (FooterControl::Sync, 14),
         (FooterControl::Proxy, 10),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
         (FooterControl::Quit, 8),
     ];
@@ -87,6 +88,7 @@ pub(super) fn footer_controls(
         (FooterControl::AddProfile, 9),
         (FooterControl::Sync, 8),
         (FooterControl::Proxy, 7),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
         (FooterControl::Quit, 5),
     ];
@@ -96,6 +98,7 @@ pub(super) fn footer_controls(
         (FooterControl::Details, 11),
         (FooterControl::Sync, 14),
         (FooterControl::Proxy, 10),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
         (FooterControl::Quit, 8),
     ];
@@ -105,6 +108,7 @@ pub(super) fn footer_controls(
         (FooterControl::Details, 8),
         (FooterControl::Sync, 8),
         (FooterControl::Proxy, 7),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
         (FooterControl::Quit, 5),
     ];
@@ -112,6 +116,7 @@ pub(super) fn footer_controls(
         (FooterControl::AddProfile, 7),
         (FooterControl::Sync, 6),
         (FooterControl::Proxy, 5),
+        (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
         (FooterControl::Quit, 3),
     ];
@@ -121,6 +126,7 @@ pub(super) fn footer_controls(
         (FooterControl::Details, 5),
         (FooterControl::Sync, 5),
         (FooterControl::Proxy, 5),
+        (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
         (FooterControl::Quit, 3),
     ];
@@ -128,6 +134,7 @@ pub(super) fn footer_controls(
         (FooterControl::Back, 14),
         (FooterControl::Sync, 14),
         (FooterControl::Proxy, 10),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
         (FooterControl::Quit, 8),
     ];
@@ -135,6 +142,7 @@ pub(super) fn footer_controls(
         (FooterControl::Back, 8),
         (FooterControl::Sync, 8),
         (FooterControl::Proxy, 7),
+        (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
         (FooterControl::Quit, 5),
     ];
@@ -142,6 +150,7 @@ pub(super) fn footer_controls(
         (FooterControl::Back, 6),
         (FooterControl::Sync, 5),
         (FooterControl::Proxy, 5),
+        (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
         (FooterControl::Quit, 3),
     ];
@@ -170,7 +179,9 @@ pub(super) fn footer_controls(
                 width: *width,
                 height: 1,
             };
-            x = x.saturating_add(*width).saturating_add(1);
+            x = x
+                .saturating_add(*width)
+                .saturating_add(u16::from(area.width >= 55));
             Some((*control, rect))
         })
         .collect()
@@ -200,6 +211,7 @@ pub(super) fn showcase_controls(area: Rect, pi: bool) -> Vec<(ShowcaseControl, R
     }
     let controls = [
         ShowcaseControl::Toggle,
+        ShowcaseControl::Test,
         ShowcaseControl::Default,
         ShowcaseControl::OneM,
         ShowcaseControl::Delete,
@@ -207,9 +219,9 @@ pub(super) fn showcase_controls(area: Rect, pi: bool) -> Vec<(ShowcaseControl, R
     .into_iter()
     .filter(|control| !pi || *control != ShowcaseControl::Toggle)
     .collect::<Vec<_>>();
-    if inner.width >= 38 && inner.height >= 2 {
+    if inner.width >= 38 && inner.height >= 3 {
         let width = inner.width / 2;
-        let start_y = inner.y + inner.height.saturating_sub(2);
+        let start_y = inner.y + inner.height.saturating_sub(3);
         controls
             .into_iter()
             .enumerate()
@@ -226,7 +238,7 @@ pub(super) fn showcase_controls(area: Rect, pi: bool) -> Vec<(ShowcaseControl, R
             })
             .collect()
     } else {
-        let visible = usize::from(inner.height.min(4));
+        let visible = usize::from(inner.height.min(5));
         let start_y = inner.y + inner.height.saturating_sub(visible as u16);
         controls
             .into_iter()

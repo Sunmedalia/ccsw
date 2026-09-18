@@ -159,6 +159,7 @@ pub fn aggregate_profile(
             models.push(ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: exposed,
                 label: Some(format!("{} · {}", profile.name, model.label())),
                 description: Some(format!(
@@ -345,7 +346,13 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
                 status.listen
             );
         }
-        return Ok(status);
+        let health = health_document(paths)?;
+        if health_matches_build(&health) {
+            return Ok(status);
+        }
+        // An old daemon may still be running after the executable/config upgrade.
+        // Replace it through the authenticated shutdown path under the same lock.
+        stop_locked(paths)?;
     }
     let saved = load_or_default_registry(&proxy_paths, None)?;
     let address = listen.unwrap_or(&saved.listen);
@@ -405,7 +412,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
         let current = status(paths)?;
-        if current.running {
+        if current.running && health_matches_build(&health_document(paths)?) {
             return Ok(current);
         }
     }
@@ -413,6 +420,25 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         "CCSW proxy did not become ready; inspect {}",
         proxy_paths.log.display()
     )
+}
+
+fn health_matches_build(value: &Value) -> bool {
+    value["name"] == "ccsw-proxy"
+        && value["config_version"].as_u64() == Some(u64::from(config::CONFIG_VERSION))
+        && value["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+}
+
+fn health_document(paths: &AppPaths) -> Result<Value> {
+    let registry = load_or_default_registry(&ProxyPaths::from_app(paths)?, None)?;
+    Ok(reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?
+        .get(format!("http://{}/health", registry.listen))
+        .bearer_auth(&registry.local_token)
+        .send()?
+        .error_for_status()?
+        .json()?)
 }
 
 pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
@@ -465,6 +491,10 @@ pub fn service_status() -> Result<ProxyServiceStatus> {
 
 pub fn stop(paths: &AppPaths) -> Result<()> {
     let _lifecycle = lifecycle_lock(paths)?;
+    stop_locked(paths)
+}
+
+fn stop_locked(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     if !status(paths)?.running {
         fs::remove_file(&proxy_paths.pid).ok();
@@ -746,7 +776,7 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             anyhow::anyhow!("invalid local proxy credential"),
         );
     }
-    Json(json!({"name":"ccsw-proxy","status":"ok"})).into_response()
+    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION")})).into_response()
 }
 
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -1075,7 +1105,18 @@ async fn messages(
     let deadline = tokio::time::Instant::now() + TOTAL_TIMEOUT;
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let anthropic = profile.api_format == ApiFormat::Anthropic;
-    let upstream_body = match translate_request(&body, profile.api_format) {
+    let upstream_body = match translate_request_with_effort(
+        &body,
+        profile.api_format,
+        profile
+            .models
+            .iter()
+            .find(|m| {
+                config::canonical_model_id(&m.id) == config::canonical_model_id(&upstream_model)
+            })
+            .and_then(|m| m.reasoning_max.as_deref())
+            .unwrap_or("high"),
+    ) {
         Ok(body) => body,
         Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
     };
@@ -1280,7 +1321,7 @@ fn anthropic_error(status: StatusCode, error: anyhow::Error) -> Response {
         .into_response()
 }
 
-fn completion_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
+pub(crate) fn completion_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
     let wanted = match format {
         ApiFormat::OpenaiChat => "chat/completions",
         ApiFormat::OpenaiResponses => "responses",
@@ -1297,7 +1338,7 @@ pub fn models_endpoint(base: &str, _format: ApiFormat) -> Result<Url> {
     Ok(endpoint)
 }
 
-fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
+pub(crate) fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
     let mut url = Url::parse(base).context("API URL is invalid")?;
     if !matches!(url.scheme(), "http" | "https") {
         bail!("API URL must use http or https");
@@ -1350,9 +1391,15 @@ fn apply_model_limits(profile: &Profile, model: &str, body: &mut Value) -> Resul
 }
 
 fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
+    translate_request_with_effort(input, format, "high")
+}
+
+fn translate_request_with_effort(input: &Value, format: ApiFormat, maximum: &str) -> Result<Value> {
     if format == ApiFormat::Anthropic {
         return Ok(input.clone());
     }
+    let normalized = normalize_client_tool_search(input)?;
+    let input = &normalized;
     let object = input
         .as_object()
         .context("request body must be an object")?;
@@ -1390,14 +1437,22 @@ fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
             result.insert("input".into(), Value::Array(converted));
             result.insert("store".into(), Value::Bool(false));
             copy_number(object, &mut result, "max_tokens", "max_output_tokens");
-            if object.get("thinking").is_some() {
-                result.insert(
-                    "reasoning".into(),
-                    json!({"effort":"high","summary":"auto"}),
-                );
-            }
         }
         ApiFormat::Anthropic => unreachable!("handled before translation"),
+    }
+    if let Some(effort) = mapped_effort(input, maximum)? {
+        match format {
+            ApiFormat::OpenaiChat => {
+                result.insert("reasoning_effort".into(), json!(effort));
+            }
+            ApiFormat::OpenaiResponses => {
+                result.insert(
+                    "reasoning".into(),
+                    json!({"effort":effort,"summary":"auto"}),
+                );
+            }
+            ApiFormat::Anthropic => unreachable!(),
+        }
     }
     for key in ["temperature", "top_p"] {
         if let Some(value) = object.get(key) {
@@ -1521,7 +1576,7 @@ fn chat_messages(message: &Value) -> Result<Vec<Value>> {
             Some("tool_result") => result.push(json!({
                 "role":"tool",
                 "tool_call_id":block.get("tool_use_id").and_then(Value::as_str).context("tool_result has no tool_use_id")?,
-                "content":flatten_tool_result(block.get("content"))?
+                "content":formatted_tool_result(&block)?
             })),
             Some(other) => bail!("unsupported user content block: {other}"),
             None => bail!("content block has no type"),
@@ -1585,7 +1640,7 @@ fn response_items(message: &Value) -> Result<Vec<Value>> {
             Some("tool_result") if role == "user" => result.push(json!({
                 "type":"function_call_output",
                 "call_id":block.get("tool_use_id").and_then(Value::as_str).context("tool_result has no tool_use_id")?,
-                "output":flatten_tool_result(block.get("content"))?
+                "output":formatted_tool_result(&block)?
             })),
             Some("thinking" | "redacted_thinking") if role == "assistant" => {}
             Some(other) => bail!("unsupported {role} content block: {other}"),
@@ -1612,6 +1667,15 @@ fn text_only_blocks(blocks: &[Value], role: &str) -> Result<String> {
         );
     }
     Ok(text.join("\n"))
+}
+
+fn formatted_tool_result(block: &Value) -> Result<String> {
+    let text = flatten_tool_result(block.get("content"))?;
+    Ok(if block["is_error"] == true {
+        format!("Tool error: {text}")
+    } else {
+        text
+    })
 }
 
 fn flatten_tool_result(value: Option<&Value>) -> Result<String> {
@@ -2249,6 +2313,21 @@ pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proxy_health_requires_current_config_and_binary_versions() {
+        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION")});
+        assert!(super::health_matches_build(&current));
+        assert!(!super::health_matches_build(
+            &serde_json::json!({"name":"ccsw-proxy"})
+        ));
+        let mut old = current.clone();
+        old["config_version"] = serde_json::json!(4);
+        assert!(!super::health_matches_build(&old));
+        old = current;
+        old["version"] = serde_json::json!("older");
+        assert!(!super::health_matches_build(&old));
+    }
+
     #[test]
     fn roles_follow_models_per_session_and_never_cross_routes() {
         let temp = tempfile::tempdir().unwrap();
@@ -3171,5 +3250,319 @@ enabled_models = ["b"]
                 .contains("stop this user's proxy")
         );
         assert_eq!(fs::read(&registry).unwrap(), before);
+    }
+}
+
+fn mapped_effort(input: &Value, maximum: &str) -> Result<Option<String>> {
+    if maximum == "off" {
+        return Ok(None);
+    }
+    let levels = ["low", "medium", "high", "xhigh"];
+    let limit = levels
+        .iter()
+        .position(|v| *v == maximum)
+        .context("invalid model reasoning maximum")?;
+    let requested = input
+        .pointer("/output_config/effort")
+        .or_else(|| input.pointer("/reasoning/effort"));
+    let requested = if let Some(value) = requested {
+        value.as_str().context("effort must be a string")?
+    } else if input
+        .get("thinking")
+        .is_some_and(|v| v["type"] != "disabled")
+    {
+        "high"
+    } else {
+        return Ok(None);
+    };
+    if requested == "auto" {
+        return Ok(None);
+    }
+    let index = if requested == "max" {
+        limit
+    } else {
+        levels
+            .iter()
+            .position(|v| *v == requested)
+            .context("unsupported effort level")?
+            .min(limit)
+    };
+    Ok(Some(levels[index].into()))
+}
+
+/// Client-executed search remains a function call. OpenAI-compatible servers
+/// receive the request's full tool catalog instead of Anthropic deferred loading.
+fn normalize_client_tool_search(input: &Value) -> Result<Value> {
+    let mut output = input.clone();
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(tools) = output.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools {
+            if tool
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "custom")
+            {
+                bail!("server-side Anthropic tools are not supported by this OpenAI route");
+            }
+            let name = tool["name"]
+                .as_str()
+                .context("tool has no name")?
+                .to_owned();
+            if !names.insert(name) {
+                bail!("duplicate tool name in request");
+            }
+            tool.as_object_mut()
+                .context("tool must be an object")?
+                .remove("defer_loading");
+        }
+    }
+    if let Some(messages) = output.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages {
+            if let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) {
+                for block in blocks {
+                    if block["type"] != "tool_result" {
+                        continue;
+                    }
+                    if let Some(results) = block.get_mut("content").and_then(Value::as_array_mut) {
+                        for result in results {
+                            if result["type"] == "tool_reference" {
+                                let name = result["tool_name"]
+                                    .as_str()
+                                    .context("tool_reference has no tool_name")?;
+                                if !names.contains(name) {
+                                    bail!(
+                                        "tool_reference {name} is missing from this request's tool catalog"
+                                    );
+                                }
+                                *result =
+                                    json!({"type":"text","text":format!("Available tool: {name}")});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod client_preference_tests {
+    use super::*;
+    #[test]
+    fn client_search_roundtrip_preserves_calls_and_resolves_references() {
+        let request = json!({"model":"test","max_tokens":100,
+            "tools":[{"name":"ToolSearch","input_schema":{"type":"object"}},
+                {"name":"lookup","defer_loading":true,"input_schema":{"type":"object","properties":{"id":{"type":"string"}}}}],
+            "messages":[{"role":"assistant","content":[{"type":"tool_use","id":"search-1","name":"ToolSearch","input":{"query":"lookup"}}]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"search-1","content":[{"type":"text","text":"Found"},{"type":"tool_reference","tool_name":"lookup"}]}]}]});
+        for format in [ApiFormat::OpenaiChat, ApiFormat::OpenaiResponses] {
+            let converted = translate_request(&request, format).unwrap();
+            assert_eq!(converted["tools"].as_array().unwrap().len(), 2);
+            assert!(converted.to_string().contains("Available tool: lookup"));
+            assert!(converted.to_string().contains("search-1"));
+            assert!(!converted.to_string().contains("tool_reference"));
+            assert!(!converted.to_string().contains("defer_loading"));
+            let mut bad = request.clone();
+            bad["messages"][1]["content"][0]["content"][1]["tool_name"] = json!("missing");
+            assert!(
+                translate_request(&bad, format)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("missing")
+            );
+            let mut server = request.clone();
+            server["tools"][0]["type"] = json!("tool_search_tool_regex_20251119");
+            assert!(translate_request(&server, format).is_err());
+        }
+        assert_eq!(
+            translate_request(&request, ApiFormat::Anthropic).unwrap(),
+            request
+        );
+    }
+    #[test]
+    fn effort_caps_are_model_specific_and_explicit_disable_stays_disabled() {
+        let mut request = json!({"model":"test","messages":[],"output_config":{"effort":"max"}});
+        for (maximum, expected) in [("low", "low"), ("high", "high"), ("xhigh", "xhigh")] {
+            let chat =
+                translate_request_with_effort(&request, ApiFormat::OpenaiChat, maximum).unwrap();
+            assert_eq!(chat["reasoning_effort"], expected);
+            let responses =
+                translate_request_with_effort(&request, ApiFormat::OpenaiResponses, maximum)
+                    .unwrap();
+            assert_eq!(responses["reasoning"]["effort"], expected);
+        }
+        assert!(
+            translate_request_with_effort(&request, ApiFormat::OpenaiChat, "off")
+                .unwrap()
+                .get("reasoning_effort")
+                .is_none()
+        );
+        request["output_config"]["effort"] = json!("auto");
+        assert!(mapped_effort(&request, "high").unwrap().is_none());
+        request.as_object_mut().unwrap().remove("output_config");
+        request["thinking"] = json!({"type":"disabled"});
+        assert!(mapped_effort(&request, "high").unwrap().is_none());
+        request["thinking"] = json!({"type":"adaptive"});
+        assert_eq!(
+            mapped_effort(&request, "medium").unwrap().as_deref(),
+            Some("medium")
+        );
+        request["output_config"] = json!({"effort":"low"});
+        assert_eq!(
+            mapped_effort(&request, "xhigh").unwrap().as_deref(),
+            Some("low")
+        );
+    }
+}
+
+#[cfg(test)]
+mod client_search_integration {
+    use super::*;
+    #[tokio::test]
+    async fn proxy_search_and_tool_call_work_for_chat_responses_and_streaming() {
+        for format in [ApiFormat::OpenaiChat, ApiFormat::OpenaiResponses] {
+            for streaming in [false, true] {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = upstream.local_addr().unwrap();
+                let handler = move |Json(request): Json<Value>| {
+                    let tx = tx.clone();
+                    async move {
+                        let found = request.to_string().contains("Available tool: lookup");
+                        tx.send(request).unwrap();
+                        let name = if found { "lookup" } else { "ToolSearch" };
+                        let args = if found {
+                            r#"{"id":"42"}"#
+                        } else {
+                            r#"{"query":"lookup"}"#
+                        };
+                        let response = match format {
+                            ApiFormat::OpenaiChat => {
+                                json!({"id":"r1","model":"test","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"call1","type":"function","function":{"name":name,"arguments":args}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5}})
+                            }
+                            _ => {
+                                json!({"id":"r1","model":"test","status":"completed","output":[{"id":"fc1","type":"function_call","call_id":"call1","name":name,"arguments":args}],"usage":{"input_tokens":10,"output_tokens":5}})
+                            }
+                        };
+                        if !streaming {
+                            return Json(response).into_response();
+                        }
+                        let body = match format {
+                            ApiFormat::OpenaiChat => format!(
+                                "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                                json!({"id":"r1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":name,"arguments":args}}]},"finish_reason":null}]}),
+                                json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]})
+                            ),
+                            _ => format!(
+                                "event: response.output_item.added\ndata: {}\n\nevent: response.function_call_arguments.delta\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                                json!({"type":"response.output_item.added","output_index":0,"item":{"id":"fc1","type":"function_call","call_id":"call1","name":name,"arguments":""}}),
+                                json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":args}),
+                                json!({"type":"response.completed","response":response})
+                            ),
+                        };
+                        (
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            body,
+                        )
+                            .into_response()
+                    }
+                };
+                let upstream_app = axum::Router::new()
+                    .route("/v1/chat/completions", axum::routing::post(handler.clone()))
+                    .route("/v1/responses", axum::routing::post(handler));
+                let upstream_task = tokio::spawn(async move {
+                    axum::serve(upstream, upstream_app).await.unwrap();
+                });
+                let temp = tempfile::tempdir().unwrap();
+                let paths = AppPaths {
+                    config: temp.path().join("config.toml"),
+                    state_dir: temp.path().join("state"),
+                    cache: temp.path().join("cache.json"),
+                };
+                let mut profile: Profile = toml::from_str("name='Test'\nbase_url='http://localhost'\ndefault_model='test'\n[[models]]\nid='test'\nreasoning_max='xhigh'\n").unwrap();
+                profile.api_format = format;
+                profile.base_url = format!("http://{address}");
+                config::update(&paths.config, |c| {
+                    c.profiles.insert("test".into(), profile);
+                    Ok(())
+                })
+                .unwrap();
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let proxy_address = listener.local_addr().unwrap();
+                drop(listener);
+                let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+                update_registry(&proxy_paths, Some(&proxy_address.to_string()), |r| {
+                    r.routes.insert(
+                        "search".into(),
+                        RouteTarget {
+                            config_path: paths.config.clone(),
+                            profile_id: Some("test".into()),
+                            codex: false,
+                            default_profile_id: None,
+                            models: BTreeMap::new(),
+                        },
+                    );
+                })
+                .unwrap();
+                let registry = load_registry(&proxy_paths).unwrap();
+                let server = tokio::spawn(async move { serve(proxy_paths.registry).await });
+                let client = Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap();
+                let url = format!("http://{proxy_address}/r/search/v1/messages");
+                for _ in 0..50 {
+                    if client
+                        .get(format!("http://{proxy_address}/health"))
+                        .send()
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let mut request = json!({"model":"test","stream":streaming,"max_tokens":100,"output_config":{"effort":"max"},
+                    "tools":[{"name":"ToolSearch","input_schema":{"type":"object"}},{"name":"lookup","defer_loading":true,"input_schema":{"type":"object"}}],
+                    "messages":[{"role":"user","content":"Find and call lookup"}]});
+                for name in ["ToolSearch", "lookup"] {
+                    let response = client
+                        .post(&url)
+                        .bearer_auth(&registry.local_token)
+                        .json(&request)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert!(response.status().is_success());
+                    let text = response.text().await.unwrap();
+                    assert!(
+                        text.contains(name),
+                        "{format:?} streaming={streaming}: {text}"
+                    );
+                    assert!(text.contains("tool_use"));
+                    if streaming {
+                        assert!(text.contains("message_stop"));
+                    }
+                    let captured = rx.recv().await.unwrap();
+                    let effort = if format == ApiFormat::OpenaiChat {
+                        &captured["reasoning_effort"]
+                    } else {
+                        &captured["reasoning"]["effort"]
+                    };
+                    assert_eq!(effort, "xhigh");
+                    assert!(!captured.to_string().contains("defer_loading"));
+                    if name == "lookup" {
+                        assert!(captured.to_string().contains("Available tool: lookup"));
+                    }
+                    request["messages"].as_array_mut().unwrap().extend([
+                        json!({"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"ToolSearch","input":{"query":"lookup"}}]}),
+                        json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":[{"type":"tool_reference","tool_name":"lookup"}]}]}),
+                    ]);
+                }
+                server.abort();
+                upstream_task.abort();
+            }
+        }
     }
 }

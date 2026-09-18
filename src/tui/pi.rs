@@ -54,9 +54,14 @@ impl App {
         footer_controls(area, compact, self.view_mode)
             .into_iter()
             .filter(|(control, _)| !self.pi_enabled || *control != FooterControl::Proxy)
+            .filter(|(control, _)| {
+                !(self.pi_enabled || self.codex_ui.enabled) || *control != FooterControl::Settings
+            })
             .map(|(control, mut rect)| {
                 rect.x = x;
-                x = x.saturating_add(rect.width).saturating_add(1);
+                x = x
+                    .saturating_add(rect.width)
+                    .saturating_add(u16::from(area.width >= 55));
                 (control, rect)
             })
             .collect()

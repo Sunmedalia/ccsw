@@ -503,3 +503,45 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 镜像内先执行 Rustfmt、Clippy 和 Rust 测试；卸载场景在独立临时 HOME 中运行，不挂载宿主机 HOME，也不挂载 Docker socket。检查覆盖预览、完整清理、重复卸载、中文路径、文件/目录链接、损坏文件、锁竞争、自启失败、伪造 PID、其他代理存活及无关文件内容不变。Linux Docker 测试不替代 Windows/macOS 自启管理器实机验证，也不构成对恶意同权限进程并发篡改或硬件故障的绝对保证。
 
 详细覆盖范围和实测平台见 [Docker 测试记录](tests/docker/RESULTS.md)。
+
+### Claude Code 客户端设置
+
+在 Claude 标签页点击 **Settings** 或按 **F4**。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
+
+- 六项预设：AI 署名、Teammates、Tool Search、思考强度、禁用自动升级、禁用 Artifact。默认 `inherit` 表示不覆盖已有配置。
+- 点击 **Fill presets**（窄屏显示 **Presets**），或按 **Alt+P**，填入隐藏署名、开启 Teammates / Tool Search、`max` 思考、禁用自动升级和 Artifact；这只修改草稿。
+- **Add variable / Alt+N** 添加自定义变量；选中条目后 **Delete / Alt+D** 删除，**Show / Alt+V** 切换值的遮罩。值按原样保存，不执行 `$()` 或其他 shell 表达式。
+- **Ctrl+S / Save** 保存。已连接时自动同步，未连接时等待按 `p`；**Esc** 返回，有改动时按 `y` 丢弃，其他键继续编辑。
+- **Disconnect / Alt+X** 断开管理，恢复接管前的设置。删除覆盖或改回 `inherit` 也会在下一次同步时恢复原值；外部修改不会被恢复操作覆盖。
+
+存储在 CCSW 配置的 `[claude]` / `[claude.env]` 下。同步目标遵循 `CLAUDE_CONFIG_DIR`，默认 `~/.claude/settings.json`。地址、认证、模型和配置目录变量由转发管理，不能作为自定义变量重复覆盖。文件使用私有权限，自定义值不会进入同步日志。
+
+```toml
+[claude]
+hide_attribution = true
+
+[claude.env]
+CLAUDE_CODE_EFFORT_LEVEL = "max"
+ENABLE_TOOL_SEARCH = "true"
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+DISABLE_AUTOUPDATER = "1"
+CLAUDE_CODE_DISABLE_ARTIFACT = "1"
+```
+
+**同步成功表示配置已写入，不代表每个上游都支持对应功能。** 启动时读取的选项以及删除环境变量，需要重启 Claude Code。项目或组织层配置也可能影响实际生效值。
+
+Anthropic 转发保留原生 Tool Search 内容。OpenAI Chat / Responses 使用普通函数调用兼容 Claude 客户端执行的搜索：传入当前请求的完整工具目录，将搜索结果中的引用转换为工具名称，保留调用 ID。这个模式不保证延迟加载的上下文节省；引用不在请求目录中或使用 Anthropic 服务端搜索工具时，返回明确错误。
+
+模型编辑页新增 **Reasoning max**：`off / low / medium / high / xhigh`，默认 `high`，配置字段为 `reasoning_max`。转到 OpenAI 时，`max` 映射为该模型的上限，其他等级超过上限时下调，`off` 不发送推理参数。Chat 使用 `reasoning_effort`，Responses 使用 `reasoning.effort`；Anthropic 不改变原始等级。上游拒绝参数时不会暗中降级重试。
+
+配置版本升级到 5；旧配置加载后默认不接管任何客户端偏好。升级后请勿使用只支持旧配置版本的 CCSW 写回该文件。
+
+### 模型最小测试
+
+在模型详情页点击 **F5 Test model**，或按 **F5**，向所选模型所属的 Provider 发送一次简短的 `Reply OK.` 请求。支持 Anthropic、OpenAI Chat 和 Responses，最多请求 64 个输出 token，30 秒超时。收到实际模型输出（包括推理输出）即通过，不要求必须回复 OK。状态栏显示模型名称、响应耗时或失败原因；HTTP 成功但没有输出不会被判定为通过。
+
+测试在后台执行，不改变模型选择、Provider 配置或同步状态；测试的是上游模型响应，不依赖本地转发是否启动。环境变量配置继续从底部 **Settings** 或 **F4** 进入，主页面右上角不再单独放置入口。
+
+新增或编辑 Provider 时，每个模型输入框末尾提供 `[Test]` 和 `[1m]`。Test（或选中该行按 F5）使用草稿中的 URL、认证与模型名发送最小请求，不要求先保存 Provider；Fallbacks 行依次测试全部填写的模型。测试结果显示在表单底部。`[1m]` 高亮表示启用，灰色表示未启用，仍可用 Alt+1 切换。
+
+Base URL 行也提供 `[Test]`（选中该行按 F5）。使用草稿地址和认证发送一次 GET 请求，8 秒超时，不调用模型。结果区分网络连接失败和 HTTP 状态：401/403 表示服务器可达但认证被拒绝，404/405 表示地址可达但基础路径不提供 GET 接口；需要确认模型可用时再使用模型行的 Test。

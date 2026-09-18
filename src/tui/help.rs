@@ -8,9 +8,13 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("Space", "Toggle provider; auto-sync after connection"),
             ("n / x", "New / delete provider"),
             ("e", "Edit selected provider"),
-            ("r / t", "Test connection and fetch model catalog"),
+            ("r / t", "Fetch model catalog"),
             ("A", "Enable all models in the selected provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
+            (
+                "F4",
+                "Claude client settings: presets and custom environment",
+            ),
             (
                 "Click top tabs / F2",
                 "Switch independent Claude Code / Codex / Pi configurations",
@@ -26,6 +30,10 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("Space", "Toggle model; auto-sync after connection"),
             ("Enter / click again", "Open the selected model’s provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
+            (
+                "F4",
+                "Claude client settings: presets and custom environment",
+            ),
             ("Esc", "Return to providers"),
         ],
         HelpSection::Provider => &[
@@ -43,6 +51,8 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("e", "Edit selected model from either panel"),
             ("E (Shift+e)", "Edit provider configuration"),
             ("r / p / P", "Fetch models / sync / proxy"),
+            ("F4", "Claude client settings"),
+            ("F5", "Send a minimal request to the selected model"),
         ],
         HelpSection::Forms => &[
             (

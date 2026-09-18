@@ -39,7 +39,37 @@ try {
     Invoke-Ccsw -Arguments @('proxy', 'stop') | Out-Null
     Invoke-Ccsw -Arguments @('proxy', 'start') | Out-Null
     Invoke-Ccsw -Arguments @('proxy', 'stop') | Out-Null
+    # Exercise client preference sync and restoration using the packaged EXE.
+    # This does not call an external model or require API credentials.
+    New-Item -ItemType Directory -Force -Path "$root\claude" | Out-Null
+    $settings = "$root\claude\settings.json"
+    '{"env":{"CCSW_SMOKE_LITERAL":"before","KEEP":"yes"},"attribution":{"commit":"original","pr":"original-pr"}}' | Set-Content -LiteralPath $settings -Encoding utf8NoBOM
+    @'
+version = 5
+[claude]
+hide_attribution = true
+[claude.env]
+CCSW_SMOKE_LITERAL = 'literal %PATH% !VALUE! & ^ ( ) $value'
+CLAUDE_CODE_EFFORT_LEVEL = 'max'
+[profiles.smoke]
+name = 'Windows smoke'
+base_url = 'https://example.invalid'
+default_model = 'smoke-model[1m]'
+[[profiles.smoke.models]]
+id = 'smoke-model[1m]'
+reasoning_max = 'high'
+'@ | Set-Content -LiteralPath "$root\config.toml" -Encoding utf8NoBOM
+    Invoke-Ccsw -Arguments @('apply', '--profile', 'smoke') | Out-Null
+    $applied = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
+    if ($applied.env.CCSW_SMOKE_LITERAL -cne 'literal %PATH% !VALUE! & ^ ( ) $value') { throw 'Literal environment value changed' }
+    if ($applied.env.CLAUDE_CODE_EFFORT_LEVEL -ne 'max') { throw 'Effort setting missing' }
+    if ($applied.attribution.commit -ne '' -or $applied.attribution.pr -ne '') { throw 'Attribution not hidden' }
+    Invoke-Ccsw -Arguments @('apply', '--profile', 'smoke') | Out-Null
     Invoke-Ccsw -Arguments @('uninstall', '--yes') | Out-Null
+    $restored = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
+    if ($restored.env.CCSW_SMOKE_LITERAL -ne 'before' -or $restored.env.KEEP -ne 'yes') { throw 'Environment baseline not restored' }
+    if ($restored.attribution.commit -ne 'original' -or $restored.attribution.pr -ne 'original-pr') { throw 'Attribution baseline not restored' }
+    if ($null -ne $restored.env.CLAUDE_CODE_EFFORT_LEVEL) { throw 'Owned effort setting was not removed' }
     Invoke-Ccsw -Arguments @('uninstall', '--yes') | Out-Null
     Write-Host "Windows extracted-binary smoke passed: $version"
 }

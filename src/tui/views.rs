@@ -722,6 +722,10 @@ impl App {
                     },
                     Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
                 ),
+                ShowcaseControl::Test => (
+                    "[F5 Test model]",
+                    Style::default().fg(CONNECTED).add_modifier(Modifier::BOLD),
+                ),
                 ShowcaseControl::Delete => (
                     if is_manual {
                         "[x Delete]"
@@ -977,6 +981,8 @@ impl App {
             (FooterControl::AddProfile, _, true) => "+".into(),
             (FooterControl::Sync, _, true) => "⇄".into(),
             (FooterControl::Proxy, _, true) => "Px".into(),
+            (FooterControl::Settings, _, true) => "F4".into(),
+            (FooterControl::Settings, _, false) => "Settings".into(),
             (FooterControl::Help, _, true) => "?".into(),
             (FooterControl::Quit, _, true) => "×".into(),
             (FooterControl::Back, true, false) => "‹ Back".into(),
@@ -1081,6 +1087,7 @@ impl App {
                 );
                 draw_modal_buttons(frame, area, &["Import", "Skip"]);
             }
+            Modal::Preferences(form) => draw_preferences(frame, area, form),
             Modal::Profile(form) => {
                 if let Some(selected) = form.template_selected {
                     frame.render_widget(panel(" New provider · choose a template ", true), area);
@@ -1171,9 +1178,21 @@ impl App {
                 draw_form(
                     frame,
                     area,
-                    " Provider · Alt+F: model for selected field ",
+                    " Provider · F5: test · Alt+1: 1M ",
                     &form.fields,
                     form.selected,
+                    true,
+                );
+                let inner = panel_inner(area);
+                frame.render_widget(
+                    Paragraph::new(self.status.as_str())
+                        .style(Style::default().fg(if self.status_error {
+                            ERROR
+                        } else {
+                            CONNECTED
+                        }))
+                        .wrap(Wrap { trim: false }),
+                    Rect::new(inner.x, inner.bottom().saturating_sub(4), inner.width, 2),
                 );
                 draw_modal_buttons(
                     frame,

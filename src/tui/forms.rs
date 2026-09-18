@@ -148,6 +148,30 @@ impl ProxyManager {
 }
 
 impl ProfileForm {
+    pub(super) fn model_field_is_1m(&self, index: usize) -> bool {
+        model_values_are_1m(&self.fields[index].value)
+    }
+
+    pub(super) fn toggle_model_field_1m(&mut self, index: usize) {
+        if !(6..self.fields.len()).contains(&index) {
+            return;
+        }
+        let enabled = !self.model_field_is_1m(index);
+        let field = &mut self.fields[index];
+        field.value = field
+            .value
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(|id| {
+                let base = canonical_model_id(id);
+                if enabled { format!("{base}[1m]") } else { base }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        field.cursor = field.char_count();
+    }
+
     pub(super) fn model_target_field(&self) -> usize {
         if (6..self.fields.len()).contains(&self.selected) {
             self.selected
@@ -349,6 +373,41 @@ impl ProfileForm {
         Ok((id, profile))
     }
 
+    pub(super) fn model_test_request(&self) -> Result<(Profile, Vec<String>)> {
+        if !(6..self.fields.len()).contains(&self.selected) {
+            anyhow::bail!("Select a model field to test");
+        }
+        let models: Vec<String> = self.fields[self.selected]
+            .value
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if models.is_empty() {
+            anyhow::bail!("Enter a model name before testing");
+        }
+        let mut profile = self.discovery_profile()?;
+        profile.name = if self.fields[1].value.trim().is_empty() {
+            "New provider".into()
+        } else {
+            self.fields[1].value.trim().into()
+        };
+        Ok((profile, models))
+    }
+
+    pub(super) fn connection_test_profile(&self) -> Result<Profile> {
+        let mut draft = self.clone();
+        // Connectivity does not require credentials or valid model configuration.
+        if draft.fields[5].value.trim().is_empty() {
+            draft.fields[4].value = "none".into();
+        }
+        draft.models.clear();
+        draft.enabled_models.clear();
+        draft.disabled_models.clear();
+        draft.discovery_profile()
+    }
+
     pub(super) fn discovery_profile(&self) -> Result<Profile> {
         let mut draft = self.clone();
         draft.fields[0] = field("ID", "discovery");
@@ -458,6 +517,11 @@ impl ModelForm {
                 field("Description", ""),
                 toggle_field("1M context (Alt+1)", false),
                 toggle_field("Enable now", true),
+                choice_field(
+                    "Reasoning max",
+                    "high",
+                    &["off", "low", "medium", "high", "xhigh"],
+                ),
                 field("Max output tokens", ""),
                 field("Context window", ""),
             ],
@@ -556,6 +620,13 @@ impl ModelForm {
                     .and_then(|m| m.context_window)
                     .map(|n| n.to_string())
                     .unwrap_or_default();
+                if let Some(reasoning) = self.fields.iter_mut().find(|f| f.label == "Reasoning max")
+                {
+                    reasoning.value = saved
+                        .and_then(|m| m.reasoning_max.clone())
+                        .or(model.reasoning_max.clone())
+                        .unwrap_or_else(|| "high".into());
+                }
                 self.fields[output_index].cursor = 0;
                 self.fields[context_index].cursor = 0;
             }
@@ -614,6 +685,11 @@ impl ModelForm {
             }
         });
         ModelEntry {
+            reasoning_max: self
+                .fields
+                .iter()
+                .find(|f| f.label == "Reasoning max")
+                .map(|f| f.value.clone()),
             max_output_tokens: self.fields[output_index].value.trim().parse().ok(),
             context_window: self.fields[context_index].value.trim().parse().ok(),
             id: if one_m && !base_id.is_empty() {
@@ -916,12 +992,43 @@ pub(super) fn input_window(
     shown
 }
 
+fn model_values_are_1m(value: &str) -> bool {
+    let models: Vec<_> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .collect();
+    !models.is_empty() && models.iter().all(|id| has_1m_suffix(id))
+}
+
+pub(super) fn profile_1m_rect(area: Rect, row: u16) -> Rect {
+    let width = area.width.min(5);
+    Rect::new(area.right().saturating_sub(width), area.y + row, width, 1)
+}
+
+pub(super) fn profile_test_rect(area: Rect, row: u16) -> Rect {
+    let end = area.right().saturating_sub(area.width.min(5));
+    let width = area.width.saturating_sub(5).min(7);
+    Rect::new(end.saturating_sub(width), area.y + row, width, 1)
+}
+
 pub(super) fn draw_fields(
     frame: &mut ratatui::Frame,
     area: Rect,
     fields: &[FormField],
     selected: usize,
     active: bool,
+) {
+    draw_fields_with_context(frame, area, fields, selected, active, false);
+}
+
+fn draw_fields_with_context(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    fields: &[FormField],
+    selected: usize,
+    active: bool,
+    context_controls: bool,
 ) {
     let (area, offset) = form_viewport(area, selected);
     let label_width = usize::from((area.width / 3).min(17));
@@ -946,7 +1053,10 @@ pub(super) fn draw_fields(
             field.value.clone()
         };
         let cursor = (current && field.choices.is_empty() && !field.toggle).then_some(field.cursor);
-        let shown = input_window(&value, cursor, input_width, field.secret);
+        let context = context_controls && index >= 6;
+        let connection_test = context_controls && index == 3;
+        let width = input_width.saturating_sub(if context || connection_test { 12 } else { 0 });
+        let shown = input_window(&value, cursor, width, field.secret);
         let label = input_window(field.label, None, label_width, false);
         let line = Line::from(vec![
             Span::styled(
@@ -966,6 +1076,36 @@ pub(super) fn draw_fields(
             Paragraph::new(line),
             Rect::new(area.x, area.y + row as u16, area.width, 1),
         );
+        if connection_test {
+            frame.render_widget(
+                Paragraph::new("[Test]").style(Style::default().fg(CONNECTED)),
+                profile_test_rect(area, row as u16),
+            );
+        }
+        if context {
+            let enabled = model_values_are_1m(&field.value);
+            frame.render_widget(
+                Paragraph::new("[1m]").style(if enabled {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ROUTE)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(MUTED)
+                }),
+                profile_1m_rect(area, row as u16),
+            );
+            frame.render_widget(
+                Paragraph::new("[Test]").style(Style::default().fg(
+                    if field.value.trim().is_empty() {
+                        MUTED
+                    } else {
+                        CONNECTED
+                    },
+                )),
+                profile_test_rect(area, row as u16),
+            );
+        }
     }
 }
 
@@ -975,6 +1115,7 @@ pub(super) fn draw_form(
     title: &str,
     fields: &[FormField],
     selected: usize,
+    context_controls: bool,
 ) {
     frame.render_widget(Clear, area);
     frame.render_widget(panel(title, true), area);
@@ -985,7 +1126,7 @@ pub(super) fn draw_form(
         inner.width,
         inner.height.saturating_sub(4),
     );
-    draw_fields(frame, content, fields, selected, true);
+    draw_fields_with_context(frame, content, fields, selected, true, context_controls);
 }
 
 pub(super) fn model_form_areas(area: Rect, focus_api: bool) -> (Rect, Rect) {
@@ -1197,6 +1338,7 @@ pub(super) fn draw_proxy_manager(
             " Proxy listen port · Enter save / Esc cancel ",
             std::slice::from_ref(port),
             0,
+            false,
         );
         let inner = panel_inner(area);
         let message = Rect::new(

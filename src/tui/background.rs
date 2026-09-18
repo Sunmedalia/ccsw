@@ -10,6 +10,11 @@ pub(super) struct SyncRequest {
     preferred: Option<String>,
 }
 enum Completion {
+    ConnectionTest(Result<(u16, u128)>),
+    ModelTest {
+        name: String,
+        result: Result<u128>,
+    },
     ProfileDiscover {
         instance: uuid::Uuid,
         profile: Box<Profile>,
@@ -36,12 +41,13 @@ pub(super) struct Background {
     receiver: Receiver<Completion>,
     requests: BTreeMap<String, u64>,
     sequence: u64,
+    model_test_running: bool,
     pub(super) status: sync::Status,
     pub(super) sync_running: bool,
     pub(super) proxy_running: bool,
     pub(super) queued_sync: Option<SyncRequest>,
     due: Instant,
-    connected: bool,
+    pub(super) connected: bool,
 }
 impl Default for Background {
     fn default() -> Self {
@@ -51,6 +57,7 @@ impl Default for Background {
             receiver,
             requests: BTreeMap::new(),
             sequence: 0,
+            model_test_running: false,
             status: sync::Status::NotConnected,
             sync_running: false,
             proxy_running: false,
@@ -71,6 +78,82 @@ impl Background {
     }
 }
 impl App {
+    pub(super) fn start_model_test(&mut self) {
+        if self.background.model_test_running {
+            self.status = "A model test is already running".into();
+            return;
+        }
+        let (Some(profile), Some(model)) =
+            (self.selected_profile().cloned(), self.selected_model())
+        else {
+            self.set_error("Select a provider model to test");
+            return;
+        };
+        let name = format!("{} / {}", profile.name, model.id);
+        self.status = format!("Testing {name}…");
+        self.status_error = false;
+        self.background.model_test_running = true;
+        self.background.spawn(move || Completion::ModelTest {
+            name,
+            result: discovery::test_model(&profile, &model.id),
+        });
+    }
+
+    pub(super) fn start_profile_connection_test(&mut self) {
+        if self.background.model_test_running {
+            self.status = "A test is already running".into();
+            return;
+        }
+        let Some(Modal::Profile(form)) = &self.modal else {
+            return;
+        };
+        let profile = match form.connection_test_profile() {
+            Ok(profile) => profile,
+            Err(error) => {
+                self.set_error(format!("Cannot test Base URL: {error}"));
+                return;
+            }
+        };
+        self.status_error = false;
+        self.status = "Testing Base URL connectivity…".into();
+        self.background.model_test_running = true;
+        self.background
+            .spawn(move || Completion::ConnectionTest(discovery::test_connection(&profile)));
+    }
+
+    pub(super) fn start_profile_model_test(&mut self) {
+        if self.background.model_test_running {
+            self.status = "A model test is already running".into();
+            return;
+        }
+        let Some(Modal::Profile(form)) = &self.modal else {
+            return;
+        };
+        let (profile, models) = match form.model_test_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.set_error(format!("Cannot test model: {error}"));
+                return;
+            }
+        };
+        let name = format!("{} / {}", profile.name, models.join(", "));
+        self.status = format!("Testing {name}…");
+        self.status_error = false;
+        self.background.model_test_running = true;
+        self.background.spawn(move || {
+            let started = Instant::now();
+            let result = models
+                .iter()
+                .try_for_each(|model| {
+                    discovery::test_model(&profile, model)
+                        .map(|_| ())
+                        .with_context(|| format!("{model} failed"))
+                })
+                .map(|_| started.elapsed().as_millis());
+            Completion::ModelTest { name, result }
+        });
+    }
+
     pub(super) fn fetch_profile_models(&mut self) {
         let Some(Modal::Profile(form)) = &mut self.modal else {
             return;
@@ -186,6 +269,38 @@ impl App {
         while let Ok(completion) = self.background.receiver.try_recv() {
             changed = true;
             match completion {
+                Completion::ConnectionTest(result) => {
+                    self.background.model_test_running = false;
+                    match result {
+                        Ok((code, ms)) => {
+                            self.status_error = false;
+                            let detail = match code {
+                                200..=299 => "HTTP reachable; use model Test to check inference",
+                                300..=399 => "redirect received (not followed)",
+                                401 | 403 => "server reachable; authentication rejected",
+                                404 | 405 => "server reachable; base path has no GET endpoint",
+                                _ => "server reachable; HTTP error returned",
+                            };
+                            self.status = format!("Base URL · HTTP {code} · {ms} ms · {detail}");
+                        }
+                        Err(error) => self.set_error(format!("Base URL unreachable: {error}")),
+                    }
+                }
+
+                Completion::ModelTest { name, result } => {
+                    self.background.model_test_running = false;
+                    match result {
+                        Ok(ms) => {
+                            self.status_error = false;
+                            self.status =
+                                format!("Model test passed · {name} responded in {ms} ms");
+                        }
+                        Err(error) => {
+                            self.set_error(format!("Model test failed · {name}: {error:#}"))
+                        }
+                    }
+                }
+
                 Completion::ProfileDiscover {
                     instance,
                     profile,
@@ -323,9 +438,16 @@ impl App {
                             self.background.connected = true;
                             self.background.status = status.unwrap_or(sync::Status::Pending);
                             self.status_error = false;
-                            self.status = format!("Synced {} models to Claude", result.model_count);
+                            self.status = format!(
+                                "Synced {} models and client settings to Claude · restart for startup settings",
+                                result.model_count
+                            );
                             if self.background.status == sync::Status::Pending {
-                                self.queue_sync(false, None);
+                                if result.model_count > 0 {
+                                    self.queue_sync(false, None);
+                                } else {
+                                    self.status = "Client settings pending · enable a model and sync to apply".into();
+                                }
                             }
                         }
                         Err(error) => {
@@ -503,6 +625,7 @@ mod tests {
                 result: Ok(vec![ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "stale-form-model".into(),
                     label: None,
                     description: None,
@@ -527,6 +650,7 @@ mod tests {
                 result: Ok(vec![ModelEntry {
                     max_output_tokens: None,
                     context_window: None,
+                    reasoning_max: None,
                     id: "wrong-endpoint-model".into(),
                     label: None,
                     description: None,

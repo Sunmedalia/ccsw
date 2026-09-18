@@ -1,4 +1,5 @@
 mod claude_config;
+mod claude_preferences;
 mod codex;
 mod config;
 mod discovery;

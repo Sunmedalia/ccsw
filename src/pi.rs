@@ -646,6 +646,7 @@ fn parse_provider(name: &str, value: &Value, auth: &Value) -> Result<Profile> {
             }
         }
         let entry = ModelEntry {
+            reasoning_max: None,
             id: m["id"].as_str().context("model ID missing")?.into(),
             label: m["name"].as_str().map(String::from),
             description: None,

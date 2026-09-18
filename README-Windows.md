@@ -107,3 +107,10 @@ cargo build --locked --release --target x86_64-pc-windows-msvc --bin ccsw
 打包和 npm 测试脚本使用 PowerShell 7（`pwsh`）；日常运行及上述安装示例兼容 PowerShell 5.1。构建启用静态 CRT，使用控制台子系统，并嵌入长路径感知 manifest。不自动修改系统长路径策略；UNC/网络文件系统的可达性、锁和权限取决于系统配置。
 
 `test-support` 仅启用回归辅助程序；发布包不包含它。CI 检查 Rust 1.88、执行 Windows 原生回归、生成真实 npm shim，检查 PE 导入，再验证解压后的程序。Windows Server runner 的通过结果不能替代 Windows 10/11 桌面交互和实际登录自启验收；工作区验证记录见 `tests/WINDOWS_VALIDATION.md`。
+
+
+## v0.1.11 客户端设置与测试
+
+Claude 页底部 **Settings / F4** 管理客户端预设及自定义环境变量，保存后随转发同步。新增或编辑 Provider 时，Base URL 后的 **Test** 无需填写凭据即可检测 HTTP 连通性；模型行的 **Test / F5** 使用当前草稿发送一次简短推理请求。模型行 **[1m]** 高亮表示已启用，灰色表示关闭。
+
+配置格式升级为 5。更新 EXE 后重新打开 CCSW 并启动/同步代理；新版会通过认证接口替换不兼容的旧代理。不要使用仅支持格式 4 的旧版程序写回已升级的配置。
