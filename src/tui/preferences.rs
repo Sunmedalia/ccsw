@@ -69,7 +69,7 @@ impl PreferencesForm {
                 settings.env.insert((*key).into(), value.clone());
             }
         }
-        for pair in self.fields[6..].chunks_exact(2) {
+        for pair in self.fields[6..].as_chunks::<2>().0 {
             let key = pair[0].value.trim();
             if key.is_empty() {
                 anyhow::bail!("Enter a variable name or remove the empty row with Alt+D");
@@ -178,16 +178,17 @@ impl App {
             }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-            if let Some((index, preset)) =
-                form.fields[6..]
-                    .chunks_exact(2)
-                    .enumerate()
-                    .find_map(|(i, pair)| {
-                        PRESETS
-                            .iter()
-                            .position(|(_, key)| *key == pair[0].value.trim())
-                            .map(|preset| (6 + i * 2, preset + 1))
-                    })
+            if let Some((index, preset)) = form.fields[6..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .enumerate()
+                .find_map(|(i, pair)| {
+                    PRESETS
+                        .iter()
+                        .position(|(_, key)| *key == pair[0].value.trim())
+                        .map(|preset| (6 + i * 2, preset + 1))
+                })
             {
                 let value = form.fields[index + 1].value.clone();
                 form.fields[preset].value = value;
