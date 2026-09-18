@@ -161,10 +161,10 @@ impl App {
                 Ok(result) => {
                     match result {
                         Ok(snapshot) => {
-                            if let Some(page) = &mut self.usage.page {
-                                if page.follow_today {
-                                    page.day = snapshot.today();
-                                }
+                            if let Some(page) = &mut self.usage.page
+                                && page.follow_today
+                            {
+                                page.day = snapshot.today();
                             }
                             self.usage.snapshot = snapshot;
                             self.usage.error = None;

@@ -418,14 +418,14 @@ impl App {
                 page.section = 3;
                 page.scroll = 0;
             }
-        } else if page.section == 1 {
-            if let Some((day, _)) = self.usage_history(page).get(page.scroll as usize) {
-                page.day = day.clone();
-                page.follow_today = page.day == self.usage.snapshot.today();
-                page.section = 3;
-                page.range = 0;
-                page.scroll = 0;
-            }
+        } else if page.section == 1
+            && let Some((day, _)) = self.usage_history(page).get(page.scroll as usize)
+        {
+            page.day = day.clone();
+            page.follow_today = page.day == self.usage.snapshot.today();
+            page.section = 3;
+            page.range = 0;
+            page.scroll = 0;
         }
     }
 
