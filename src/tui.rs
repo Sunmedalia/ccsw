@@ -65,6 +65,21 @@ const WARNING: Color = Color::Rgb(255, 215, 95);
 const ERROR: Color = Color::Rgb(255, 107, 107);
 const MUTED: Color = Color::Rgb(128, 138, 148);
 
+/// Shared button states across pages and dialogs.
+fn button_style(selected: bool, disabled: bool, destructive: bool) -> Style {
+    let accent = if destructive { ERROR } else { ROUTE };
+    if disabled {
+        Style::default().fg(MUTED).add_modifier(Modifier::DIM)
+    } else if selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(accent)
+    }
+}
+
 pub struct App {
     paths: AppPaths,
     config: Config,

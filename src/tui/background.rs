@@ -10,8 +10,9 @@ pub(super) struct SyncRequest {
     preferred: Option<String>,
 }
 enum Completion {
-    ConnectionTest(Result<(u16, u128)>),
+    ConnectionTest(uuid::Uuid, Result<(u16, u128)>),
     ModelTest {
+        instance: Option<uuid::Uuid>,
         name: String,
         result: Result<u128>,
     },
@@ -78,6 +79,14 @@ impl Background {
     }
 }
 impl App {
+    fn record_profile_test_message(&mut self, instance: Option<uuid::Uuid>) {
+        if let Some(Modal::Profile(form)) = &mut self.modal
+            && instance == Some(form.instance)
+        {
+            form.test_message = Some((self.status.clone(), self.status_error));
+        }
+    }
+
     pub(super) fn start_model_test(&mut self) {
         if self.background.model_test_running {
             self.status = "A model test is already running".into();
@@ -94,12 +103,22 @@ impl App {
         self.status_error = false;
         self.background.model_test_running = true;
         self.background.spawn(move || Completion::ModelTest {
+            instance: None,
             name,
             result: discovery::test_model(&profile, &model.id),
         });
     }
 
     pub(super) fn start_profile_connection_test(&mut self) {
+        let instance = match &self.modal {
+            Some(Modal::Profile(form)) => form.instance,
+            _ => return,
+        };
+        self.start_profile_connection_test_inner();
+        self.record_profile_test_message(Some(instance));
+    }
+
+    fn start_profile_connection_test_inner(&mut self) {
         if self.background.model_test_running {
             self.status = "A test is already running".into();
             return;
@@ -107,6 +126,7 @@ impl App {
         let Some(Modal::Profile(form)) = &self.modal else {
             return;
         };
+        let instance = form.instance;
         let profile = match form.connection_test_profile() {
             Ok(profile) => profile,
             Err(error) => {
@@ -117,11 +137,21 @@ impl App {
         self.status_error = false;
         self.status = "Testing Base URL connectivity…".into();
         self.background.model_test_running = true;
-        self.background
-            .spawn(move || Completion::ConnectionTest(discovery::test_connection(&profile)));
+        self.background.spawn(move || {
+            Completion::ConnectionTest(instance, discovery::test_connection(&profile))
+        });
     }
 
     pub(super) fn start_profile_model_test(&mut self) {
+        let instance = match &self.modal {
+            Some(Modal::Profile(form)) => form.instance,
+            _ => return,
+        };
+        self.start_profile_model_test_inner();
+        self.record_profile_test_message(Some(instance));
+    }
+
+    fn start_profile_model_test_inner(&mut self) {
         if self.background.model_test_running {
             self.status = "A model test is already running".into();
             return;
@@ -129,6 +159,7 @@ impl App {
         let Some(Modal::Profile(form)) = &self.modal else {
             return;
         };
+        let instance = form.instance;
         let (profile, models) = match form.model_test_request() {
             Ok(request) => request,
             Err(error) => {
@@ -150,7 +181,11 @@ impl App {
                         .with_context(|| format!("{model} failed"))
                 })
                 .map(|_| started.elapsed().as_millis());
-            Completion::ModelTest { name, result }
+            Completion::ModelTest {
+                instance: Some(instance),
+                name,
+                result,
+            }
         });
     }
 
@@ -269,7 +304,7 @@ impl App {
         while let Ok(completion) = self.background.receiver.try_recv() {
             changed = true;
             match completion {
-                Completion::ConnectionTest(result) => {
+                Completion::ConnectionTest(instance, result) => {
                     self.background.model_test_running = false;
                     match result {
                         Ok((code, ms)) => {
@@ -285,9 +320,14 @@ impl App {
                         }
                         Err(error) => self.set_error(format!("Base URL unreachable: {error}")),
                     }
+                    self.record_profile_test_message(Some(instance));
                 }
 
-                Completion::ModelTest { name, result } => {
+                Completion::ModelTest {
+                    instance,
+                    name,
+                    result,
+                } => {
                     self.background.model_test_running = false;
                     match result {
                         Ok(ms) => {
@@ -299,6 +339,7 @@ impl App {
                             self.set_error(format!("Model test failed · {name}: {error:#}"))
                         }
                     }
+                    self.record_profile_test_message(instance);
                 }
 
                 Completion::ProfileDiscover {

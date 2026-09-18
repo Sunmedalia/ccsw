@@ -82,6 +82,7 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 10),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
+        (FooterControl::DeleteProfile, 12),
         (FooterControl::Quit, 8),
     ];
     pub(super) const HOME_COMPACT: &[(FooterControl, u16)] = &[
@@ -90,6 +91,7 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 7),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
+        (FooterControl::DeleteProfile, 7),
         (FooterControl::Quit, 5),
     ];
     pub(super) const PROVIDER_WIDE: &[(FooterControl, u16)] = &[
@@ -100,7 +102,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 10),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
-        (FooterControl::Quit, 8),
     ];
     pub(super) const PROVIDER_COMPACT: &[(FooterControl, u16)] = &[
         (FooterControl::Back, 8),
@@ -110,7 +111,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 7),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
-        (FooterControl::Quit, 5),
     ];
     pub(super) const HOME_TINY: &[(FooterControl, u16)] = &[
         (FooterControl::AddProfile, 7),
@@ -118,6 +118,7 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 5),
         (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
+        (FooterControl::DeleteProfile, 7),
         (FooterControl::Quit, 3),
     ];
     pub(super) const PROVIDER_TINY: &[(FooterControl, u16)] = &[
@@ -128,7 +129,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 5),
         (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
-        (FooterControl::Quit, 3),
     ];
     pub(super) const ALL_WIDE: &[(FooterControl, u16)] = &[
         (FooterControl::Back, 14),
@@ -136,7 +136,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 10),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 8),
-        (FooterControl::Quit, 8),
     ];
     pub(super) const ALL_COMPACT: &[(FooterControl, u16)] = &[
         (FooterControl::Back, 8),
@@ -144,7 +143,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 7),
         (FooterControl::Settings, 8),
         (FooterControl::Help, 5),
-        (FooterControl::Quit, 5),
     ];
     pub(super) const ALL_TINY: &[(FooterControl, u16)] = &[
         (FooterControl::Back, 6),
@@ -152,7 +150,6 @@ pub(super) fn footer_controls(
         (FooterControl::Proxy, 5),
         (FooterControl::Settings, 4),
         (FooterControl::Help, 3),
-        (FooterControl::Quit, 3),
     ];
     let specs = match (view_mode, compact, area.width < 55) {
         (ViewMode::Home, _, true) => HOME_TINY,
@@ -270,45 +267,55 @@ pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
     if inner.height == 0 || inner.width < 8 {
         return vec![];
     }
-    let y = inner.y + inner.height.saturating_sub(1);
-    if inner.width >= 28 {
-        let first_width = inner.width / 2;
-        vec![
+    let y = inner.bottom().saturating_sub(1);
+    let controls = [
+        DetailControl::FetchModels,
+        DetailControl::Edit,
+        DetailControl::Delete,
+    ];
+    let width = inner.width / 3;
+    controls
+        .into_iter()
+        .enumerate()
+        .map(|(index, control)| {
+            let x = inner.x + index as u16 * width;
             (
-                DetailControl::FetchModels,
-                Rect::new(inner.x, y, first_width, 1),
-            ),
-            (
-                DetailControl::Edit,
-                Rect::new(
-                    inner.x.saturating_add(first_width),
-                    y,
-                    inner.width.saturating_sub(first_width),
-                    1,
-                ),
-            ),
-        ]
-    } else {
-        vec![(DetailControl::Edit, Rect::new(inner.x, y, inner.width, 1))]
-    }
+                control,
+                Rect::new(x, y, if index == 2 { inner.right() - x } else { width }, 1),
+            )
+        })
+        .collect()
 }
 
 pub(super) fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
     for (control, rect) in detail_controls(area) {
-        let (label, style) = match control {
-            DetailControl::FetchModels => (
-                "[Fetch models (r)]",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(ROUTE)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            DetailControl::Edit => ("[Edit provider (E)]", Style::default().fg(WARNING)),
+        let label = match control {
+            DetailControl::FetchModels => {
+                if rect.width >= 17 {
+                    "[Fetch models (r)]"
+                } else {
+                    "[r Fetch]"
+                }
+            }
+            DetailControl::Edit => {
+                if rect.width >= 19 {
+                    "[Edit provider (E)]"
+                } else {
+                    "[E Edit]"
+                }
+            }
+            DetailControl::Delete => {
+                if rect.width >= 21 {
+                    "[Delete provider (x)]"
+                } else {
+                    "[x Delete]"
+                }
+            }
         };
         frame.render_widget(
             Paragraph::new(label)
                 .alignment(Alignment::Center)
-                .style(style),
+                .style(button_style(false, false, control == DetailControl::Delete)),
             rect,
         );
     }
@@ -434,14 +441,8 @@ pub(super) fn draw_modal_buttons(frame: &mut ratatui::Frame, area: Rect, labels:
         .zip(labels.iter())
         .enumerate()
     {
-        let style = if index == 0 {
-            Style::default()
-                .fg(Color::Black)
-                .bg(ROUTE)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(MUTED)
-        };
+        let destructive = label.starts_with("Delete") || label.starts_with("Discard");
+        let style = button_style(index == 0, false, destructive);
         frame.render_widget(
             Paragraph::new(format!("[{label}]"))
                 .alignment(Alignment::Center)

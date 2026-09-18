@@ -70,11 +70,19 @@ impl App {
     }
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
+            && self.view_mode == ViewMode::Home
+            && self.modal.is_none()
+            && !self.codex_ui.accounts
+        {
             self.codex_ui
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(true);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Ok(false);
         }
         if self.modal.is_none()
             && let Some(quit) = self.handle_pi_key(key)?
@@ -125,7 +133,6 @@ impl App {
                 _ => {}
             },
             ViewMode::AllEnabled => match key.code {
-                KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('?') => self.open_help(),
                 KeyCode::Esc | KeyCode::Char('h') => self.return_home(),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -191,7 +198,6 @@ impl App {
                     }
                 } else {
                     match key.code {
-                        KeyCode::Char('q') => return Ok(true),
                         KeyCode::Char('?') => self.open_help(),
                         KeyCode::Esc => {
                             self.return_home();
@@ -325,6 +331,9 @@ impl App {
                         }
                         KeyCode::Char('a') if self.selected_profile().is_some() => {
                             self.open_add_model_modal();
+                        }
+                        KeyCode::Char('x') if self.focus == Focus::Details => {
+                            self.modal = Some(Modal::DeleteProfile);
                         }
                         KeyCode::Char('x') => {
                             self.delete_selected_model();
@@ -491,6 +500,8 @@ impl App {
                                         offset + usize::from(mouse.row.saturating_sub(inner_y));
                                     let filtered = editor.filtered_indices();
                                     if index < filtered.len() {
+                                        let was_selected =
+                                            editor.selected == index && !editor.search_active;
                                         editor.selected = index;
                                         let should_toggle = !pi && mouse.column < list_area.x + 4;
                                         if should_toggle {
@@ -498,7 +509,7 @@ impl App {
                                         } else {
                                             editor.search_active = false;
                                         }
-                                        Some((index, should_toggle))
+                                        Some((index, should_toggle, was_selected))
                                     } else {
                                         None
                                     }
@@ -508,10 +519,15 @@ impl App {
                             } else {
                                 None
                             };
-                            if let Some((index, should_toggle)) = clicked {
+                            if let Some((index, should_toggle, was_selected)) = clicked {
                                 self.model_idx = index;
                                 if should_toggle {
                                     self.commit_provider_editor()?;
+                                } else if was_selected
+                                    && mouse.column >= list_area.x + 4
+                                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                                {
+                                    self.edit_model();
                                 }
                                 return Ok(MouseAction::None);
                             }
@@ -560,6 +576,10 @@ impl App {
                         }
                         FooterControl::Details => {
                             self.focus = Focus::Details;
+                            MouseAction::None
+                        }
+                        FooterControl::DeleteProfile => {
+                            self.modal = Some(Modal::DeleteProfile);
                             MouseAction::None
                         }
                         FooterControl::AddProfile => {
@@ -725,6 +745,7 @@ impl App {
                                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                         {
                             match control {
+                                DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
                                 DetailControl::FetchModels => {
                                     self.refresh_models();
                                     self.init_provider_editor();
@@ -740,6 +761,7 @@ impl App {
                         .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                     {
                         match control {
+                            DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
                             DetailControl::FetchModels => {
                                 self.refresh_models();
                             }
@@ -1049,6 +1071,9 @@ impl App {
                         form.selected = index;
                         if form.fields[index].toggle {
                             toggle_form_field(&mut form.fields[index]);
+                        } else if !form.fields[index].choices.is_empty() {
+                            let value_x = form_inner.x + (form_inner.width / 3).min(17) + 2;
+                            cycle_choice(&mut form.fields[index], mouse.column > value_x);
                         }
                     }
                 } else if contains(api_area, mouse.column, mouse.row) {
@@ -1170,85 +1195,78 @@ impl App {
                         (self.selected_profile_id(), self.selected_model())
                     {
                         let model_base = canonical_model_id(&model.id);
-                        let is_manual = self.config.profiles[&profile_id]
-                            .models
-                            .iter()
-                            .any(|entry| canonical_model_id(&entry.id) == model_base);
-                        if !is_manual {
+                        let model_id = model.id.clone();
+                        let deleting_default =
+                            canonical_model_id(&self.config.profiles[&profile_id].default_model)
+                                == model_base;
+                        let replacement = self.provider_editor.as_ref().and_then(|editor| {
+                            editor
+                                .catalog
+                                .iter()
+                                .find(|entry| {
+                                    canonical_model_id(&entry.id) != model_base
+                                        && editor.is_enabled(&entry.id)
+                                })
+                                .or_else(|| {
+                                    editor
+                                        .catalog
+                                        .iter()
+                                        .find(|entry| canonical_model_id(&entry.id) != model_base)
+                                })
+                                .map(|entry| editor.effective_id(&entry.id))
+                        });
+                        if deleting_default && replacement.is_none() {
                             self.set_error(
-                                "Gateway models cannot be deleted · use Space to disable them",
+                                "The only model cannot be deleted · add another model first",
                             );
-                        } else {
-                            let model_id = model.id.clone();
-                            let deleting_default = canonical_model_id(
-                                &self.config.profiles[&profile_id].default_model,
-                            ) == model_base;
-                            let replacement = self.provider_editor.as_ref().and_then(|editor| {
-                                editor
-                                    .catalog
-                                    .iter()
-                                    .find(|entry| {
-                                        entry.id != model_base && editor.is_enabled(&entry.id)
-                                    })
-                                    .or_else(|| {
-                                        editor.catalog.iter().find(|entry| entry.id != model_base)
-                                    })
-                                    .map(|entry| editor.effective_id(&entry.id))
-                            });
-                            if deleting_default && replacement.is_none() {
-                                self.set_error(
-                                    "The only model cannot be deleted · add another model first",
-                                );
-                                return Ok(());
+                            return Ok(());
+                        }
+                        let original = self.config.profiles[&profile_id].clone();
+                        let mut edited = original.clone();
+                        {
+                            let profile = &mut edited;
+                            profile
+                                .models
+                                .retain(|entry| canonical_model_id(&entry.id) != model_base);
+                            profile
+                                .enabled_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            profile
+                                .disabled_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            for alias in [
+                                &mut profile.aliases.opus,
+                                &mut profile.aliases.sonnet,
+                                &mut profile.aliases.haiku,
+                                &mut profile.aliases.fable,
+                                &mut profile.subagent_model,
+                            ] {
+                                if alias
+                                    .as_ref()
+                                    .is_some_and(|id| canonical_model_id(id) == model_base)
+                                {
+                                    *alias = None;
+                                }
                             }
-                            let original = self.config.profiles[&profile_id].clone();
-                            let mut edited = original.clone();
+                            profile
+                                .fallback_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            if let Some(replacement) = &replacement
+                                && deleting_default
                             {
-                                let profile = &mut edited;
-                                profile
-                                    .models
-                                    .retain(|entry| canonical_model_id(&entry.id) != model_base);
-                                profile
-                                    .enabled_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
+                                let replacement_base = canonical_model_id(replacement);
                                 profile
                                     .disabled_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
-                                for alias in [
-                                    &mut profile.aliases.opus,
-                                    &mut profile.aliases.sonnet,
-                                    &mut profile.aliases.haiku,
-                                    &mut profile.aliases.fable,
-                                    &mut profile.subagent_model,
-                                ] {
-                                    if alias
-                                        .as_ref()
-                                        .is_some_and(|id| canonical_model_id(id) == model_base)
-                                    {
-                                        *alias = None;
-                                    }
-                                }
-                                profile
-                                    .fallback_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
-                                if let Some(replacement) = &replacement
-                                    && deleting_default
-                                {
-                                    let replacement_base = canonical_model_id(replacement);
-                                    profile
-                                        .disabled_models
-                                        .retain(|id| canonical_model_id(id) != replacement_base);
-                                    profile.default_model = replacement.clone();
-                                }
+                                    .retain(|id| canonical_model_id(id) != replacement_base);
+                                profile.default_model = replacement.clone();
                             }
-                            self.config =
-                                self.update_client_profile(&profile_id, &original, &edited)?;
-                            self.model_idx =
-                                self.model_idx.min(self.models().len().saturating_sub(1));
-                            self.status_error = false;
-                            self.status = format!("Deleted custom model {model_id}");
-                            self.init_provider_editor();
                         }
+                        self.config =
+                            self.update_client_profile(&profile_id, &original, &edited)?;
+                        self.model_idx = self.model_idx.min(self.models().len().saturating_sub(1));
+                        self.status_error = false;
+                        self.status = format!("Deleted model {model_id}");
+                        self.init_provider_editor();
                     }
                     return Ok(());
                 }

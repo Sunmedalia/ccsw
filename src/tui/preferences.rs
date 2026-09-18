@@ -312,7 +312,11 @@ pub(super) fn draw_preferences(frame: &mut ratatui::Frame, area: Rect, form: &Pr
         .zip(preference_actions(area))
     {
         frame.render_widget(
-            Paragraph::new(format!("[{label}]")).style(Style::default().fg(MUTED)),
+            Paragraph::new(format!("[{label}]")).style(button_style(
+                false,
+                false,
+                label == "Delete" || label == "Disconnect",
+            )),
             rect,
         );
     }

@@ -7,7 +7,14 @@ impl App {
         if area.width < 40 || area.height < 12 {
             frame.render_widget(
                 Paragraph::new(
-                    "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit",
+                    if self.view_mode == ViewMode::Home
+                        && self.modal.is_none()
+                        && !self.codex_ui.accounts
+                    {
+                        "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit"
+                    } else {
+                        "CCSW · Terminal too small\nResize to at least 40 × 12\nEsc to go back"
+                    },
                 )
                 .wrap(Wrap { trim: false }),
                 area,
@@ -58,13 +65,7 @@ impl App {
             .unwrap_or_else(|| "no model".into());
         let line = match self.view_mode {
             ViewMode::Home => Line::from(vec![
-                Span::styled(
-                    " CCSW ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" CCSW ", button_style(false, false, false)),
                 Span::styled(
                     format!("  Providers · F2 {}", self.client_tab().next().label()),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -78,13 +79,7 @@ impl App {
                 ),
             ]),
             ViewMode::Provider => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
                 Span::styled(
                     format!("  {profile}  "),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -96,13 +91,7 @@ impl App {
                 ),
             ]),
             ViewMode::AllEnabled => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
                 Span::styled(
                     "  All Models",
                     Style::default().add_modifier(Modifier::BOLD),
@@ -391,12 +380,9 @@ impl App {
                         "[+ a]"
                     };
                     frame.render_widget(
-                        Paragraph::new(label).alignment(Alignment::Center).style(
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(CONNECTED)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        Paragraph::new(label)
+                            .alignment(Alignment::Center)
+                            .style(button_style(false, false, false)),
                         btn_rect,
                     );
                 }
@@ -418,16 +404,6 @@ impl App {
                 return;
             }
 
-            let manual_map = self
-                .selected_profile()
-                .map(|p| {
-                    p.models
-                        .iter()
-                        .map(|m| (config::canonical_model_id(&m.id), ()))
-                        .collect::<BTreeMap<_, _>>()
-                })
-                .unwrap_or_default();
-
             let items: Vec<ListItem> = filtered
                 .iter()
                 .map(|&idx| {
@@ -435,7 +411,6 @@ impl App {
                     let is_en = editor.is_enabled(&model.id);
                     let is_1m = editor.one_m.contains(&model.id);
                     let is_def = model.id == editor.default_model;
-                    let is_man = manual_map.contains_key(model.id.as_str());
                     let is_req = editor.is_required(&model.id) && !is_def;
 
                     let marker = if is_def && is_en {
@@ -459,7 +434,7 @@ impl App {
                         MUTED
                     };
 
-                    let mut spans = vec![
+                    let spans = vec![
                         Span::styled(
                             format!("{marker} "),
                             Style::default()
@@ -480,9 +455,6 @@ impl App {
                             Style::default().fg(CONNECTED),
                         ),
                     ];
-                    if is_man && inner.width >= 60 {
-                        spans.push(Span::styled(" [custom]", Style::default().fg(ROUTE)));
-                    }
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
@@ -599,10 +571,6 @@ impl App {
         let is_default = model.id == editor.default_model;
         let is_enabled = editor.is_enabled(&model.id);
         let is_1m = editor.one_m.contains(&model.id);
-        let is_manual = profile
-            .models
-            .iter()
-            .any(|m| canonical_model_id(&m.id) == model.id);
         let alias = profile
             .aliases
             .iter()
@@ -668,15 +636,11 @@ impl App {
                     Style::default().fg(if is_1m { CONNECTED } else { MUTED }),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(" Source: ", Style::default().fg(MUTED)),
-                Span::raw(if is_manual { "Custom" } else { "Gateway" }),
-                if let Some(alias) = alias {
-                    Span::styled(format!("   Role: {alias}"), Style::default().fg(ROUTE))
-                } else {
-                    Span::raw("")
-                },
-            ]),
+            Line::from(vec![if let Some(alias) = alias {
+                Span::styled(format!("   Role: {alias}"), Style::default().fg(ROUTE))
+            } else {
+                Span::raw("")
+            }]),
         ];
         let controls = showcase_controls(area, self.pi_enabled);
         let controls_top = controls
@@ -697,14 +661,17 @@ impl App {
             let (label, style) = match control {
                 ShowcaseControl::Toggle => (
                     if is_enabled {
-                        "[Space Disable]"
+                        "[● Disable (Space)]"
                     } else {
-                        "[Space Enable]"
+                        "[○ Enable (Space)]"
                     },
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
+                        .fg(if is_enabled { ROUTE } else { MUTED })
+                        .add_modifier(if is_enabled {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 ShowcaseControl::Default => (
                     if self.pi_enabled {
@@ -712,28 +679,24 @@ impl App {
                     } else {
                         "[d Set default]"
                     },
-                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    button_style(false, false, false),
                 ),
                 ShowcaseControl::OneM => (
                     if is_1m {
-                        "[1 Disable 1M]"
+                        "[● 1M (1)]"
                     } else {
-                        "[1 Enable 1M]"
+                        "[○ 1M (1)]"
                     },
-                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(if is_1m { ROUTE } else { MUTED })
+                        .add_modifier(if is_1m {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
-                ShowcaseControl::Test => (
-                    "[F5 Test model]",
-                    Style::default().fg(CONNECTED).add_modifier(Modifier::BOLD),
-                ),
-                ShowcaseControl::Delete => (
-                    if is_manual {
-                        "[x Delete]"
-                    } else {
-                        "[Gateway model]"
-                    },
-                    Style::default().fg(if is_manual { ERROR } else { MUTED }),
-                ),
+                ShowcaseControl::Test => ("[F5 Test model]", button_style(false, false, false)),
+                ShowcaseControl::Delete => ("[Delete model]", button_style(false, false, true)),
             };
             frame.render_widget(
                 Paragraph::new(label)
@@ -895,7 +858,11 @@ impl App {
 
     pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
         for (control, rect) in self.client_footer_controls(area, compact) {
-            let (label, style) = self.footer_control_style(control, compact, area.width < 55);
+            let (label, style) = self.footer_control_style(
+                control,
+                compact,
+                self.footer_uses_short_labels(area, compact),
+            );
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)
@@ -945,117 +912,41 @@ impl App {
     pub(super) fn footer_control_style(
         &self,
         control: FooterControl,
-        compact: bool,
+        _compact: bool,
         tiny: bool,
     ) -> (String, Style) {
-        if self.pi_enabled && control == FooterControl::Sync {
-            return (
-                if tiny {
-                    "Use".into()
-                } else {
-                    "Set default".into()
-                },
-                Style::default().fg(Color::Black).bg(ROUTE),
-            );
-        }
-        if self.codex_ui.enabled && control == FooterControl::Sync {
-            return (
-                if tiny {
-                    "Apply".into()
-                } else {
-                    "Apply Codex".into()
-                },
-                Style::default().fg(Color::Black).bg(ROUTE),
-            );
-        }
         let selected = match control {
             FooterControl::Models => self.focus == Focus::Models,
             FooterControl::Details => self.focus == Focus::Details,
             _ => false,
         };
-        let dot = if selected { '●' } else { '○' };
-        let label = match (control, compact, tiny) {
-            (FooterControl::Back, _, true) => "‹".into(),
-            (FooterControl::Models, _, true) => format!("{dot} M"),
-            (FooterControl::Details, _, true) => format!("{dot} D"),
-            (FooterControl::AddProfile, _, true) => "+".into(),
-            (FooterControl::Sync, _, true) => "⇄".into(),
-            (FooterControl::Proxy, _, true) => "Px".into(),
-            (FooterControl::Settings, _, true) => "F4".into(),
-            (FooterControl::Settings, _, false) => "Settings".into(),
-            (FooterControl::Help, _, true) => "?".into(),
-            (FooterControl::Quit, _, true) => "×".into(),
-            (FooterControl::Back, true, false) => "‹ Back".into(),
-            (FooterControl::Back, false, false) => "‹ Back (Esc)".into(),
-            (FooterControl::Models, _, false) => format!("{dot} Models"),
-            (FooterControl::Details, _, false) => format!("{dot} Details"),
-            (FooterControl::AddProfile, true, false) => "+ Provider".into(),
-            (FooterControl::AddProfile, false, false) => "+ Provider (n)".into(),
-            (FooterControl::Sync, true, false) => "⇄ Sync".into(),
-            (FooterControl::Sync, false, false) => "⇄ Sync all".into(),
-            (FooterControl::Proxy, true, false) => format!(
-                "{} Px",
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    '●'
+        let (name, shortcut) = match control {
+            FooterControl::AddProfile => ("+ Provider", "n"),
+            FooterControl::DeleteProfile => ("Delete", "x"),
+            FooterControl::Back => ("Back", "Esc"),
+            FooterControl::Models => ("Models", "h"),
+            FooterControl::Details => ("Details", "l"),
+            FooterControl::Sync => (
+                if self.pi_enabled {
+                    "Set default"
+                } else if self.codex_ui.enabled {
+                    "Apply"
                 } else {
-                    '○'
-                }
-            ),
-            (FooterControl::Proxy, false, false) => format!(
-                "{} Proxy",
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    '●'
-                } else {
-                    '○'
-                }
-            ),
-            (FooterControl::Help, true, false) => "?".into(),
-            (FooterControl::Help, false, false) => "Help".into(),
-            (FooterControl::Quit, true, false) => "×".into(),
-            (FooterControl::Quit, false, false) => "Quit".into(),
-        };
-        let style = if control == FooterControl::Back {
-            Style::default()
-                .fg(Color::Black)
-                .bg(ROUTE)
-                .add_modifier(Modifier::BOLD)
-        } else if matches!(control, FooterControl::AddProfile | FooterControl::Sync) {
-            Style::default()
-                .fg(Color::Black)
-                .bg(if control == FooterControl::AddProfile {
-                    CONNECTED
-                } else {
-                    ROUTE
-                })
-                .add_modifier(Modifier::BOLD)
-        } else if selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(CONNECTED)
-                .add_modifier(Modifier::BOLD)
-        } else if control == FooterControl::Proxy {
-            Style::default().fg(
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    CONNECTED
-                } else {
-                    WARNING
+                    "Sync"
                 },
-            )
-        } else {
-            Style::default().fg(MUTED)
+                "p",
+            ),
+            FooterControl::Proxy => ("Proxy", "P"),
+            FooterControl::Settings => ("Settings", "F4"),
+            FooterControl::Help => ("Help", "?"),
+            FooterControl::Quit => ("Quit", "q"),
         };
+        let label = if tiny {
+            format!("({shortcut})")
+        } else {
+            format!("{name} ({shortcut})")
+        };
+        let style = button_style(selected, false, control == FooterControl::DeleteProfile);
         (label, style)
     }
 
@@ -1185,13 +1076,19 @@ impl App {
                 );
                 let inner = panel_inner(area);
                 frame.render_widget(
-                    Paragraph::new(self.status.as_str())
-                        .style(Style::default().fg(if self.status_error {
+                    Paragraph::new(
+                        form.test_message
+                            .as_ref()
+                            .map_or("", |(message, _)| message.as_str()),
+                    )
+                    .style(Style::default().fg(
+                        if form.test_message.as_ref().is_some_and(|(_, error)| *error) {
                             ERROR
                         } else {
                             CONNECTED
-                        }))
-                        .wrap(Wrap { trim: false }),
+                        },
+                    ))
+                    .wrap(Wrap { trim: false }),
                     Rect::new(inner.x, inner.bottom().saturating_sub(4), inner.width, 2),
                 );
                 draw_modal_buttons(
@@ -1246,13 +1143,13 @@ impl App {
                 draw_confirmation(
                     frame,
                     area,
-                    "Delete this manual model? Gateway models cannot be deleted here.",
+                    "Delete this model from the provider? Its role assignments will also be removed.",
                 );
                 draw_modal_buttons(frame, area, &["Delete", "Cancel"]);
             }
             Modal::Help(help) => draw_help(frame, area, help),
         }
-        if self.status_error && area.height >= 5 {
+        if self.status_error && area.height >= 5 && !matches!(modal, Modal::Profile(_)) {
             let rect = Rect::new(
                 area.x + 1,
                 area.y + area.height - 4,

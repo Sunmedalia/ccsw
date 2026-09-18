@@ -954,22 +954,8 @@ impl App {
     }
 
     pub(super) fn delete_selected_model(&mut self) {
-        let Some(model) = self.selected_model() else {
-            return;
-        };
-        let base_id = canonical_model_id(&model.id);
-        let is_custom = self.selected_profile().is_some_and(|profile| {
-            profile
-                .models
-                .iter()
-                .any(|entry| canonical_model_id(&entry.id) == base_id)
-        });
-        if is_custom {
+        if self.selected_model().is_some() {
             self.modal = Some(Modal::DeleteModel);
-        } else {
-            self.set_error(
-                "Gateway models cannot be deleted · press Space to enable or disable this model",
-            );
         }
     }
 

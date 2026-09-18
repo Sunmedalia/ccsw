@@ -195,11 +195,11 @@ pub fn login(
         .context("Codex did not return a login ID")?;
     if device {
         notify(format!(
-            "Open {} and enter {}",
+            "Code: {}\nOpen: {}",
+            response["userCode"].as_str().unwrap_or(""),
             response["verificationUrl"]
                 .as_str()
-                .unwrap_or("the Codex login page"),
-            response["userCode"].as_str().unwrap_or("")
+                .unwrap_or("the Codex login page")
         ));
     } else {
         let url = response["authUrl"]
@@ -451,6 +451,24 @@ pub fn summary(paths: &AppPaths, id: &str) -> Result<String> {
         .accounts
         .get(id)
         .context("Account does not exist")?;
+    Ok(cached_summary(account))
+}
+
+fn reset_display(timestamp: u64, current: u64) -> String {
+    let date = i64::try_from(timestamp)
+        .ok()
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M %:z")
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown date".into());
+    let minutes = timestamp.saturating_sub(current).div_ceil(60);
+    format!("{date} ({}h {}min)", minutes / 60, minutes % 60)
+}
+
+pub fn cached_summary(account: &Account) -> String {
     let mut lines = vec![
         format!(
             "{} · {} · {}",
@@ -475,25 +493,35 @@ pub fn summary(paths: &AppPaths, id: &str) -> Result<String> {
     }
     for (name, bucket) in buckets {
         for window in ["primary", "secondary"] {
-            if let Some(used) = bucket[window]["usedPercent"].as_i64() {
+            if let Some(used) = bucket[window]["usedPercent"].as_f64() {
                 let reset = bucket[window]["resetsAt"]
                     .as_u64()
-                    .map(|time| format!("in {} min", time.saturating_sub(now()).div_ceil(60)))
+                    .map(|time| reset_display(time, now()))
                     .unwrap_or("unknown".into());
-                lines.push(format!("{name} {window}: {used}% used · resets {reset}"));
+                let duration = bucket[window]["windowDurationMins"]
+                    .as_u64()
+                    .map(|minutes| {
+                        if minutes > 0 && minutes % 1440 == 0 {
+                            format!("{}d", minutes / 1440)
+                        } else if minutes % 60 == 0 {
+                            format!("{}h", minutes / 60)
+                        } else {
+                            format!("{minutes}m")
+                        }
+                    })
+                    .unwrap_or_else(|| window.into());
+                lines.push(format!("{name} {duration}: {used}% used · resets {reset}"));
             }
         }
     }
-    if let Some(time) = account.refreshed_at {
-        lines.push(format!(
-            "Updated {} min ago",
-            now().saturating_sub(time) / 60
-        ));
-    }
+    lines.push(match account.refreshed_at {
+        Some(time) => format!("Last refresh: {} min ago", now().saturating_sub(time) / 60),
+        None => "Last refresh: never · r to check".into(),
+    });
     if let Some(error) = &account.error {
         lines.push(error.clone());
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 mod json_string {
@@ -599,5 +627,24 @@ mod windows_keyring_tests {
             read_live_auth(root.path(), &auto).unwrap(),
             Some(json!({"file_fallback":true}))
         );
+    }
+}
+
+#[cfg(test)]
+mod usage_display_tests {
+    use super::*;
+
+    #[test]
+    fn cached_usage_formats_windows_without_claiming_live_login() {
+        let mut account = Account::default();
+        assert!(cached_summary(&account).contains("Last refresh: never"));
+        account.limits = serde_json::json!({"rateLimits": {"primary": {"usedPercent": 12.5, "windowDurationMins": 300, "resetsAt": now() + 3600}, "secondary": {"usedPercent": 80, "windowDurationMins": 10080}}});
+        account.refreshed_at = Some(now());
+        let summary = cached_summary(&account);
+        assert!(summary.contains("5h: 12.5% used"));
+        assert!(summary.contains("7d: 80% used"));
+        assert!(summary.contains("Last refresh: 0 min ago"));
+        account.error = Some("Refresh failed; cached limits may be stale".into());
+        assert!(cached_summary(&account).contains("cached limits may be stale"));
     }
 }

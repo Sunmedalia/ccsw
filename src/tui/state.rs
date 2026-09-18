@@ -35,6 +35,7 @@ pub(super) enum FooterControl {
     Models,
     Details,
     AddProfile,
+    DeleteProfile,
     Settings,
     Sync,
     Proxy,
@@ -44,6 +45,7 @@ pub(super) enum FooterControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailControl {
+    Delete,
     FetchModels,
     Edit,
 }
@@ -173,6 +175,7 @@ pub(super) struct ProxyManager {
 
 #[derive(Clone)]
 pub(super) struct ProfileForm {
+    pub(super) test_message: Option<(String, bool)>,
     pub(super) template_selected: Option<usize>,
     pub(super) instance: uuid::Uuid,
     pub(super) picker: Option<ModelForm>,

@@ -304,6 +304,7 @@ impl ProfileForm {
             field("Fallbacks (comma)", fallback),
         ];
         Self {
+            test_message: None,
             original_id,
             template_selected: None,
             instance: uuid::Uuid::new_v4(),
@@ -1078,30 +1079,21 @@ fn draw_fields_with_context(
         );
         if connection_test {
             frame.render_widget(
-                Paragraph::new("[Test]").style(Style::default().fg(CONNECTED)),
+                Paragraph::new("[Test]").style(button_style(false, false, false)),
                 profile_test_rect(area, row as u16),
             );
         }
         if context {
             let enabled = model_values_are_1m(&field.value);
             frame.render_widget(
-                Paragraph::new("[1m]").style(if enabled {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(MUTED)
-                }),
+                Paragraph::new("[1m]").style(button_style(enabled, false, false)),
                 profile_1m_rect(area, row as u16),
             );
             frame.render_widget(
-                Paragraph::new("[Test]").style(Style::default().fg(
-                    if field.value.trim().is_empty() {
-                        MUTED
-                    } else {
-                        CONNECTED
-                    },
+                Paragraph::new("[Test]").style(button_style(
+                    false,
+                    field.value.trim().is_empty(),
+                    false,
                 )),
                 profile_test_rect(area, row as u16),
             );
@@ -1581,20 +1573,11 @@ pub(super) fn draw_proxy_controls(frame: &mut ratatui::Frame, area: Rect, manage
             || matches!(control, ProxyControl::EnableAtLogin) && installed
             || matches!(control, ProxyControl::DisableAtLogin) && !installed;
         let selected = manager.selected_control() == control;
-        let style = if selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(if disabled { MUTED } else { ROUTE })
-                .add_modifier(Modifier::BOLD)
-        } else if disabled {
-            Style::default().fg(MUTED).add_modifier(Modifier::DIM)
-        } else if matches!(control, ProxyControl::Start | ProxyControl::EnableAtLogin) {
-            Style::default().fg(CONNECTED)
-        } else if matches!(control, ProxyControl::Stop | ProxyControl::DisableAtLogin) {
-            Style::default().fg(WARNING)
-        } else {
-            Style::default().fg(MUTED)
-        };
+        let style = button_style(
+            selected,
+            disabled,
+            matches!(control, ProxyControl::Stop | ProxyControl::DisableAtLogin),
+        );
         frame.render_widget(
             Paragraph::new(format!("[{label}]"))
                 .alignment(Alignment::Center)
