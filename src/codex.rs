@@ -582,6 +582,16 @@ pub fn validate_reasoning(value: &str) -> Result<()> {
     }
     Ok(())
 }
+/// Structured dashboard check without exposing config or credential contents.
+pub fn dashboard_conflict(paths: &AppPaths) -> Result<bool> {
+    if journal_path(paths).exists() {
+        return Ok(true);
+    }
+    let home = home()?;
+    let doc = document(&home)?;
+    Ok(binding(paths)?.is_some_and(|binding| check_managed(&binding, &home, &doc).is_err()))
+}
+
 pub fn status(paths: &AppPaths) -> Result<String> {
     let home = home()?;
     let config = config::load(&paths.config)?;

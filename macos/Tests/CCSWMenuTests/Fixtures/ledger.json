@@ -1,0 +1,489 @@
+{
+  "schema_version": 1,
+  "available": true,
+  "today": "2026-09-19",
+  "offset_seconds": 28800,
+  "since": 1790000000,
+  "rows": [
+    {
+      "hour": 0,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 3,
+        "input": 2790,
+        "output": 510,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 1,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 10,
+        "input": 9300,
+        "output": 1700,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 2,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 17,
+        "input": 15810,
+        "output": 2890,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 3,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 5,
+        "input": 4650,
+        "output": 850,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 4,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 12,
+        "input": 11160,
+        "output": 2040,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 5,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 6,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 7,
+        "input": 6510,
+        "output": 1190,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 7,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 14,
+        "input": 13020,
+        "output": 2380,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 8,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 2,
+        "input": 1860,
+        "output": 340,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 9,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 9,
+        "input": 8370,
+        "output": 1530,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 10,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 16,
+        "input": 14880,
+        "output": 2720,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 11,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 4,
+        "input": 3720,
+        "output": 680,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 12,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 11,
+        "input": 10230,
+        "output": 1870,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 13,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 18,
+        "input": 16740,
+        "output": 3060,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 14,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 6,
+        "input": 5580,
+        "output": 1020,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 15,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 13,
+        "input": 12090,
+        "output": 2210,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 16,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 1,
+        "input": 930,
+        "output": 170,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 17,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 8,
+        "input": 7440,
+        "output": 1360,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 18,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 15,
+        "input": 13950,
+        "output": 2550,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 19,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 3,
+        "input": 2790,
+        "output": 510,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 20,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 10,
+        "input": 9300,
+        "output": 1700,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 21,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 17,
+        "input": 15810,
+        "output": 2890,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 22,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 5,
+        "input": 4650,
+        "output": 850,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    },
+    {
+      "hour": 23,
+      "day": "2026-09-19",
+      "client": "Claude",
+      "provider": "studio",
+      "name": "Studio",
+      "model": "claude-sonnet",
+      "kind": "generation",
+      "totals": {
+        "calls": 12,
+        "input": 11160,
+        "output": 2040,
+        "unknown": 0,
+        "failed": 0,
+        "pending": 0,
+        "interrupted": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      }
+    }
+  ]
+}

@@ -58,6 +58,17 @@ cargo install --path .
 
 CCSW 支持 macOS、Linux 与 Windows 10/11 x64，需要 Claude Code 2.1.242 或更高版本。
 
+## macOS 菜单栏应用
+
+新增 **CCSW Menu**：紧凑原生毛玻璃面板，首行切换 Claude / Codex / Pi 配置与用量，ChatGPT 订阅额度放在 Codex 页。支持快速切换账号、模型和启停代理，Claude 代理切换无需重启。新增独立 GUI 配置管理窗口，与 TUI 共用数据。提供中英文界面，跟随系统明暗。
+
+```sh
+./scripts/build-macos-menu.sh
+open "target/macos/CCSW Menu.app"
+```
+
+需要 macOS 13+、Swift 5.9+ 与 Rust 1.88+。构建产物自带 `ccsw`；完整说明、路径设置与 JSON 接口见 [macOS 菜单栏文档](macos/README.md)。
+
 ## 快速开始
 
 ```sh

@@ -137,6 +137,25 @@ pub fn inspect(paths: &AppPaths, settings: &Path) -> Result<Status> {
     })
 }
 
+/// Credential-free explanation of why automatic synchronization is paused.
+pub fn diagnostic(paths: &AppPaths, settings: &Path) -> Result<Vec<String>> {
+    let config_path = identity(&paths.config)?;
+    let settings_path = identity(settings)?;
+    let state = load(paths)?;
+    let current = read_settings(settings)?;
+    let Some(binding) = state
+        .entries
+        .iter()
+        .find(|e| e.config == config_path && e.settings == settings_path)
+    else {
+        return Ok(vec![]);
+    };
+    let Some(saved) = &binding.managed else {
+        return Ok(vec!["legacy_snapshot".into()]);
+    };
+    Ok(claude_config::managed_conflicts(saved, &current))
+}
+
 /// Explicit calls establish ownership; automatic calls require existing ownership.
 pub fn apply(
     paths: &AppPaths,

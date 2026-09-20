@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {
+      "client": "claude",
+      "id": "studio",
+      "revision": "preview-revision",
+      "name": "Studio gateway",
+      "enabled": true,
+      "base_url": "https://api.example.com/v1",
+      "endpoint_redacted": false,
+      "api_format": "anthropic",
+      "credential_kind": "bearer",
+      "credential_present": true,
+      "default_model": "claude-sonnet",
+      "models": [
+        {
+          "id": "claude-sonnet",
+          "label": "Sonnet",
+          "enabled": true,
+          "max_output_tokens": 8192,
+          "context_window": 200000,
+          "reasoning_max": "high"
+        },
+        {
+          "id": "fast-model",
+          "label": "Fast model",
+          "enabled": true,
+          "max_output_tokens": 4096,
+          "context_window": 128000
+        }
+      ],
+      "aliases": {},
+      "subagent_model": null,
+      "fallback_models": []
+    },
+    {
+      "client": "codex",
+      "id": "studio",
+      "revision": "preview-revision",
+      "name": "Personal API",
+      "enabled": true,
+      "base_url": "https://api.example.com/v1",
+      "endpoint_redacted": false,
+      "api_format": "openai-responses",
+      "credential_kind": "bearer",
+      "credential_present": true,
+      "default_model": "gpt-codex",
+      "models": [
+        {
+          "id": "gpt-codex",
+          "label": "Codex",
+          "enabled": true,
+          "max_output_tokens": 8192,
+          "context_window": 200000,
+          "reasoning_max": "high"
+        },
+        {
+          "id": "fast-model",
+          "label": "Fast model",
+          "enabled": true,
+          "max_output_tokens": 4096,
+          "context_window": 128000
+        }
+      ],
+      "aliases": {},
+      "subagent_model": null,
+      "fallback_models": []
+    },
+    {
+      "client": "pi",
+      "id": "studio",
+      "revision": "preview-revision",
+      "name": "Local workspace",
+      "enabled": true,
+      "base_url": "https://api.example.com/v1",
+      "endpoint_redacted": false,
+      "api_format": "openai-chat",
+      "credential_kind": "bearer",
+      "credential_present": true,
+      "default_model": "claude-sonnet",
+      "models": [
+        {
+          "id": "claude-sonnet",
+          "label": "Sonnet",
+          "enabled": true,
+          "max_output_tokens": 8192,
+          "context_window": 200000,
+          "reasoning_max": "high"
+        },
+        {
+          "id": "fast-model",
+          "label": "Fast model",
+          "enabled": true,
+          "max_output_tokens": 4096,
+          "context_window": 128000
+        }
+      ],
+      "aliases": {},
+      "subagent_model": null,
+      "fallback_models": []
+    }
+  ],
+  "readonly_pi": [],
+  "errors": []
+}

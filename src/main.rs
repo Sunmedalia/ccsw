@@ -2,6 +2,7 @@ mod claude_config;
 mod claude_preferences;
 mod codex;
 mod config;
+mod dashboard;
 mod discovery;
 mod import;
 mod managed_process;
@@ -38,6 +39,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Structured, credential-free interface for CCSW Menu
+    Dashboard {
+        #[command(subcommand)]
+        command: dashboard::Command,
+    },
     /// Manage Pi Agent native API providers and models
     Pi {
         #[command(subcommand)]
@@ -153,9 +159,12 @@ fn main() -> Result<()> {
     if let Some(Commands::Uninstall { yes, .. }) = &cli.command {
         return uninstall::run(&paths, *yes);
     }
+    if let Some(Commands::Dashboard { command }) = &cli.command {
+        return dashboard::run(&paths, command);
+    }
     let _session = uninstall::session(&paths)?;
     match cli.command {
-        Some(Commands::Uninstall { .. }) => unreachable!(),
+        Some(Commands::Uninstall { .. } | Commands::Dashboard { .. }) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;
             let import = if config.profiles.is_empty() {

@@ -13,6 +13,18 @@ pub fn load(home: &Path) -> Result<config::Config> {
     )
 }
 
+/// Dashboard reads must not recover interrupted transactions or write native files.
+pub fn load_readonly(home: &Path) -> Result<config::Config> {
+    if home.join(".ccsw-native-transaction.json").exists() {
+        bail!("Pi has an interrupted transaction; open the TUI to recover");
+    }
+    project(
+        &read(&home.join("models.json"))?,
+        &read(&home.join("settings.json"))?,
+        &read(&home.join("auth.json"))?,
+    )
+}
+
 fn project(models: &Value, settings: &Value, auth: &Value) -> Result<config::Config> {
     let mut config = config::Config::default();
     if let Some(providers) = models.get("providers") {

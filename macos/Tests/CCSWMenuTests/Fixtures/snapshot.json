@@ -1,0 +1,3754 @@
+{
+  "schema_version": 1,
+  "generated_at": 1790000000,
+  "config_path": "/Users/demo/.config/ccsw/config.toml",
+  "accounts": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "Personal workspace",
+      "email": "hello@example.com",
+      "workspace": "Personal",
+      "plan": "plus",
+      "selected": true,
+      "local_login": true,
+      "refreshed_at": 1790000000,
+      "refresh_failed": false,
+      "windows": [
+        {
+          "id": "codex:primary",
+          "bucket": "codex",
+          "window": "primary",
+          "used_percent": 32,
+          "duration_minutes": 300,
+          "resets_at": 1790007200
+        },
+        {
+          "id": "codex:secondary",
+          "bucket": "codex",
+          "window": "secondary",
+          "used_percent": 58,
+          "duration_minutes": 10080,
+          "resets_at": 1790259200
+        }
+      ]
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "Studio",
+      "email": "studio@example.com",
+      "workspace": "Studio",
+      "plan": "team",
+      "selected": false,
+      "local_login": false,
+      "refreshed_at": null,
+      "refresh_failed": false,
+      "windows": []
+    }
+  ],
+  "clients": [
+    {
+      "id": "claude",
+      "provider": "studio",
+      "model": "studio::claude-sonnet",
+      "status": "synced",
+      "providers": [
+        {
+          "id": "studio",
+          "name": "Studio gateway",
+          "enabled": true,
+          "default_model": "claude-sonnet",
+          "models": [
+            {
+              "id": "claude-sonnet",
+              "name": "claude-sonnet"
+            },
+            {
+              "id": "other-model",
+              "name": "Other model"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "model": "gpt-codex",
+      "status": "synced",
+      "providers": [
+        {
+          "id": "studio",
+          "name": "Studio gateway",
+          "enabled": true,
+          "default_model": "gpt-codex",
+          "models": [
+            {
+              "id": "gpt-codex",
+              "name": "gpt-codex"
+            },
+            {
+              "id": "other-model",
+              "name": "Other model"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pi",
+      "provider": "studio",
+      "model": "claude-sonnet",
+      "status": "native",
+      "providers": [
+        {
+          "id": "studio",
+          "name": "Studio gateway",
+          "enabled": true,
+          "default_model": "claude-sonnet",
+          "models": [
+            {
+              "id": "claude-sonnet",
+              "name": "claude-sonnet"
+            },
+            {
+              "id": "other-model",
+              "name": "Other model"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "proxy": {
+    "running": true,
+    "listen": "127.0.0.1:17321",
+    "routes": 6
+  },
+  "usage": {
+    "available": true,
+    "offset_seconds": 28800,
+    "ranges": [
+      {
+        "days": 1,
+        "client": "all",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "00",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "01",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "02",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "03",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "04",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "05",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "06",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "07",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "08",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "10",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "11",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "12",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "13",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "14",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "15",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "16",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "17",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "18",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "19",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "20",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "21",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "22",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "23",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 1,
+        "client": "Claude",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "00",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "01",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "02",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "03",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "04",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "05",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "06",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "07",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "08",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "10",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "11",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "12",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "13",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "14",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "15",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "16",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "17",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "18",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "19",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "20",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "21",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "22",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "23",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 1,
+        "client": "Codex",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "00",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "01",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "02",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "03",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "04",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "05",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "06",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "07",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "08",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "10",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "11",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "12",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "13",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "14",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "15",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "16",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "17",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "18",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "19",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "20",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "21",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "22",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "23",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 1,
+        "client": "Pi",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "00",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "01",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "02",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "03",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "04",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "05",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "06",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "07",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "08",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "10",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "11",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "12",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "13",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "14",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "15",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "16",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "17",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "18",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "19",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "20",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "21",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "22",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "23",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 7,
+        "client": "all",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 7,
+        "client": "Claude",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 7,
+        "client": "Codex",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 7,
+        "client": "Pi",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 30,
+        "client": "all",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-08",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-09",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-10",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-11",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-12",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-13",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-14",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-15",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-16",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-17",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-18",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-19",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-20",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-21",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-22",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-23",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-24",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-25",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-26",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-27",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-28",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-29",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-30",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 30,
+        "client": "Claude",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-08",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-09",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-10",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-11",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-12",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-13",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-14",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-15",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-16",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-17",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-18",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-19",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-20",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-21",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-22",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-23",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-24",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-25",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-26",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-27",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-28",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-29",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-30",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 30,
+        "client": "Codex",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-08",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-09",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-10",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-11",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-12",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-13",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-14",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-15",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-16",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-17",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-18",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-19",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-20",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-21",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-22",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-23",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-24",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-25",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-26",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-27",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-28",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-29",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-30",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      },
+      {
+        "days": 30,
+        "client": "Pi",
+        "totals": {
+          "calls": 128,
+          "input": 182400,
+          "output": 38600,
+          "unknown": 0,
+          "failed": 0,
+          "pending": 0,
+          "interrupted": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "points": [
+          {
+            "label": "09-01",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-02",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-03",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-04",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-05",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-06",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-07",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-08",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-09",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-10",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-11",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-12",
+            "totals": {
+              "calls": 4,
+              "input": 3720,
+              "output": 680,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-13",
+            "totals": {
+              "calls": 11,
+              "input": 10230,
+              "output": 1870,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-14",
+            "totals": {
+              "calls": 18,
+              "input": 16740,
+              "output": 3060,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-15",
+            "totals": {
+              "calls": 6,
+              "input": 5580,
+              "output": 1020,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-16",
+            "totals": {
+              "calls": 13,
+              "input": 12090,
+              "output": 2210,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-17",
+            "totals": {
+              "calls": 1,
+              "input": 930,
+              "output": 170,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-18",
+            "totals": {
+              "calls": 8,
+              "input": 7440,
+              "output": 1360,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-19",
+            "totals": {
+              "calls": 15,
+              "input": 13950,
+              "output": 2550,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-20",
+            "totals": {
+              "calls": 3,
+              "input": 2790,
+              "output": 510,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-21",
+            "totals": {
+              "calls": 10,
+              "input": 9300,
+              "output": 1700,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-22",
+            "totals": {
+              "calls": 17,
+              "input": 15810,
+              "output": 2890,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-23",
+            "totals": {
+              "calls": 5,
+              "input": 4650,
+              "output": 850,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-24",
+            "totals": {
+              "calls": 12,
+              "input": 11160,
+              "output": 2040,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-25",
+            "totals": {
+              "calls": 0,
+              "input": 0,
+              "output": 0,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-26",
+            "totals": {
+              "calls": 7,
+              "input": 6510,
+              "output": 1190,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-27",
+            "totals": {
+              "calls": 14,
+              "input": 13020,
+              "output": 2380,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-28",
+            "totals": {
+              "calls": 2,
+              "input": 1860,
+              "output": 340,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-29",
+            "totals": {
+              "calls": 9,
+              "input": 8370,
+              "output": 1530,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          },
+          {
+            "label": "09-30",
+            "totals": {
+              "calls": 16,
+              "input": 14880,
+              "output": 2720,
+              "unknown": 0,
+              "failed": 0,
+              "pending": 0,
+              "interrupted": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "errors": []
+}

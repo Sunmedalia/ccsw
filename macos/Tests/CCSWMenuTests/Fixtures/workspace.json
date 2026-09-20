@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "preferences": {
+    "claude": {
+      "env": {
+        "ENABLE_TOOL_SEARCH": "true"
+      },
+      "hide_attribution": true
+    },
+    "reasoning": "high"
+  },
+  "preferences_revision": "fixture-revision",
+  "sync_conflicts": [
+    "env.ANTHROPIC_BASE_URL",
+    "env.ANTHROPIC_AUTH_TOKEN",
+    "model"
+  ],
+  "claude_settings": "/Users/demo/.claude/settings.json",
+  "codex_home": "/Users/demo/.codex",
+  "pi_home": "/Users/demo/.pi/agent",
+  "proxy_autostart": false,
+  "proxy_manager": "launchd",
+  "pi_readonly": {},
+  "import_candidate": null,
+  "codex_recovery_needed": false
+}

@@ -24,6 +24,7 @@ const STATE_FILES: &[&str] = &[
     "sync-state.json",
     "sync-state.lock",
     "session.lock",
+    "dashboard.lock",
     "codex.lock",
     "codex-binding.json",
     "codex-transaction.json",
