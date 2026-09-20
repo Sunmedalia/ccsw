@@ -71,6 +71,14 @@ impl App {
     }
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
+        if matches!(self.modal, Some(Modal::Appearance(_))) {
+            self.handle_modal(key)?;
+            return Ok(false);
+        }
+        if self.modal.is_none() && key.code == KeyCode::F(4) {
+            self.open_appearance();
+            return Ok(false);
+        }
         if self.usage.active {
             return Ok(self.usage_key(key));
         }
@@ -106,10 +114,6 @@ impl App {
             self.handle_modal(key)?;
             return Ok(false);
         }
-        if key.code == KeyCode::F(4) && !self.pi_enabled && !self.codex_ui.enabled {
-            self.open_preferences();
-            return Ok(false);
-        }
         if key.code == KeyCode::F(5) {
             self.start_model_test();
             return Ok(false);
@@ -131,7 +135,6 @@ impl App {
                 KeyCode::Char('x') if self.selected_profile().is_some() => {
                     self.modal = Some(Modal::DeleteProfile);
                 }
-                KeyCode::Char('r') | KeyCode::Char('t') => self.refresh_models(),
                 KeyCode::Char(' ') if self.selected_profile().is_some() => {
                     self.toggle_selected_provider()?;
                 }
@@ -348,10 +351,6 @@ impl App {
                         }
                         KeyCode::Char('e') => self.edit_model(),
                         KeyCode::Char('E') => self.edit_profile(),
-                        KeyCode::Char('r') | KeyCode::Char('t') => {
-                            self.refresh_models();
-                            self.init_provider_editor();
-                        }
                         KeyCode::Char('p') => self.sync_all_to_claude(),
                         KeyCode::Char('P') => self.open_proxy_manager(),
                         _ => {}
@@ -363,6 +362,35 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<MouseAction> {
+        if matches!(self.modal, Some(Modal::Appearance(_))) {
+            let modal_area = modal_area_for(self.modal.as_ref().unwrap(), area);
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                if let Some((theme, _)) = theme::rows(modal_area)
+                    .into_iter()
+                    .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                {
+                    if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
+                        form.theme = theme;
+                    }
+                } else {
+                    let claude = !self.pi_enabled && !self.codex_ui.enabled;
+                    if let Some(index) = modal_button_rects(modal_area, if claude { 3 } else { 2 })
+                        .iter()
+                        .position(|rect| contains(*rect, mouse.column, mouse.row))
+                    {
+                        let code = if index == 0 {
+                            KeyCode::Enter
+                        } else if claude && index == 1 {
+                            KeyCode::Char('c')
+                        } else {
+                            KeyCode::Esc
+                        };
+                        self.handle_modal(KeyEvent::new(code, KeyModifiers::NONE))?;
+                    }
+                }
+            }
+            return Ok(MouseAction::None);
+        }
         if area.width >= 40
             && area.height >= 12
             && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -607,7 +635,7 @@ impl App {
                             MouseAction::None
                         }
                         FooterControl::Settings => {
-                            self.open_preferences();
+                            self.open_appearance();
                             MouseAction::None
                         }
                         FooterControl::Help => {
@@ -758,10 +786,6 @@ impl App {
                         {
                             match control {
                                 DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
-                                DetailControl::FetchModels => {
-                                    self.refresh_models();
-                                    self.init_provider_editor();
-                                }
                                 DetailControl::Edit => {
                                     self.edit_profile();
                                 }
@@ -774,9 +798,6 @@ impl App {
                     {
                         match control {
                             DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
-                            DetailControl::FetchModels => {
-                                self.refresh_models();
-                            }
                             DetailControl::Edit => {
                                 self.edit_profile();
                             }
@@ -1125,8 +1146,16 @@ impl App {
             return Ok(());
         };
         match &mut modal {
+            Modal::Appearance(form) => {
+                if self.appearance_key(form, key)? {
+                    return Ok(());
+                }
+            }
             Modal::Preferences(form) => {
                 if self.preferences_key(form, key) {
+                    if let Some(theme) = form.return_theme {
+                        self.modal = Some(Modal::Appearance(theme::Appearance { theme }));
+                    }
                     return Ok(());
                 }
             }

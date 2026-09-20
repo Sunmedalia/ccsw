@@ -22,6 +22,7 @@ const STATE_FILES: &[&str] = &[
     "usage.sqlite3-wal",
     "usage.sqlite3-shm",
     "sync-state.json",
+    "tui-theme.json",
     "sync-state.lock",
     "session.lock",
     "codex.lock",

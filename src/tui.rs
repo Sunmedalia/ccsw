@@ -12,6 +12,7 @@ mod state;
 mod tabs;
 #[cfg(test)]
 mod tests;
+mod theme;
 mod usage;
 mod views;
 
@@ -82,6 +83,7 @@ fn button_style(selected: bool, disabled: bool, destructive: bool) -> Style {
 }
 
 pub struct App {
+    theme: theme::Theme,
     paths: AppPaths,
     config: Config,
     cache: ModelCache,
@@ -108,6 +110,7 @@ pub struct App {
 pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> Result<()> {
     let proxy_status = None;
     let mut app = App {
+        theme: theme::Theme::load(&paths),
         cache: discovery::load_cache(&paths.cache),
         paths,
         config,

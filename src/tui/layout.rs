@@ -268,12 +268,8 @@ pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
         return vec![];
     }
     let y = inner.bottom().saturating_sub(1);
-    let controls = [
-        DetailControl::FetchModels,
-        DetailControl::Edit,
-        DetailControl::Delete,
-    ];
-    let width = inner.width / 3;
+    let controls = [DetailControl::Edit, DetailControl::Delete];
+    let width = inner.width / 2;
     controls
         .into_iter()
         .enumerate()
@@ -281,7 +277,7 @@ pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
             let x = inner.x + index as u16 * width;
             (
                 control,
-                Rect::new(x, y, if index == 2 { inner.right() - x } else { width }, 1),
+                Rect::new(x, y, if index == 1 { inner.right() - x } else { width }, 1),
             )
         })
         .collect()
@@ -290,13 +286,6 @@ pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
 pub(super) fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
     for (control, rect) in detail_controls(area) {
         let label = match control {
-            DetailControl::FetchModels => {
-                if rect.width >= 17 {
-                    "[Fetch models (r)]"
-                } else {
-                    "[r Fetch]"
-                }
-            }
             DetailControl::Edit => {
                 if rect.width >= 19 {
                     "[Edit provider (E)]"

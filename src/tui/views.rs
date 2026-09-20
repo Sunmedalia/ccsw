@@ -2,6 +2,16 @@ use super::*;
 
 impl App {
     pub(super) fn draw(&mut self, frame: &mut ratatui::Frame) {
+        self.draw_content(frame);
+        let theme = match &self.modal {
+            Some(Modal::Appearance(form)) => form.theme,
+            Some(Modal::Preferences(form)) => form.return_theme.unwrap_or(self.theme),
+            _ => self.theme,
+        };
+        theme.apply(frame.buffer_mut());
+    }
+
+    fn draw_content(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
         self.screen = area;
         if area.width < 40 || area.height < 12 {
@@ -25,6 +35,9 @@ impl App {
             self.draw_client_tabs(frame, area);
             if let Some(page) = &self.usage.page {
                 self.draw_usage(frame, usage::page_area(area), page);
+            }
+            if let Some(modal) = &self.modal {
+                self.draw_modal(frame, modal);
             }
             return;
         }
@@ -967,6 +980,12 @@ impl App {
         let area = modal_area_for(modal, frame.area());
         frame.render_widget(Clear, area);
         match modal {
+            Modal::Appearance(form) => theme::draw(
+                frame,
+                area,
+                form,
+                !self.pi_enabled && !self.codex_ui.enabled,
+            ),
             Modal::Import(candidate) => {
                 let mut lines = vec![
                     Line::styled(

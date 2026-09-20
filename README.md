@@ -68,7 +68,7 @@ ccsw          # 打开 TUI
 首次使用时：
 
 1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；点击底部 `Fetch models` 按钮或按 `Alt+F` 从该站点 API 获取模型，输入关键词搜索、用方向键选择、按 `Enter` 或点击 `Select` 回填默认模型。无需先保存厂商，`Esc` 或 `Back` 返回表单，获取失败可点击 `Refresh` 或按 `Ctrl+R` 重试，也可手填模型 ID。
-2. 进入厂商详情，按 `r` 获取 API 模型目录；按 `a` 从候选列表添加模型，也可以手动填写模型 ID。
+2. 进入厂商详情，按 `a` 打开添加模型；在添加模型表单中按 `Alt+F` 获取 API 模型目录，也可以手动填写模型 ID。厂商详情页不再提供整站模型刷新。
 3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
 4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
 5. 在终端运行 `claude`，使用 `/model` 选择模型。退出 CCSW 不会停止代理。
@@ -138,7 +138,7 @@ ccsw import --yes
 | `x` | 删除模型；网关模型不能删除 |
 | `e` | 编辑当前模型的完整配置；模型列表和详情面板均可使用 |
 | `E`（`Shift+e`） | 编辑当前厂商配置 |
-| `r` / `p` / `P` | 刷新目录 / 同步 / 代理 |
+| `p` / `P` | 同步 / 代理 |
 
 ### Forms · 表单
 
@@ -526,7 +526,9 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 
 ### Claude Code 客户端设置
 
-在 Claude 标签页点击 **Settings** 或按 **F4**。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
+点击 **Settings** 或按 **F4** 打开 TUI 设置。在 Claude 标签页选择 **Claude settings**（或按 `c`）进入客户端设置。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
+
+TUI 设置提供四套完整主题：**Graphite（石墨）**采用炭黑背景与象牙白导航；**Tundra（苔原）**采用深松绿背景、羊皮纸文字和黄铜导航；**Paper（纸页）**采用浅纸色背景、深墨色文字和蓝墨导航；**Nightfall（夜航）**采用深海军蓝背景、淡紫导航与青绿成功状态。每套主题统一背景、正文、选中块、边框和状态色；Classic 保留原有配色及终端背景。方向键或 `j/k` 实时预览，也可鼠标点选；`Enter` / Save 保存，`Esc` / Cancel 取消预览。进入 Claude settings 后按 `Esc` 或点击 **Themes** 返回主题设置，保留之前的配色预览；有未保存的客户端设置时先确认放弃。主题覆盖客户端页、模型表单、账号和用量图表。配色独立保存在状态目录的 `tui-theme.json`，下次启动自动恢复；不会修改厂商配置或触发代理同步。所有客户端与用量页均可用 `F4` 打开。已有主题选择保留，按原顺序对应四套新设计。
 
 - 六项预设：AI 署名、Teammates、Tool Search、思考强度、禁用自动升级、禁用 Artifact。默认 `inherit` 表示不覆盖已有配置。
 - 点击 **Fill presets**（窄屏显示 **Presets**），或按 **Alt+P**，填入隐藏署名、开启 Teammates / Tool Search、`max` 思考、禁用自动升级和 Artifact；这只修改草稿。

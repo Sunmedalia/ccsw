@@ -628,7 +628,7 @@ mod tests {
             .unwrap();
         });
         app.enter_provider_view();
-        app.refresh_models();
+        app.start_discovery(None);
         accepted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             .unwrap();

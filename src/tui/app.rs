@@ -259,7 +259,7 @@ impl App {
             if let Some(name) = self.selected_profile().map(|profile| profile.name.clone()) {
                 self.status_error = false;
                 self.status = if self.view_mode == ViewMode::Home {
-                    format!("Selected {name} · Enter details · e edit · x delete · r fetch models")
+                    format!("Selected {name} · Enter details · e edit · x delete")
                 } else {
                     format!("Selected {name} · Enter to choose a model")
                 };
@@ -652,10 +652,6 @@ impl App {
             help.section = HelpSection::AllEnabled;
         }
         self.modal = Some(Modal::Help(help));
-    }
-
-    pub(super) fn refresh_models(&mut self) {
-        self.start_discovery(None);
     }
 
     pub(super) fn enable_all_models(&mut self) {

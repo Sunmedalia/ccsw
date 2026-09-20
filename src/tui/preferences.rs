@@ -3,6 +3,7 @@ use crate::claude_preferences::{PRESETS, Settings};
 
 #[derive(Clone)]
 pub(super) struct PreferencesForm {
+    pub(super) return_theme: Option<theme::Theme>,
     original: Settings,
     pub fields: Vec<FormField>,
     pub selected: usize,
@@ -46,6 +47,7 @@ impl PreferencesForm {
             }
         }
         Self {
+            return_theme: None,
             original: settings,
             fields,
             selected: 0,
@@ -325,6 +327,8 @@ pub(super) fn draw_preferences(frame: &mut ratatui::Frame, area: Rect, form: &Pr
         area,
         if form.discard {
             &["Discard", "Keep editing"]
+        } else if form.return_theme.is_some() {
+            &["Presets", "Add", "Save", "Themes"]
         } else if area.width < 55 {
             &["Presets", "Add", "Save", "Back"]
         } else {

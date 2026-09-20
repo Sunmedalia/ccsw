@@ -46,7 +46,6 @@ pub(super) enum FooterControl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailControl {
     Delete,
-    FetchModels,
     Edit,
 }
 
@@ -72,6 +71,7 @@ pub(super) enum ProxyControl {
 
 #[derive(Clone)]
 pub(super) enum Modal {
+    Appearance(theme::Appearance),
     Preferences(PreferencesForm),
     Import(Box<ImportCandidate>),
     Profile(Box<ProfileForm>),

@@ -1,6 +1,132 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
+
+#[test]
+fn tui_theme_preview_cancel_save_and_restart_do_not_touch_provider_config() {
+    let (_temp, mut app) = persisted_app();
+    let before = std::fs::read(&app.paths.config).unwrap();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|c| c.fg == Color::Rgb(226, 222, 210))
+    );
+    assert_eq!(app.theme, theme::Theme::Classic);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.paths.state_dir.join("tui-theme.json").exists());
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.theme, theme::Theme::Slate);
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Slate);
+    assert_eq!(std::fs::read(&app.paths.config).unwrap(), before);
+    assert!(!app.background.sync_running);
+    assert!(app.background.queued_sync.is_none());
+}
+
+#[test]
+fn tui_theme_settings_mouse_and_keyboard_work_on_every_client() {
+    let (_temp, mut app) = persisted_app();
+    let screen = Rect::new(0, 0, 100, 30);
+    for tab in [
+        ClientTab::Claude,
+        ClientTab::Codex,
+        ClientTab::Pi,
+        ClientTab::Usage,
+    ] {
+        app.select_client_tab(tab);
+        app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(app.modal, Some(Modal::Appearance(_))));
+        let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
+        let row = theme::rows(area)[2].1;
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: row.x + 3,
+                row: row.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Moss)
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.modal.is_none());
+    }
+}
 use std::path::PathBuf;
+
+#[test]
+fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
+    let (_temp, mut app) = persisted_app();
+    let mut form = PreferencesForm::new(app.config.claude.clone(), serde_json::json!({}));
+    form.return_theme = Some(theme::Theme::Plum);
+    app.modal = Some(Modal::Preferences(form.clone()));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    assert_eq!(app.theme, theme::Theme::Classic);
+
+    form.fields[0].value = "hide".into();
+    app.modal = Some(Modal::Preferences(form));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Preferences(ref form)) if form.discard));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    assert!(!app.paths.state_dir.join("tui-theme.json").exists());
+}
+
+#[test]
+fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
+    let (_temp, mut app) = persisted_app();
+    app.open_appearance();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    for expected in [
+        theme::Theme::Slate,
+        theme::Theme::Moss,
+        theme::Theme::Sand,
+        theme::Theme::Plum,
+        theme::Theme::Classic,
+    ] {
+        app.handle_key(key(KeyCode::Down)).unwrap();
+        assert!(matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == expected));
+    }
+    app.handle_key(key(KeyCode::Up)).unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    for name in ["Classic", "Graphite", "Tundra", "Paper", "Nightfall"] {
+        assert!(text.contains(name), "{name}: {text}");
+    }
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Plum);
+}
 
 #[test]
 fn vim_keys_navigate_templates_and_picker_without_interfering_with_search() {
@@ -251,6 +377,7 @@ fn renders_empty_state_in_narrow_terminal() {
         cache: PathBuf::from("/tmp/cache"),
     };
     let mut app = App {
+        theme: theme::Theme::default(),
         paths,
         config: Config::default(),
         cache: ModelCache::default(),
@@ -1213,10 +1340,10 @@ fn mouse_click_catalog_add_and_detail_edit() {
     // Close modal
     app.modal = None;
 
-    // 2. The details card keeps provider-specific refresh/edit/delete actions.
+    // 2. The details card keeps provider-specific edit/delete actions.
     let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
     let (_, provider_card) = provider_detail_cards(details);
-    assert_eq!(detail_controls(provider_card).len(), 3);
+    assert_eq!(detail_controls(provider_card).len(), 2);
     let edit_btn = detail_controls(provider_card)
         .into_iter()
         .find(|(c, _)| *c == DetailControl::Edit)
@@ -1486,6 +1613,7 @@ fn interactive_test_app() -> App {
         },
         config,
         cache: ModelCache::default(),
+        theme: theme::Theme::default(),
         view_mode: ViewMode::Home,
         home_all_selected: false,
         profile_idx: 0,
