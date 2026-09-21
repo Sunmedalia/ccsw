@@ -598,3 +598,49 @@ Codex 账号页支持 `Browser (b)` 浏览器登录和 `Device (d)` 设备码登
 Codex 账号页的 `Rename (e)` 可修改当前高亮账号的显示名称；邮箱、工作区、套餐和登录凭据来自账号身份，不支持手动修改。Import 与 File 使用统一的可选账号备注，留空默认为 ChatGPT；File 先输入文件路径，再填写备注。重命名不会切换账号或重新登录。
 
 Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、最近成功刷新时间，以及已应用/本机登录状态。点击 `Refresh (r)` 主动查询，平时浏览不会请求额度接口；`PgUp/PgDn` 滚动详情。查询失败保留旧缓存并标记失败，不把网络错误直接判定为登录过期。
+
+## Herdr Pulse 常驻监控
+
+`ccsw quick` 是独立的只读监控页面，不加载配置编辑器，也不会在启动时同步配置。
+展示今日 Token、请求次数、缓存 Token、调用健康度、24 小时请求趋势，
+以及服务商/模型的调用数和失败数。蓝灰底色、三行大号数字和独立的文字层级用于常驻侧栏；
+字体家族继承终端，不修改其他 pane 的字体。面板使用完整高度，短屏可滚动，最低 32 × 12。
+
+执行 `cargo build --release --bin ccsw` 和 `herdr plugin link "$PWD"`，
+把以下配置加入 Herdr `config.toml`（替换已有的 `prefix+u`），
+然后执行 `herdr server reload-config`：
+
+```toml
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "ccsw.open"
+description = "Toggle CCSW Pulse usage monitor"
+```
+
+**Ctrl+B，再按 u** 在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
+再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
+首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
+未识别到这两种 agent → All。识别仅针对触发 pane，不受其他 pane 的 agent 影响。
+直接运行 `ccsw quick` 默认展示 All。
+
+- `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
+- 每两秒读取本地用量库；`r` 立即刷新。读取失败保留旧数据并标记 STALE。
+- `d` / `≡ Models` 切换服务商与模型明细；滚轮、方向键、PgUp/PgDn 滚动，Esc/Home 回到顶部。
+- `e` / `↗ Edit` 新开 Herdr 标签页运行完整 CCSW，并立即切换到新标签页和编辑 pane；监控 pane 继续常驻。
+- 监控与 Edit 均由 Herdr 原生插件直接启动，终端不再显示 `exec` 或启动命令。
+- `q` / `×` 退出监控。
+- 操作按钮直接标注 `(e)`、`(d)`、`(r)`、`(q)`，不再额外占用一行快捷键提示。
+- 24 小时趋势使用铺满内容宽度的六行柱状图，标出小时刻度与峰值；零请求不画虚假柱。
+- `?` 或右上角帮助按钮查看统计范围，`Esc` 返回，首页不再常驻显示范围说明。
+
+统计范围为当前 CCSW 配置经过本地网关的请求，**不是当前 Claude 会话统计或订阅剩余额度**。
+直连 API 和 ChatGPT/Claude 订阅流量不包含在内。成功率 = 成功 /（成功 + 失败 + 中断），
+待完成请求不计入分母；没有已完成请求时显示“无样本”。请求计数包含单独标注的压缩请求，
+Token 缺失时显示未知提示，不当作零用量。插件支持 macOS / Linux。
+
+监控首页另显示 `Cache hit` 和 `Output speed`：缓存命中率按有完整缓存计数的请求计算，
+分母统一为包含缓存读取/写入的全部输入 Token（OpenAI 输入本身已包含缓存，Anthropic 需相加），
+缓存写入不算命中。输出速度是今日成功流式生成请求的输出 Token 总数除以对应输出阶段总秒数，
+从首次内容输出计到流完成，排除首 Token 等待，包含网络传输时间。无有效样本时显示 `—`。
+旧记录保留，不回填未知计时；新版网关启动后采集新请求，面板重开即可展示。

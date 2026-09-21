@@ -8,6 +8,7 @@ mod layout;
 mod models;
 mod pi;
 mod preferences;
+mod quick;
 mod state;
 mod tabs;
 #[cfg(test)]
@@ -66,6 +67,14 @@ const CONNECTED: Color = Color::Rgb(135, 215, 135);
 const WARNING: Color = Color::Rgb(255, 215, 95);
 const ERROR: Color = Color::Rgb(255, 107, 107);
 const MUTED: Color = Color::Rgb(128, 138, 148);
+
+pub fn run_quick(paths: AppPaths, open: bool) -> Result<()> {
+    if open {
+        quick::open_pane()
+    } else {
+        quick::run(paths)
+    }
+}
 
 /// Shared button states across pages and dialogs.
 fn button_style(selected: bool, disabled: bool, destructive: bool) -> Style {

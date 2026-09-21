@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const FILE: &str = "usage.sqlite3";
@@ -81,7 +81,23 @@ fn open(path: &Path) -> Result<Connection> {
         "INSERT OR IGNORE INTO settings VALUES ('offset', ?1)",
         [Local::now().offset().local_minus_utc()],
     )?;
+    // Additive migration; old rows remain unknown rather than inventing timings.
+    let tx = db.unchecked_transaction()?;
+    let columns = request_columns(&tx)?;
+    for column in ["cache_input", "output_ms"] {
+        if !columns.contains(column) {
+            tx.execute_batch(&format!("ALTER TABLE requests ADD COLUMN {column} INTEGER"))?;
+        }
+    }
+    tx.commit()?;
     Ok(db)
+}
+
+fn request_columns(db: &Connection) -> Result<std::collections::BTreeSet<String>> {
+    Ok(db
+        .prepare("PRAGMA table_info(requests)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 #[derive(Clone)]
@@ -99,6 +115,10 @@ pub struct Ticket {
     id: String,
     pub outcome: &'static str,
     pub tokens: Tokens,
+    cache_input: Option<i64>,
+    cache_exclusive: bool,
+    output_started: Option<Instant>,
+    output_ms: Option<i64>,
 }
 
 impl Ticket {
@@ -109,6 +129,10 @@ impl Ticket {
             id: id.clone(),
             outcome: "failed",
             tokens: Tokens::default(),
+            cache_input: None,
+            cache_exclusive: false,
+            output_started: None,
+            output_ms: None,
         };
         let now = Utc::now();
         let result = tokio::task::spawn_blocking(move || writer.with_connection(|db| {
@@ -128,6 +152,45 @@ impl Ticket {
             }
         }
     }
+
+    pub fn observe_usage(&mut self, value: &Value) {
+        self.tokens.observe(value);
+        if let Some(u) = value
+            .get("usage")
+            .or_else(|| value.pointer("/message/usage"))
+            .or_else(|| value.pointer("/response/usage"))
+        {
+            // Anthropic input excludes read/write cache; OpenAI input includes it.
+            if u.get("cache_read_input_tokens").is_some()
+                || u.get("cache_creation_input_tokens").is_some()
+            {
+                self.cache_exclusive = true;
+            }
+        }
+        self.cache_input =
+            self.tokens
+                .input
+                .zip(self.tokens.cache_read)
+                .and_then(|(input, read)| {
+                    let total = if self.cache_exclusive {
+                        input
+                            .checked_add(read)?
+                            .checked_add(self.tokens.cache_write.unwrap_or(0))?
+                    } else {
+                        input
+                    };
+                    (total >= read).then_some(total)
+                });
+    }
+    pub fn output_delta(&mut self) {
+        self.output_started.get_or_insert_with(Instant::now);
+    }
+    pub fn output_finished(&mut self) {
+        self.output_ms = self
+            .output_started
+            .map(|start| start.elapsed().as_millis().min(i64::MAX as u128) as i64)
+            .filter(|ms| *ms > 0);
+    }
 }
 
 impl Drop for Ticket {
@@ -138,12 +201,14 @@ impl Drop for Ticket {
             self.id.clone(),
             self.outcome,
             self.tokens.clone(),
+            self.cache_input,
+            self.output_ms,
         );
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn_blocking(move || {
                 if saved.0.with_connection(|db| {
-                    db.prepare_cached("UPDATE requests SET outcome=?2,input=?3,output=?4,cache_read=?5,cache_write=?6 WHERE id=?1")?.execute(
-                        params![saved.1, saved.2, saved.3.input, saved.3.output, saved.3.cache_read, saved.3.cache_write])?;
+                    db.prepare_cached("UPDATE requests SET outcome=?2,input=?3,output=?4,cache_read=?5,cache_write=?6,cache_input=?7,output_ms=?8 WHERE id=?1")?.execute(
+                        params![saved.1, saved.2, saved.3.input, saved.3.output, saved.3.cache_read, saved.3.cache_write, saved.4, saved.5])?;
                     Ok(())
                 }).is_err() {
                     eprintln!("CCSW usage: could not finalize request statistics");
@@ -207,6 +272,11 @@ pub struct Totals {
     pub unknown: i64,
     pub cache_read: i64,
     pub cache_write: i64,
+    pub cache_input: i64,
+    pub cache_hits: i64,
+    pub speed_output: i64,
+    pub speed_ms: i64,
+    pub speed_samples: i64,
 }
 impl Totals {
     pub fn add(&mut self, other: &Self) {
@@ -220,6 +290,11 @@ impl Totals {
         self.unknown += other.unknown;
         self.cache_read += other.cache_read;
         self.cache_write += other.cache_write;
+        self.cache_input += other.cache_input;
+        self.cache_hits += other.cache_hits;
+        self.speed_output += other.speed_output;
+        self.speed_ms += other.speed_ms;
+        self.speed_samples += other.speed_samples;
     }
     pub fn tokens_label(&self) -> String {
         if self.calls == 0 {
@@ -308,11 +383,20 @@ pub fn snapshot(path: &Path, config: &Path) -> Result<Snapshot> {
     snapshot_for(path, config, &Query::All)
 }
 
-fn aggregate_sql(day: &str, model: &str, hour: &str, filter: &str) -> String {
+fn aggregate_sql(day: &str, model: &str, hour: &str, filter: &str, extended: bool) -> String {
+    let extras = if extended {
+        "COALESCE(SUM(CASE WHEN cache_input>0 AND cache_read IS NOT NULL THEN cache_input ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN cache_input>0 AND cache_read IS NOT NULL THEN cache_read ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND output_ms>0 AND output>0 THEN output ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND output_ms>0 AND output>0 THEN output_ms ELSE 0 END),0),
+         COALESCE(SUM(outcome='success' AND kind='generation' AND output_ms>0 AND output>0),0)"
+    } else {
+        "0,0,0,0,0"
+    };
     format!("SELECT {day} AS day,client,provider,MAX(name) AS name,kind,COUNT(*) AS calls,
       SUM(outcome='success'),SUM(outcome='failed'),SUM(outcome='interrupted'),SUM(outcome='pending'),
       COALESCE(SUM(input),0),COALESCE(SUM(output),0),SUM(input IS NULL OR output IS NULL),
-      COALESCE(SUM(cache_read),0),COALESCE(SUM(cache_write),0),{model} AS model,{hour} AS hour
+      COALESCE(SUM(cache_read),0),COALESCE(SUM(cache_write),0),{model} AS model,{hour} AS hour,{extras}
       FROM requests WHERE config=?1 {filter} GROUP BY 1,2,3,5,16,17")
 }
 
@@ -443,6 +527,8 @@ fn snapshot_from(
     )?;
     let mut parameters = vec![rusqlite::types::Value::Text(config.into_owned())];
     let hour = "CAST(strftime('%H', started + ?2, 'unixepoch') AS INTEGER)";
+    let columns = request_columns(&db)?;
+    let extended = columns.contains("cache_input") && columns.contains("output_ms");
     let sql = match query {
         Query::Summary => {
             let zone =
@@ -453,16 +539,22 @@ fn snapshot_from(
                     .to_string()
                     .into(),
             );
-            aggregate_sql("CASE WHEN day=?2 THEN day ELSE '' END", "''", "0", "")
+            aggregate_sql(
+                "CASE WHEN day=?2 THEN day ELSE '' END",
+                "''",
+                "0",
+                "",
+                extended,
+            )
         }
         Query::All => {
             parameters.push(offset.into());
-            aggregate_sql("day", "model", hour, "")
+            aggregate_sql("day", "model", hour, "", extended)
         }
         Query::Range { start, end } => {
             parameters.extend([offset.into(), start.clone().into(), end.clone().into()]);
-            let detail = aggregate_sql("day", "model", hour, "AND day>=?3 AND day<=?4");
-            let history = aggregate_sql("''", "model", "0", "AND (day<?3 OR day>?4)");
+            let detail = aggregate_sql("day", "model", hour, "AND day>=?3 AND day<=?4", extended);
+            let history = aggregate_sql("''", "model", "0", "AND (day<?3 OR day>?4)", extended);
             format!("{detail} UNION ALL {history}")
         }
     };
@@ -490,6 +582,11 @@ fn snapshot_from(
                     unknown: r.get(12)?,
                     cache_read: r.get(13)?,
                     cache_write: r.get(14)?,
+                    cache_input: r.get(17)?,
+                    cache_hits: r.get(18)?,
+                    speed_output: r.get(19)?,
+                    speed_ms: r.get(20)?,
+                    speed_samples: r.get(21)?,
                 },
             })
         })?
@@ -505,6 +602,78 @@ fn snapshot_from(
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn cache_denominators_and_stream_speed_use_matching_samples() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(FILE);
+        let writer = Writer::new(path.clone());
+        for (usage, duration, outcome) in [
+            (
+                json!({"input_tokens":100,"cache_read_input_tokens":300,"cache_creation_input_tokens":100,"output_tokens":40}),
+                Some(1000),
+                "success",
+            ),
+            (
+                json!({"input_tokens":500,"input_tokens_details":{"cached_tokens":200},"output_tokens":60}),
+                Some(3000),
+                "success",
+            ),
+            (
+                json!({"input_tokens":500,"output_tokens":9999}),
+                None,
+                "success",
+            ),
+            (
+                json!({"input_tokens":500,"output_tokens":9999}),
+                Some(1),
+                "failed",
+            ),
+        ] {
+            let mut t = Ticket::begin(writer.clone(), request("Claude", "p", "generation"))
+                .await
+                .unwrap();
+            t.observe_usage(&json!({"usage":usage}));
+            // Partial cumulative events must preserve protocol/cache metadata.
+            t.observe_usage(&json!({"usage":{"output_tokens":t.tokens.output}}));
+            t.output_ms = duration;
+            t.outcome = outcome;
+            drop(t);
+        }
+        let t = settled(&path, 4)
+            .await
+            .total(None, None, None, "generation");
+        assert_eq!((t.cache_hits, t.cache_input), (500, 1000));
+        assert_eq!(
+            (t.speed_output, t.speed_ms, t.speed_samples),
+            (100, 4000, 2)
+        );
+    }
+
+    #[test]
+    fn legacy_ledger_is_readable_and_migration_is_additive() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(FILE);
+        seed_history(&path, 4);
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("ALTER TABLE requests DROP COLUMN cache_input; ALTER TABLE requests DROP COLUMN output_ms;").unwrap();
+        let before = snapshot(&path, Path::new("test-config")).unwrap().total(
+            None,
+            None,
+            None,
+            "generation",
+        );
+        assert_eq!(before.speed_samples, 0);
+        assert_eq!(before.cache_input, 0);
+        drop(open(&path).unwrap());
+        let after = snapshot(&path, Path::new("test-config")).unwrap().total(
+            None,
+            None,
+            None,
+            "generation",
+        );
+        assert_eq!(before, after);
+    }
 
     pub fn request(client: &'static str, provider: &str, kind: &'static str) -> Request {
         Request {

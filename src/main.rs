@@ -38,6 +38,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Live usage and request-health monitor for a persistent Herdr side pane
+    Quick {
+        /// Toggle the monitor beside the current Herdr pane
+        #[arg(long)]
+        open: bool,
+    },
     /// Manage Pi Agent native API providers and models
     Pi {
         #[command(subcommand)]
@@ -155,6 +161,7 @@ fn main() -> Result<()> {
     }
     let _session = uninstall::session(&paths)?;
     match cli.command {
+        Some(Commands::Quick { open }) => tui::run_quick(paths, open),
         Some(Commands::Uninstall { .. }) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;

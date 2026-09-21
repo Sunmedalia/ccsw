@@ -1,0 +1,7 @@
+# Append after `herdr plugin link /path/to/ccsw`.
+# Ctrl+B, then U: toggle the persistent monitor pane in this tab.
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "ccsw.open"
+description = "Toggle CCSW Pulse usage monitor"
