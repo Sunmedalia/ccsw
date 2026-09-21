@@ -57,15 +57,9 @@ impl Status {
 }
 
 fn identity(path: &Path) -> Result<PathBuf> {
-    if let Ok(path) = fs::canonicalize(path) {
-        return Ok(path);
-    }
-    let absolute = std::path::absolute(path)?;
-    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
-        return Ok(identity(parent)?.join(name));
-    }
-    Ok(absolute)
+    crate::platform::identity(path)
 }
+
 fn read_settings(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(json!({}));
@@ -166,6 +160,19 @@ pub fn apply(
         .iter()
         .position(|entry| entry.config == config_path && entry.settings == settings_path);
     let value = read_settings(settings)?;
+    let recovered = if proxy::owns_settings(paths, &value)? {
+        claude_config::recover_preferences(settings, &value)?
+    } else {
+        None
+    };
+    if let Some(recovered) = &recovered
+        && let Some(i) = index
+    {
+        state.entries[i].managed = Some(recovered.clone());
+        save(paths, &state)?;
+        claude_config::finish_preferences(settings)?;
+    }
+
     if !explicit {
         if let Some(saved) = index.and_then(|i| state.entries[i].managed.as_ref()) {
             let conflicts = claude_config::managed_conflicts(saved, &value);
@@ -244,10 +251,28 @@ pub fn apply(
     };
     let checkpoint = proxy::aggregate_checkpoint(paths)?;
     let result = if let Some(id) = &chosen {
-        claude_config::apply_all(settings, paths, &effective, &cache, id, expected)
+        claude_config::apply_all(
+            settings,
+            paths,
+            &effective,
+            &cache,
+            id,
+            expected,
+            index
+                .and_then(|i| state.entries[i].managed.as_ref())
+                .or(recovered.as_ref()),
+        )
     } else {
         proxy::clear_aggregate_models(paths)
             .and_then(|()| claude_config::clear_expected(settings, expected))
+            .map(|mut result| {
+                result.preferences = crate::claude_preferences::from_snapshot(
+                    index
+                        .and_then(|i| state.entries[i].managed.as_ref())
+                        .or(recovered.as_ref()),
+                );
+                result
+            })
     };
     let result = match result {
         Ok(result) => result,
@@ -261,15 +286,35 @@ pub fn apply(
         }
     };
     let applied = read_settings(settings)?;
+    let previous_preferences: crate::claude_preferences::Settings = index
+        .and_then(|i| state.entries[i].managed.as_ref())
+        .and_then(|v| v.get("client_preference_settings"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let preferences_pending = chosen.is_none() && previous_preferences != config.claude;
+
     let binding = Binding {
-        managed: Some(claude_config::managed_snapshot(&applied)),
+        managed: Some({
+            let mut snapshot = claude_config::managed_snapshot(&applied);
+            snapshot["client_preferences"] = serde_json::to_value(&result.preferences)?;
+            snapshot["client_preference_settings"] = serde_json::to_value(if chosen.is_some() {
+                &config.claude
+            } else {
+                &previous_preferences
+            })?;
+            snapshot
+        }),
         config: config_path,
         settings: settings_path,
         preferred: preferred
             .map(str::to_owned)
             .or_else(|| previous.map(str::to_owned))
             .or(chosen),
-        revision: revision(&config)?,
+        revision: if preferences_pending {
+            0
+        } else {
+            revision(&config)?
+        },
         endpoint: applied["env"]["ANTHROPIC_BASE_URL"]
             .as_str()
             .map(str::to_owned),
@@ -284,7 +329,46 @@ pub fn apply(
     }
     save(paths, &state)
         .context("Claude updated, but connection state could not be saved; press p to retry")?;
+    claude_config::finish_preferences(settings)?;
     Ok(result)
+}
+
+pub fn disconnect(paths: &AppPaths, settings: &Path) -> Result<Vec<String>> {
+    fs::create_dir_all(&paths.state_dir)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(paths.state_dir.join("sync-state.lock"))?;
+    lock.try_lock_exclusive()
+        .context("Sync is busy; retry disconnect when it finishes")?;
+    let mut state = load(paths)?;
+    let config_path = identity(&paths.config)?;
+    let settings_path = identity(settings)?;
+    let index = state
+        .entries
+        .iter()
+        .position(|b| b.config == config_path && b.settings == settings_path)
+        .context("Claude is not connected to this configuration")?;
+    let value = read_settings(settings)?;
+    let binding = &state.entries[index];
+    let saved = binding
+        .managed
+        .as_ref()
+        .context("Legacy connection has no snapshot; reconnect first")?;
+    // A switched endpoint belongs to another connection; never restore into it.
+    if (value["env"].get("ANTHROPIC_BASE_URL").is_some()
+        || value["env"].get("ANTHROPIC_AUTH_TOKEN").is_some())
+        && (value["env"]["ANTHROPIC_BASE_URL"].as_str() != binding.endpoint.as_deref()
+            || value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str() != binding.token.as_deref())
+    {
+        bail!("Claude's connection changed externally; it was left untouched");
+    }
+    let conflicts = claude_config::disconnect_owned(settings, saved)?;
+    state.entries.remove(index);
+    save(paths, &state)?;
+    Ok(conflicts)
 }
 
 #[cfg(test)]
@@ -365,7 +449,7 @@ default_model = "model-z"
                                     Ok(count) => request.extend_from_slice(&chunk[..count]),
                                 }
                             }
-                            let body = r#"{"name":"ccsw-proxy"}"#;
+                            let body = json!({"name":"ccsw-proxy", "config_version":config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION")}).to_string();
                             let _ = write!(
                                 stream,
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -409,6 +493,132 @@ default_model = "model-z"
     }
 
     #[test]
+    fn disabling_all_models_preserves_preferences_until_reenabled_or_disconnected() {
+        let f = Fixture::new();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "first".into());
+        });
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "next".into());
+            for profile in c.profiles.values_mut() {
+                profile.enabled = false;
+            }
+        });
+        let result = apply(&f.paths, &f.settings, None, false).unwrap();
+        assert_eq!(result.model_count, 0);
+        assert_eq!(f.value()["env"]["CUSTOM"], "first");
+        assert_eq!(inspect(&f.paths, &f.settings).unwrap(), Status::Pending);
+        // Explicit sync with no models must not forget original ownership either.
+        apply(&f.paths, &f.settings, None, true).unwrap();
+        disconnect(&f.paths, &f.settings).unwrap();
+        assert!(f.value()["env"].get("CUSTOM").is_none());
+    }
+
+    #[test]
+    fn interrupted_removal_with_external_edit_preserves_the_external_value() {
+        let f = Fixture::new();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "ours".into());
+        });
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        let state = load(&f.paths).unwrap();
+        f.change(|c| {
+            c.claude.env.clear();
+        });
+        let config = config::load(&f.paths.config).unwrap();
+        claude_config::apply_all(
+            &f.settings,
+            &f.paths,
+            &config,
+            &discovery::ModelCache::default(),
+            "one",
+            None,
+            state.entries[0].managed.as_ref(),
+        )
+        .unwrap();
+        let mut current = f.value();
+        current["env"]["CUSTOM"] = json!("external");
+        fs::write(&f.settings, serde_json::to_vec(&current).unwrap()).unwrap();
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        disconnect(&f.paths, &f.settings).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "external");
+    }
+
+    #[test]
+    fn preferences_follow_sync_restore_and_disconnect() {
+        let f = Fixture::new();
+        let mut original = f.value();
+        original["env"]["CUSTOM"] = json!("before");
+        original["attribution"] = json!({"commit":"original","pr":"original-pr","extra":true});
+        fs::write(&f.settings, serde_json::to_vec(&original).unwrap()).unwrap();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "after".into());
+            c.claude.hide_attribution = Some(true);
+        });
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "after");
+        apply(&f.paths, &f.settings, Some("two"), true).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "after");
+        assert_eq!(f.value()["attribution"]["commit"], "");
+        f.change(|c| {
+            c.claude.env.clear();
+        });
+        apply(&f.paths, &f.settings, None, false).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "before");
+        disconnect(&f.paths, &f.settings).unwrap();
+        assert_eq!(f.value(), original);
+        assert_eq!(
+            inspect(&f.paths, &f.settings).unwrap(),
+            Status::NotConnected
+        );
+    }
+    #[test]
+    fn preference_external_edit_pauses_then_retake_restores_new_baseline() {
+        let f = Fixture::new();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "ours".into());
+        });
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        let mut value = f.value();
+        value["env"]["CUSTOM"] = json!("external-secret");
+        fs::write(&f.settings, serde_json::to_vec(&value).unwrap()).unwrap();
+        let error = apply(&f.paths, &f.settings, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CUSTOM"));
+        assert!(!error.contains("external-secret"));
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        disconnect(&f.paths, &f.settings).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "external-secret");
+    }
+    #[test]
+    fn interrupted_first_sync_keeps_original_preference_baseline() {
+        let f = Fixture::new();
+        let mut original = f.value();
+        original["env"]["CUSTOM"] = json!("before");
+        fs::write(&f.settings, serde_json::to_vec(&original).unwrap()).unwrap();
+        f.change(|c| {
+            c.claude.env.insert("CUSTOM".into(), "ours".into());
+        });
+        let config = config::load(&f.paths.config).unwrap();
+        claude_config::apply_all(
+            &f.settings,
+            &f.paths,
+            &config,
+            &discovery::ModelCache::default(),
+            "one",
+            None,
+            None,
+        )
+        .unwrap();
+        // Simulate termination after settings replacement but before Binding save.
+        apply(&f.paths, &f.settings, Some("one"), true).unwrap();
+        disconnect(&f.paths, &f.settings).unwrap();
+        assert_eq!(f.value()["env"]["CUSTOM"], "before");
+    }
+
+    #[test]
     fn external_model_edit_pauses_sync_without_exposing_values() {
         let fixture = Fixture::new();
         apply(&fixture.paths, &fixture.settings, Some("one"), true).unwrap();
@@ -449,10 +659,9 @@ default_model = "model-z"
         assert_eq!(inspect(paths, settings).unwrap(), Status::Synced);
         assert_eq!(fixture.value()["theme"], "dark");
         assert_eq!(fixture.value()["env"]["KEEP_ME"], "yes");
-        assert!(
-            fixture.value()["env"]
-                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-                .is_none()
+        assert_eq!(
+            fixture.value()["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+            "ccsw-role::haiku"
         );
         assert!(
             !fs::read_to_string(settings)

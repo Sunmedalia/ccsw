@@ -2,16 +2,43 @@ use super::*;
 
 impl App {
     pub(super) fn draw(&mut self, frame: &mut ratatui::Frame) {
+        self.draw_content(frame);
+        let theme = match &self.modal {
+            Some(Modal::Appearance(form)) => form.theme,
+            Some(Modal::Preferences(form)) => form.return_theme.unwrap_or(self.theme),
+            _ => self.theme,
+        };
+        theme.apply(frame.buffer_mut());
+    }
+
+    fn draw_content(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
         self.screen = area;
         if area.width < 40 || area.height < 12 {
             frame.render_widget(
                 Paragraph::new(
-                    "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit",
+                    if self.view_mode == ViewMode::Home
+                        && self.modal.is_none()
+                        && !self.codex_ui.accounts
+                    {
+                        "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit"
+                    } else {
+                        "CCSW · Terminal too small\nResize to at least 40 × 12\nEsc to go back"
+                    },
                 )
                 .wrap(Wrap { trim: false }),
                 area,
             );
+            return;
+        }
+        if self.usage.active {
+            self.draw_client_tabs(frame, area);
+            if let Some(page) = &self.usage.page {
+                self.draw_usage(frame, usage::page_area(area), page);
+            }
+            if let Some(modal) = &self.modal {
+                self.draw_modal(frame, modal);
+            }
             return;
         }
         if self.codex_ui.enabled && self.codex_ui.accounts {
@@ -58,13 +85,7 @@ impl App {
             .unwrap_or_else(|| "no model".into());
         let line = match self.view_mode {
             ViewMode::Home => Line::from(vec![
-                Span::styled(
-                    " CCSW ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" CCSW ", button_style(false, false, false)),
                 Span::styled(
                     format!("  Providers · F2 {}", self.client_tab().next().label()),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -78,13 +99,7 @@ impl App {
                 ),
             ]),
             ViewMode::Provider => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
                 Span::styled(
                     format!("  {profile}  "),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -96,13 +111,7 @@ impl App {
                 ),
             ]),
             ViewMode::AllEnabled => Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
                 Span::styled(
                     "  All Models",
                     Style::default().add_modifier(Modifier::BOLD),
@@ -132,37 +141,19 @@ impl App {
         let mut item_heights = Vec::with_capacity(ids.len().saturating_add(1));
         let mut items = Vec::with_capacity(ids.len().saturating_add(1));
         if is_home {
-            let lines = all_enabled_lines(
-                self.config
-                    .profiles
-                    .values()
-                    .filter(|profile| profile.enabled)
-                    .count(),
-                self.all_enabled_model_count(),
-                self.all_managed_models().len(),
-                content_width,
-                self.pi_enabled,
-            );
-            let lines = if self.codex_ui.enabled {
-                self.chatgpt_provider_lines(content_width)
-            } else {
-                lines
-            };
+            let lines = self.all_models_home_lines(content_width);
             item_heights.push(lines.len());
             items.push(ListItem::new(lines));
+            if self.codex_ui.enabled {
+                let account = self.chatgpt_provider_lines(content_width);
+                item_heights.push(account.len());
+                items.push(ListItem::new(account));
+            }
         }
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];
             if is_home {
-                let discovered = self
-                    .cache
-                    .profiles
-                    .get(id)
-                    .map(|cached| cached.models.as_slice())
-                    .unwrap_or_default();
-                let enabled_count = discovery::active_models(profile, discovered).len();
-                let lines =
-                    home_profile_lines(id, profile, enabled_count, content_width, self.pi_enabled);
+                let lines = self.provider_home_lines(id, content_width);
                 item_heights.push(lines.len());
                 ListItem::new(lines)
             } else {
@@ -391,12 +382,9 @@ impl App {
                         "[+ a]"
                     };
                     frame.render_widget(
-                        Paragraph::new(label).alignment(Alignment::Center).style(
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(CONNECTED)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        Paragraph::new(label)
+                            .alignment(Alignment::Center)
+                            .style(button_style(false, false, false)),
                         btn_rect,
                     );
                 }
@@ -418,16 +406,6 @@ impl App {
                 return;
             }
 
-            let manual_map = self
-                .selected_profile()
-                .map(|p| {
-                    p.models
-                        .iter()
-                        .map(|m| (config::canonical_model_id(&m.id), ()))
-                        .collect::<BTreeMap<_, _>>()
-                })
-                .unwrap_or_default();
-
             let items: Vec<ListItem> = filtered
                 .iter()
                 .map(|&idx| {
@@ -435,7 +413,6 @@ impl App {
                     let is_en = editor.is_enabled(&model.id);
                     let is_1m = editor.one_m.contains(&model.id);
                     let is_def = model.id == editor.default_model;
-                    let is_man = manual_map.contains_key(model.id.as_str());
                     let is_req = editor.is_required(&model.id) && !is_def;
 
                     let marker = if is_def && is_en {
@@ -459,7 +436,7 @@ impl App {
                         MUTED
                     };
 
-                    let mut spans = vec![
+                    let spans = vec![
                         Span::styled(
                             format!("{marker} "),
                             Style::default()
@@ -480,9 +457,6 @@ impl App {
                             Style::default().fg(CONNECTED),
                         ),
                     ];
-                    if is_man && inner.width >= 60 {
-                        spans.push(Span::styled(" [custom]", Style::default().fg(ROUTE)));
-                    }
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
@@ -599,10 +573,6 @@ impl App {
         let is_default = model.id == editor.default_model;
         let is_enabled = editor.is_enabled(&model.id);
         let is_1m = editor.one_m.contains(&model.id);
-        let is_manual = profile
-            .models
-            .iter()
-            .any(|m| canonical_model_id(&m.id) == model.id);
         let alias = profile
             .aliases
             .iter()
@@ -668,15 +638,11 @@ impl App {
                     Style::default().fg(if is_1m { CONNECTED } else { MUTED }),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(" Source: ", Style::default().fg(MUTED)),
-                Span::raw(if is_manual { "Custom" } else { "Gateway" }),
-                if let Some(alias) = alias {
-                    Span::styled(format!("   Role: {alias}"), Style::default().fg(ROUTE))
-                } else {
-                    Span::raw("")
-                },
-            ]),
+            Line::from(vec![if let Some(alias) = alias {
+                Span::styled(format!("   Role: {alias}"), Style::default().fg(ROUTE))
+            } else {
+                Span::raw("")
+            }]),
         ];
         let controls = showcase_controls(area, self.pi_enabled);
         let controls_top = controls
@@ -697,14 +663,17 @@ impl App {
             let (label, style) = match control {
                 ShowcaseControl::Toggle => (
                     if is_enabled {
-                        "[Space Disable]"
+                        "[● Disable (Space)]"
                     } else {
-                        "[Space Enable]"
+                        "[○ Enable (Space)]"
                     },
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(ROUTE)
-                        .add_modifier(Modifier::BOLD),
+                        .fg(if is_enabled { ROUTE } else { MUTED })
+                        .add_modifier(if is_enabled {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 ShowcaseControl::Default => (
                     if self.pi_enabled {
@@ -712,24 +681,24 @@ impl App {
                     } else {
                         "[d Set default]"
                     },
-                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    button_style(false, false, false),
                 ),
                 ShowcaseControl::OneM => (
                     if is_1m {
-                        "[1 Disable 1M]"
+                        "[● 1M (1)]"
                     } else {
-                        "[1 Enable 1M]"
+                        "[○ 1M (1)]"
                     },
-                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(if is_1m { ROUTE } else { MUTED })
+                        .add_modifier(if is_1m {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
-                ShowcaseControl::Delete => (
-                    if is_manual {
-                        "[x Delete]"
-                    } else {
-                        "[Gateway model]"
-                    },
-                    Style::default().fg(if is_manual { ERROR } else { MUTED }),
-                ),
+                ShowcaseControl::Test => ("[F5 Test model]", button_style(false, false, false)),
+                ShowcaseControl::Delete => ("[Delete model]", button_style(false, false, true)),
             };
             frame.render_widget(
                 Paragraph::new(label)
@@ -746,9 +715,12 @@ impl App {
         area: Rect,
         profile: &Profile,
         active: bool,
+        selected: bool,
     ) {
-        let title = if active {
-            " Provider · r fetch · E edit "
+        let title = if selected {
+            " Provider · click again to edit "
+        } else if active {
+            " Provider · click twice / E edit "
         } else {
             " Provider connection "
         };
@@ -779,17 +751,25 @@ impl App {
         } else {
             profile.api_format.label().into()
         };
+        let provider_identity = detail(
+            "Provider",
+            if self.pi_enabled {
+                "● configured"
+            } else if profile.enabled {
+                "● enabled"
+            } else {
+                "○ disabled"
+            },
+        );
+        let provider_identity = if selected {
+            provider_identity.style(Style::default().bg(SELECTION).add_modifier(Modifier::BOLD))
+        } else {
+            provider_identity
+        };
         let mut lines = vec![
-            detail(
-                "Provider",
-                if self.pi_enabled {
-                    "● configured"
-                } else if profile.enabled {
-                    "● enabled"
-                } else {
-                    "○ disabled"
-                },
-            ),
+            provider_identity,
+            detail("Calls", &self.provider_usage_label(false)),
+            detail("Tokens", &self.provider_usage_label(true)),
             detail("API format", &api_format),
             detail("Endpoint", &profile.base_url),
             detail("Credential", &profile.credential.masked()),
@@ -807,10 +787,11 @@ impl App {
                 },
             ),
             detail(
-                match self.client_tab() {
+                match self.config_tab() {
                     ClientTab::Claude => "Claude /model",
                     ClientTab::Codex => "Codex models",
                     ClientTab::Pi => "Pi /model",
+                    ClientTab::Usage => unreachable!(),
                 },
                 &format!(
                     "{} models across {} providers",
@@ -833,10 +814,11 @@ impl App {
         }
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            match self.client_tab() {
+            match self.config_tab() {
                 ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
-                ClientTab::Codex => "Apply changes, then start a new Codex session.",
+                ClientTab::Codex => "Sync with p, restart to load models, then switch with /model.",
                 ClientTab::Pi => "Sync changes, then open /model in Pi.",
+                ClientTab::Usage => unreachable!(),
             },
             Style::default().fg(MUTED),
         ));
@@ -845,8 +827,8 @@ impl App {
     }
 
     pub(super) fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
-        if self.codex_ui.enabled && self.home_all_selected && self.view_mode == ViewMode::Home {
-            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nUse an API provider to switch back to its endpoint and model.")
+        if self.home_account_selected() {
+            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nSpace: enable / disable subscription (confirmation required).\nEnabling pauses API providers; disabling restores their previous states.")
                 .block(panel(" ChatGPT provider ", active)).wrap(Wrap { trim: false }), area);
             return;
         }
@@ -882,16 +864,26 @@ impl App {
 
             let (showcase_card, provider_card) = provider_detail_cards(area);
             self.draw_showcase(frame, showcase_card, editor, profile);
-            self.draw_provider_details(frame, provider_card, profile, active);
+            self.draw_provider_details(
+                frame,
+                provider_card,
+                profile,
+                active,
+                self.provider_card_selected,
+            );
             return;
         }
 
-        self.draw_provider_details(frame, area, profile, active);
+        self.draw_provider_details(frame, area, profile, active, false);
     }
 
     pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
         for (control, rect) in self.client_footer_controls(area, compact) {
-            let (label, style) = self.footer_control_style(control, compact, area.width < 55);
+            let (label, style) = self.footer_control_style(
+                control,
+                compact,
+                self.footer_uses_short_labels(area, compact),
+            );
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)
@@ -913,7 +905,7 @@ impl App {
                     if self.pi_enabled {
                         "Pi · direct API"
                     } else if self.codex_ui.enabled {
-                        "Codex · restart after apply"
+                        "Codex · /model switches loaded models"
                     } else {
                         self.background.status.label()
                     }
@@ -941,115 +933,43 @@ impl App {
     pub(super) fn footer_control_style(
         &self,
         control: FooterControl,
-        compact: bool,
+        _compact: bool,
         tiny: bool,
     ) -> (String, Style) {
-        if self.pi_enabled && control == FooterControl::Sync {
-            return (
-                if tiny {
-                    "Use".into()
-                } else {
-                    "Set default".into()
-                },
-                Style::default().fg(Color::Black).bg(ROUTE),
-            );
-        }
-        if self.codex_ui.enabled && control == FooterControl::Sync {
-            return (
-                if tiny {
-                    "Apply".into()
-                } else {
-                    "Apply Codex".into()
-                },
-                Style::default().fg(Color::Black).bg(ROUTE),
-            );
-        }
         let selected = match control {
             FooterControl::Models => self.focus == Focus::Models,
             FooterControl::Details => self.focus == Focus::Details,
             _ => false,
         };
-        let dot = if selected { '●' } else { '○' };
-        let label = match (control, compact, tiny) {
-            (FooterControl::Back, _, true) => "‹".into(),
-            (FooterControl::Models, _, true) => format!("{dot} M"),
-            (FooterControl::Details, _, true) => format!("{dot} D"),
-            (FooterControl::AddProfile, _, true) => "+".into(),
-            (FooterControl::Sync, _, true) => "⇄".into(),
-            (FooterControl::Proxy, _, true) => "Px".into(),
-            (FooterControl::Help, _, true) => "?".into(),
-            (FooterControl::Quit, _, true) => "×".into(),
-            (FooterControl::Back, true, false) => "‹ Back".into(),
-            (FooterControl::Back, false, false) => "‹ Back (Esc)".into(),
-            (FooterControl::Models, _, false) => format!("{dot} Models"),
-            (FooterControl::Details, _, false) => format!("{dot} Details"),
-            (FooterControl::AddProfile, true, false) => "+ Provider".into(),
-            (FooterControl::AddProfile, false, false) => "+ Provider (n)".into(),
-            (FooterControl::Sync, true, false) => "⇄ Sync".into(),
-            (FooterControl::Sync, false, false) => "⇄ Sync all".into(),
-            (FooterControl::Proxy, true, false) => format!(
-                "{} Px",
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    '●'
+        let (name, shortcut) = match control {
+            FooterControl::AddProfile => ("+ Provider", "n"),
+            FooterControl::DeleteProfile => ("Delete", "x"),
+            FooterControl::Back => ("Back", "Esc"),
+            FooterControl::Models => ("Models", "h"),
+            FooterControl::Details => ("Details", "l"),
+            FooterControl::Sync => (
+                if self.pi_enabled {
+                    "Set default"
+                } else if self.codex_ui.enabled {
+                    "Apply"
                 } else {
-                    '○'
-                }
-            ),
-            (FooterControl::Proxy, false, false) => format!(
-                "{} Proxy",
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    '●'
-                } else {
-                    '○'
-                }
-            ),
-            (FooterControl::Help, true, false) => "?".into(),
-            (FooterControl::Help, false, false) => "Help".into(),
-            (FooterControl::Quit, true, false) => "×".into(),
-            (FooterControl::Quit, false, false) => "Quit".into(),
-        };
-        let style = if control == FooterControl::Back {
-            Style::default()
-                .fg(Color::Black)
-                .bg(ROUTE)
-                .add_modifier(Modifier::BOLD)
-        } else if matches!(control, FooterControl::AddProfile | FooterControl::Sync) {
-            Style::default()
-                .fg(Color::Black)
-                .bg(if control == FooterControl::AddProfile {
-                    CONNECTED
-                } else {
-                    ROUTE
-                })
-                .add_modifier(Modifier::BOLD)
-        } else if selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(CONNECTED)
-                .add_modifier(Modifier::BOLD)
-        } else if control == FooterControl::Proxy {
-            Style::default().fg(
-                if self
-                    .proxy_status
-                    .as_ref()
-                    .is_some_and(|status| status.running)
-                {
-                    CONNECTED
-                } else {
-                    WARNING
+                    "Sync"
                 },
-            )
-        } else {
-            Style::default().fg(MUTED)
+                "p",
+            ),
+            FooterControl::Proxy => ("Proxy", "P"),
+            FooterControl::Settings => ("Settings", "F4"),
+            FooterControl::Help => ("Help", "?"),
+            FooterControl::Quit => ("Quit", "q"),
         };
+        let label = if tiny && matches!(control, FooterControl::Sync) {
+            name.to_owned()
+        } else if tiny {
+            format!("({shortcut})")
+        } else {
+            format!("{name} ({shortcut})")
+        };
+        let style = button_style(selected, false, control == FooterControl::DeleteProfile);
         (label, style)
     }
 
@@ -1057,6 +977,12 @@ impl App {
         let area = modal_area_for(modal, frame.area());
         frame.render_widget(Clear, area);
         match modal {
+            Modal::Appearance(form) => theme::draw(
+                frame,
+                area,
+                form,
+                !self.pi_enabled && !self.codex_ui.enabled,
+            ),
             Modal::Import(candidate) => {
                 let mut lines = vec![
                     Line::styled(
@@ -1081,6 +1007,7 @@ impl App {
                 );
                 draw_modal_buttons(frame, area, &["Import", "Skip"]);
             }
+            Modal::Preferences(form) => draw_preferences(frame, area, form),
             Modal::Profile(form) => {
                 if let Some(selected) = form.template_selected {
                     frame.render_widget(panel(" New provider · choose a template ", true), area);
@@ -1171,9 +1098,27 @@ impl App {
                 draw_form(
                     frame,
                     area,
-                    " Provider · Alt+F: model for selected field ",
+                    " Provider · F5: test · Alt+1: 1M ",
                     &form.fields,
                     form.selected,
+                    true,
+                );
+                let inner = panel_inner(area);
+                frame.render_widget(
+                    Paragraph::new(
+                        form.test_message
+                            .as_ref()
+                            .map_or("", |(message, _)| message.as_str()),
+                    )
+                    .style(Style::default().fg(
+                        if form.test_message.as_ref().is_some_and(|(_, error)| *error) {
+                            ERROR
+                        } else {
+                            CONNECTED
+                        },
+                    ))
+                    .wrap(Wrap { trim: false }),
+                    Rect::new(inner.x, inner.bottom().saturating_sub(4), inner.width, 2),
                 );
                 draw_modal_buttons(
                     frame,
@@ -1227,13 +1172,13 @@ impl App {
                 draw_confirmation(
                     frame,
                     area,
-                    "Delete this manual model? Gateway models cannot be deleted here.",
+                    "Delete this model from the provider? Its role assignments will also be removed.",
                 );
                 draw_modal_buttons(frame, area, &["Delete", "Cancel"]);
             }
             Modal::Help(help) => draw_help(frame, area, help),
         }
-        if self.status_error && area.height >= 5 {
+        if self.status_error && area.height >= 5 && !matches!(modal, Modal::Profile(_)) {
             let rect = Rect::new(
                 area.x + 1,
                 area.y + area.height - 4,

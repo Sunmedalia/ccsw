@@ -1,6 +1,132 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
+
+#[test]
+fn tui_theme_preview_cancel_save_and_restart_do_not_touch_provider_config() {
+    let (_temp, mut app) = persisted_app();
+    let before = std::fs::read(&app.paths.config).unwrap();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|c| c.fg == Color::Rgb(226, 222, 210))
+    );
+    assert_eq!(app.theme, theme::Theme::Classic);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.paths.state_dir.join("tui-theme.json").exists());
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.theme, theme::Theme::Slate);
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Slate);
+    assert_eq!(std::fs::read(&app.paths.config).unwrap(), before);
+    assert!(!app.background.sync_running);
+    assert!(app.background.queued_sync.is_none());
+}
+
+#[test]
+fn tui_theme_settings_mouse_and_keyboard_work_on_every_client() {
+    let (_temp, mut app) = persisted_app();
+    let screen = Rect::new(0, 0, 100, 30);
+    for tab in [
+        ClientTab::Claude,
+        ClientTab::Codex,
+        ClientTab::Pi,
+        ClientTab::Usage,
+    ] {
+        app.select_client_tab(tab);
+        app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(app.modal, Some(Modal::Appearance(_))));
+        let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
+        let row = theme::rows(area)[2].1;
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: row.x + 3,
+                row: row.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Moss)
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.modal.is_none());
+    }
+}
 use std::path::PathBuf;
+
+#[test]
+fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
+    let (_temp, mut app) = persisted_app();
+    let mut form = PreferencesForm::new(app.config.claude.clone(), serde_json::json!({}));
+    form.return_theme = Some(theme::Theme::Plum);
+    app.modal = Some(Modal::Preferences(form.clone()));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    assert_eq!(app.theme, theme::Theme::Classic);
+
+    form.fields[0].value = "hide".into();
+    app.modal = Some(Modal::Preferences(form));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Preferences(ref form)) if form.discard));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    assert!(!app.paths.state_dir.join("tui-theme.json").exists());
+}
+
+#[test]
+fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
+    let (_temp, mut app) = persisted_app();
+    app.open_appearance();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    for expected in [
+        theme::Theme::Slate,
+        theme::Theme::Moss,
+        theme::Theme::Sand,
+        theme::Theme::Plum,
+        theme::Theme::Classic,
+    ] {
+        app.handle_key(key(KeyCode::Down)).unwrap();
+        assert!(matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == expected));
+    }
+    app.handle_key(key(KeyCode::Up)).unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+    );
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    for name in ["Classic", "Graphite", "Tundra", "Paper", "Nightfall"] {
+        assert!(text.contains(name), "{name}: {text}");
+    }
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Plum);
+}
 
 #[test]
 fn vim_keys_navigate_templates_and_picker_without_interfering_with_search() {
@@ -24,6 +150,7 @@ fn vim_keys_navigate_templates_and_picker_without_interfering_with_search() {
                 description: None,
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
             })
             .collect(),
     );
@@ -132,6 +259,7 @@ fn provider_catalog_mouse_selects_then_uses_model_in_target_field() {
             description: None,
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
         }]));
         app.modal = Some(Modal::Profile(Box::new(form)));
         let outer = panel_inner(modal_area(screen));
@@ -207,6 +335,7 @@ fn check_provider_picker_target(selected: usize) {
         description: None,
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
     }]);
     picker.focus_api_search = true;
     form.picker = Some(picker.clone());
@@ -248,6 +377,7 @@ fn renders_empty_state_in_narrow_terminal() {
         cache: PathBuf::from("/tmp/cache"),
     };
     let mut app = App {
+        theme: theme::Theme::default(),
         paths,
         config: Config::default(),
         cache: ModelCache::default(),
@@ -263,11 +393,13 @@ fn renders_empty_state_in_narrow_terminal() {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     };
     let backend = TestBackend::new(72, 22);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -366,7 +498,7 @@ fn help_renders_in_full_and_narrow_terminals() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(rendered.contains("Terminal too small"));
-    assert!(rendered.contains("q / Ctrl+C to quit"));
+    assert!(rendered.contains("Esc to go back"));
 }
 
 #[test]
@@ -708,6 +840,7 @@ fn route_editor_searches_toggles_and_changes_default() {
         .map(|id| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: id.into(),
             label: Some(id.to_uppercase()),
             description: None,
@@ -943,6 +1076,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "default-m".into(),
             label: None,
             description: None,
@@ -950,6 +1084,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "m-1".into(),
             label: None,
             description: None,
@@ -957,6 +1092,7 @@ fn route_editor_batch_enable_and_disable() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "m-2".into(),
             label: None,
             description: None,
@@ -1205,7 +1341,7 @@ fn mouse_click_catalog_add_and_detail_edit() {
     // Close modal
     app.modal = None;
 
-    // 2. The details card only keeps provider-specific refresh/edit actions.
+    // 2. The details card keeps provider-specific edit/delete actions.
     let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
     let (_, provider_card) = provider_detail_cards(details);
     assert_eq!(detail_controls(provider_card).len(), 2);
@@ -1253,6 +1389,7 @@ fn model_can_be_disabled_and_enabled_freely() {
     let single_catalog = vec![ModelEntry {
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
         id: "only-model".into(),
         label: None,
         description: None,
@@ -1336,6 +1473,7 @@ fn model_form_api_model_picker_populates_fields() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "qwen-max-latest".into(),
             label: Some("Qwen Max Latest".into()),
             description: Some("Alibaba Cloud flagship model".into()),
@@ -1343,6 +1481,7 @@ fn model_form_api_model_picker_populates_fields() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "deepseek-v4-flash[1m]".into(),
             label: Some("DeepSeek V4 Flash".into()),
             description: Some("Fast reasoning model".into()),
@@ -1376,6 +1515,7 @@ fn model_form_search_and_scrolling() {
         .map(|i| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: format!("model-{i:02}"),
             label: Some(format!("Model {i}")),
             description: None,
@@ -1419,6 +1559,7 @@ fn provider_catalog_only_shows_added_models_not_unselected_gateway_models() {
         .map(|i| ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: format!("gateway-model-{i}"),
             label: Some(format!("Gateway Model {i}")),
             description: None,
@@ -1443,6 +1584,7 @@ fn interactive_test_app() -> App {
     let model = |id: &str| ModelEntry {
         max_output_tokens: None,
         context_window: None,
+        reasoning_max: None,
         id: id.into(),
         label: None,
         description: None,
@@ -1472,6 +1614,7 @@ fn interactive_test_app() -> App {
         },
         config,
         cache: ModelCache::default(),
+        theme: theme::Theme::default(),
         view_mode: ViewMode::Home,
         home_all_selected: false,
         profile_idx: 0,
@@ -1484,13 +1627,155 @@ fn interactive_test_app() -> App {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     }
 }
+#[test]
+fn usage_page_opens_filters_and_renders_at_supported_sizes() {
+    use ratatui::backend::TestBackend;
+    let mut app = interactive_test_app();
+    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.usage.active);
+    for (width, height) in [(40, 12), (80, 24), (120, 40)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Usage"));
+        assert!(text.contains("scroll"));
+    }
+    for key in [
+        KeyCode::Char('a'),
+        KeyCode::Right,
+        KeyCode::Tab,
+        KeyCode::Tab,
+        KeyCode::Tab,
+    ] {
+        app.handle_key(KeyEvent::new(key, KeyModifiers::NONE))
+            .unwrap();
+    }
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("Pi: not tracked"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_none());
+}
+
+#[test]
+fn usage_tab_opens_tables_and_click_filters() {
+    use ratatui::backend::TestBackend;
+    let mut app = interactive_test_app();
+    let day = app.usage.snapshot.today();
+    app.usage.snapshot.rows.push(crate::usage::Row {
+        hour: 12,
+        model: "gpt-test-model".into(),
+        day: day.clone(),
+        client: "Claude".into(),
+        provider: "usage-fixture".into(),
+        name: "Usage fixture".into(),
+        kind: "generation".into(),
+        totals: crate::usage::Totals {
+            calls: 123,
+            success: 120,
+            failed: 3,
+            input: 10000,
+            output: 2000,
+            ..Default::default()
+        },
+    });
+    for width in [40, 72, 120] {
+        let screen = Rect::new(0, 0, width, 24);
+        let (_, rect) = client_tabs(screen)
+            .into_iter()
+            .find(|(tab, _)| *tab == ClientTab::Usage)
+            .expect("Usage remains visible");
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(app.usage.active);
+        app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE))
+            .unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Usage fixture"));
+        assert!(rendered.contains("123"));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains(&day));
+        assert!(rendered.to_ascii_lowercase().contains("tokens"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Success"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE))
+            .unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Models 4") || rendered.contains("Models4"));
+        assert!(rendered.contains("gpt-test-model"));
+        assert!(rendered.contains("123"));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+    }
+}
+
 pub(super) fn persisted_app() -> (tempfile::TempDir, App) {
     let temp = tempfile::tempdir().unwrap();
     let mut app = interactive_test_app();
@@ -1524,7 +1809,7 @@ fn model_modal_keyboard_sequence_keeps_input_until_explicit_close() {
     let (_temp, mut app) = persisted_app();
     app.enter_provider_view();
     app.open_add_model_modal();
-    for _ in 0..7 {
+    for _ in 0..8 {
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
     }
@@ -1672,6 +1957,7 @@ fn api_selection_clears_previous_context_and_description() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "a[1m]".into(),
             label: None,
             description: Some("Old description".into()),
@@ -1679,6 +1965,7 @@ fn api_selection_clears_previous_context_and_description() {
         ModelEntry {
             max_output_tokens: None,
             context_window: None,
+            reasoning_max: None,
             id: "b".into(),
             label: None,
             description: None,
@@ -1870,13 +2157,13 @@ fn model_token_form_validates_and_round_trips() {
     let mut form = ModelForm::new();
     form.fields[0].value = "m".into();
     for invalid in ["0", "-1", "1.5", "4294967296", "no"] {
-        form.fields[5].value = invalid.into();
+        form.fields[6].value = invalid.into();
         assert!(form.validate_tokens().is_err());
     }
-    form.fields[5].value = "8192".into();
-    form.fields[6].value = "4096".into();
+    form.fields[6].value = "8192".into();
+    form.fields[7].value = "4096".into();
     assert!(form.validate_tokens().is_err());
-    form.fields[6].value = "32768".into();
+    form.fields[7].value = "32768".into();
     form.validate_tokens().unwrap();
     let model = form.to_model();
     let roundtrip: ModelEntry = toml::from_str(&toml::to_string(&model).unwrap()).unwrap();
@@ -1923,8 +2210,8 @@ fn editing_tokens_keeps_disabled_model_disabled() {
         panic!("model editor missing");
     };
     assert!(!form.enable_now());
-    form.fields[5].value = "8192".into();
-    form.fields[6].value = "32768".into();
+    form.fields[6].value = "8192".into();
+    form.fields[7].value = "32768".into();
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
         .unwrap();
     let selected = app.selected_profile().unwrap();
@@ -2046,6 +2333,9 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
+    assert_eq!(app.client_tab(), ClientTab::Usage);
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
     assert!(!app.pi_enabled);
     assert!(!app.codex_ui.enabled);
 }
@@ -2093,7 +2383,12 @@ fn client_tabs_click_from_accounts_and_preserve_active_view_and_modal() {
 fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
     let (_temp, mut app) = persisted_app();
     for (width, height) in [(40, 12), (80, 24), (120, 36)] {
-        for tab in [ClientTab::Claude, ClientTab::Codex, ClientTab::Pi] {
+        for tab in [
+            ClientTab::Claude,
+            ClientTab::Codex,
+            ClientTab::Pi,
+            ClientTab::Usage,
+        ] {
             app.select_client_tab(tab);
             for accounts in [false, true] {
                 app.codex_ui.accounts = accounts;
@@ -2103,7 +2398,7 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
                 let first_row = (0..width)
                     .map(|x| buffer[(x, 0)].symbol())
                     .collect::<String>();
-                for label in ["Claude Code", "Codex", "Pi"] {
+                for label in ["Claude Code", "Codex", "Pi", "Usage"] {
                     assert!(first_row.contains(label));
                 }
                 for (candidate, rect) in client_tabs(Rect::new(0, 0, width, height)) {
@@ -2223,16 +2518,19 @@ fn codex_account_provider_and_help_use_shared_navigation() {
     assert!(text.contains("ChatGPT Account"));
     assert!(text.contains("Providers · F2 Pi"));
     app.home_all_selected = false;
+    let area = Rect::new(0, 0, 120, 36);
+    let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
+    let account_row = panel_inner(panel).y + app.home_profile_item_heights(panel)[0] as u16;
     let mouse = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 8,
-        row: 4,
+        row: account_row,
         modifiers: KeyModifiers::NONE,
     };
-    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
+    app.handle_mouse(mouse, area).unwrap();
     assert!(!app.codex_ui.accounts);
     assert!(app.home_all_selected);
-    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
+    app.handle_mouse(mouse, area).unwrap();
     assert!(app.codex_ui.accounts);
     app.open_help();
     assert!(matches!(app.modal, Some(Modal::Help(_))));
@@ -2261,7 +2559,7 @@ fn codex_account_provider_and_help_use_shared_navigation() {
 fn codex_account_apply_without_login_stays_on_provider_home() {
     let (_temp, mut app) = persisted_app();
     app.select_client_tab(ClientTab::Codex);
-    app.home_all_selected = true;
+    app.select_home_index(1);
     app.apply_codex();
     assert!(!app.codex_ui.accounts);
     assert!(app.status_error);
@@ -2271,6 +2569,99 @@ fn codex_account_apply_without_login_stays_on_provider_home() {
             assert!(line.width() <= usize::from(width));
         }
     }
+}
+
+#[test]
+fn codex_all_models_has_separate_home_row_and_only_enabled_models() {
+    let (_temp, mut app) = persisted_app();
+    config::update(&app.paths.config, |c| {
+        let mut profile = c.profiles.values().next().unwrap().clone();
+        profile.default_model = "enabled-model".into();
+        profile.models.clear();
+        profile.aliases = Default::default();
+        profile.enabled_models.clear();
+        profile.disabled_models = vec!["hidden-model".into()];
+        profile.fallback_models.clear();
+        profile.subagent_model = None;
+        c.codex.profiles.clear();
+        c.codex.profiles.insert("api".into(), profile);
+        Ok(())
+    })
+    .unwrap();
+    app.select_client_tab(ClientTab::Codex);
+    app.select_home_index(0);
+    assert!(app.codex_ui.home_models);
+    assert_eq!(app.home_selected_index(), 0);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.view_mode, ViewMode::AllEnabled);
+    assert!(!app.codex_ui.accounts);
+    assert_eq!(app.all_managed_models().len(), 1);
+    assert_eq!(app.all_managed_models()[0].model.id, "enabled-model");
+    assert!(app.all_managed_models().iter().all(|m| m.enabled));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.select_home_index(1);
+    assert!(app.home_account_selected());
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_ui.accounts);
+}
+
+#[test]
+fn subscription_toggle_requires_confirmation_and_cancel_preserves_config() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Codex);
+    app.config.codex.accounts.insert(
+        "saved".into(),
+        crate::codex::accounts::Account {
+            name: "Saved".into(),
+            ..Default::default()
+        },
+    );
+    // Choose the account using the existing account-list selection mechanism.
+    app.open_codex_accounts();
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.select_home_index(1);
+    let before = app.config.clone();
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_navigation_blocked());
+    assert!(!app.codex_ui.busy);
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Enable ChatGPT subscription?"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.config, before);
+    assert!(!app.codex_navigation_blocked());
+
+    app.config.codex.active = Some(crate::codex::Selection::Account { id: "saved".into() });
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Disable ChatGPT subscription?"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.subscription_enabled());
+    assert!(!app.codex_navigation_blocked());
 }
 
 #[test]
@@ -2309,8 +2700,8 @@ fn codex_space_selects_account_without_applying_or_following_cursor() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("[●] ○ First"));
-    assert!(text.contains("[○] ○ Second"));
+    assert!(text.contains("● First"));
+    assert!(text.contains("○ Second"));
 }
 
 #[test]
@@ -2327,7 +2718,7 @@ fn pi_uses_provider_layout_without_proxy_controls() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Providers · F2 Claude Code"));
+        assert!(text.contains("Providers · F2 Usage"));
         let area = Rect::new(0, 0, width, height);
         let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
         assert!(
@@ -2335,8 +2726,10 @@ fn pi_uses_provider_layout_without_proxy_controls() {
                 .iter()
                 .any(|(control, _)| *control == FooterControl::Proxy)
         );
+        let gap = controls[1].1.x - controls[0].1.right();
+        assert!(gap >= 1);
         for pair in controls.windows(2) {
-            assert_eq!(pair[0].1.right() + 1, pair[1].1.x);
+            assert_eq!(pair[0].1.right() + gap, pair[1].1.x);
         }
         app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
             .unwrap();
@@ -2536,4 +2929,557 @@ fn pi_views_and_help_use_configured_model_labels() {
         assert!(!rendered.contains(" disabled"));
         assert!(!rendered.contains("role dependency"));
     }
+}
+
+#[test]
+fn provider_context_controls_toggle_each_role_and_fallbacks() {
+    let mut app = interactive_test_app();
+    for edit in [false, true] {
+        let mut form = if edit {
+            ProfileForm::edit("one".into(), &app.config.profiles["one"])
+        } else {
+            ProfileForm::new()
+        };
+        for index in 6..form.fields.len() {
+            form.fields[index].value = if index == 12 {
+                "alpha[1m], beta"
+            } else {
+                "alpha"
+            }
+            .into();
+        }
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        for index in 6..13 {
+            let Some(Modal::Profile(form)) = &mut app.modal else {
+                panic!()
+            };
+            form.selected = index;
+            app.handle_modal(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT))
+                .unwrap();
+            let Some(Modal::Profile(form)) = &app.modal else {
+                panic!()
+            };
+            assert!(form.model_field_is_1m(index));
+            assert_eq!(form.selected, index);
+            assert_eq!(
+                form.fields[index].value,
+                if index == 12 {
+                    "alpha[1m],beta[1m]"
+                } else {
+                    "alpha[1m]"
+                }
+            );
+            app.handle_modal(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT))
+                .unwrap();
+            let Some(Modal::Profile(form)) = &app.modal else {
+                panic!()
+            };
+            assert!(!form.model_field_is_1m(index));
+        }
+    }
+    let mut form = ProfileForm::new();
+    form.toggle_model_field_1m(6);
+    assert!(form.fields[6].value.is_empty());
+}
+
+#[test]
+fn provider_context_checkbox_click_matches_scrolled_row() {
+    for screen in [Rect::new(0, 0, 120, 30), Rect::new(0, 0, 48, 18)] {
+        let mut app = interactive_test_app();
+        let mut form = ProfileForm::new();
+        form.selected = 12;
+        form.fields[12].value = "alpha,beta".into();
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        let inner = panel_inner(modal_area(screen));
+        let content = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(4),
+        );
+        let (_, offset) = form_viewport(content, 12);
+        let checkbox = profile_1m_rect(content, (12 - offset) as u16);
+        app.handle_modal_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: checkbox.x + 2,
+                row: checkbox.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        let Some(Modal::Profile(form)) = &app.modal else {
+            panic!()
+        };
+        assert_eq!(form.fields[12].value, "alpha[1m],beta[1m]");
+        assert!(form.fields[11].value.is_empty());
+    }
+}
+
+#[test]
+fn claude_preferences_save_presets_and_custom_values_without_changing_routes() {
+    let (_temp, mut app) = persisted_app();
+    let profiles = app.config.profiles.clone();
+    app.modal = Some(Modal::Preferences(PreferencesForm::new(
+        app.config.claude.clone(),
+        serde_json::json!({}),
+    )));
+    for key in [
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+    ] {
+        app.handle_key(key).unwrap();
+    }
+    let Some(Modal::Preferences(form)) = &mut app.modal else {
+        panic!()
+    };
+    form.fields[6].value = "CUSTOM".into();
+    form.fields[7].value = "$(literal)".into();
+    assert!(form.fields[7].secret);
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(app.modal.is_none(), "{}", app.status);
+    assert_eq!(app.config.profiles, profiles);
+    assert_eq!(app.config.claude.env["CUSTOM"], "$(literal)");
+    assert_eq!(app.config.claude.env["CLAUDE_CODE_EFFORT_LEVEL"], "max");
+    assert_eq!(app.config.claude.hide_attribution, Some(true));
+    assert_eq!(
+        config::load(&app.paths.config).unwrap().claude,
+        app.config.claude
+    );
+    let settings = app.config.claude.clone();
+    app.select_client_tab(ClientTab::Codex);
+    app.config = app
+        .update_client_config(|c| {
+            c.profiles.get_mut("one").unwrap().name = "Changed".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(config::load(&app.paths.config).unwrap().claude, settings);
+}
+
+#[test]
+fn claude_preferences_mouse_scroll_masking_validation_and_discard() {
+    let (_temp, mut app) = persisted_app();
+    let screen = Rect::new(0, 0, 48, 18);
+    app.modal = Some(Modal::Preferences(PreferencesForm::new(
+        app.config.claude.clone(),
+        serde_json::json!({}),
+    )));
+    let area = modal_area(screen);
+    let add = modal_button_rects(area, 4)[1];
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: add.x,
+            row: add.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Preferences(form)) = &mut app.modal else {
+        panic!()
+    };
+    form.fields[6].value = "ANTHROPIC_BASE_URL".into();
+    form.fields[7].value = "very-private-value".into();
+    form.selected = 7;
+    app.handle_modal(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Preferences(_))));
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).unwrap();
+    let Some(Modal::Preferences(form)) = &app.modal else {
+        panic!()
+    };
+    terminal
+        .draw(|frame| draw_preferences(frame, area, form))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!content.contains("very-private-value"));
+    assert!(content.contains("Save"));
+    let remove = preference_actions(area)[0];
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: remove.x,
+            row: remove.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Preferences(form)) = &app.modal else {
+        panic!()
+    };
+    assert_eq!(form.fields.len(), 6);
+    app.handle_modal(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT))
+        .unwrap();
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_some());
+    app.handle_modal(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_some());
+    app.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_modal(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_none());
+    assert!(app.config.claude.env.is_empty());
+}
+
+#[test]
+fn provider_form_tests_use_unsaved_connection_and_target_model() {
+    let mut form = ProfileForm::new();
+    form.fields[3].value = "https://draft.example/v1".into();
+    form.fields[5].value = "draft-key".into();
+    form.selected = 8;
+    form.fields[8].value = "draft-sonnet[1m]".into();
+    let (profile, models) = form.model_test_request().unwrap();
+    assert_eq!(profile.base_url, "https://draft.example/v1");
+    assert_eq!(profile.credential.value(), Some("draft-key"));
+    assert_eq!(models, ["draft-sonnet[1m]"]);
+    assert!(form.fields[0].value.is_empty());
+    assert!(form.fields[6].value.is_empty());
+    form.selected = 12;
+    form.fields[12].value = "fallback-a, fallback-b".into();
+    assert_eq!(
+        form.model_test_request().unwrap().1,
+        ["fallback-a", "fallback-b"]
+    );
+    form.fields[12].value.clear();
+    assert!(form.model_test_request().is_err());
+}
+
+#[test]
+fn provider_model_test_button_and_1m_color_work_in_narrow_form() {
+    let mut app = interactive_test_app();
+    let mut form = ProfileForm::new();
+    form.selected = 12;
+    app.modal = Some(Modal::Profile(Box::new(form)));
+    let screen = Rect::new(0, 0, 48, 18);
+    let inner = panel_inner(modal_area(screen));
+    let content = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(4),
+    );
+    let (_, offset) = form_viewport(content, 12);
+    let row = (12 - offset) as u16;
+    let button = profile_test_rect(content, row);
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: button.x + 1,
+            row: button.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    assert!(app.status.contains("Enter a model name"));
+    let Some(Modal::Profile(form)) = &mut app.modal else {
+        panic!()
+    };
+    assert_eq!(form.selected, 12);
+    form.fields[12].value = "model[1m]".into();
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let checkbox = profile_1m_rect(content, row);
+    let cell = &terminal.backend().buffer()[(checkbox.x, checkbox.y)];
+    assert_eq!(cell.symbol(), "[");
+    assert_eq!(cell.bg, ROUTE);
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: checkbox.x + 1,
+            row: checkbox.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(checkbox.x, checkbox.y)].fg,
+        ROUTE
+    );
+}
+
+#[test]
+fn base_url_test_accepts_blank_credentials_without_relaxing_model_validation() {
+    let mut form = ProfileForm::new();
+    form.fields[3].value = "https://example.com/v1".into();
+    for kind in ["bearer", "x-api-key", "api-key", "none"] {
+        form.fields[4].value = kind.into();
+        for blank in ["", "   "] {
+            form.fields[5].value = blank.into();
+            let profile = form.connection_test_profile().unwrap();
+            assert_eq!(profile.credential, Credential::None);
+            assert_eq!(profile.base_url, "https://example.com/v1");
+            assert_eq!(form.fields[4].value, kind);
+            assert_eq!(form.fields[5].value, blank);
+        }
+    }
+    form.fields[4].value = "bearer".into();
+    form.fields[5].value.clear();
+    assert!(form.discovery_profile().is_err());
+    form.fields[5].value = "provided-token".into();
+    assert_eq!(
+        form.connection_test_profile().unwrap().credential.value(),
+        Some("provided-token")
+    );
+    form.fields[3].value = "not a URL".into();
+    assert!(form.connection_test_profile().is_err());
+}
+
+#[test]
+fn quit_is_only_available_on_provider_home() {
+    let mut app = interactive_test_app();
+    for view in [ViewMode::Home, ViewMode::Provider, ViewMode::AllEnabled] {
+        app.view_mode = view;
+        for width in [40, 60, 120] {
+            let controls = footer_controls(Rect::new(0, 0, width, 1), width < 100, view);
+            assert_eq!(
+                controls.iter().any(|(c, _)| *c == FooterControl::Quit),
+                view == ViewMode::Home
+            );
+        }
+        for key in [
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ] {
+            assert_eq!(app.handle_key(key).unwrap(), view == ViewMode::Home);
+        }
+    }
+    app.view_mode = ViewMode::Home;
+    app.new_profile();
+    assert!(
+        !app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+            .unwrap()
+    );
+}
+
+#[test]
+fn provider_delete_button_and_details_shortcut_open_confirmation() {
+    let mut app = interactive_test_app();
+    app.enter_provider_view();
+    let screen = Rect::new(0, 0, 120, 30);
+    let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
+    let (_, card) = provider_detail_cards(details);
+    let (_, button) = detail_controls(card)
+        .into_iter()
+        .find(|(c, _)| *c == DetailControl::Delete)
+        .unwrap();
+    let before = app.config.clone();
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: button.x,
+            row: button.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    assert!(matches!(app.modal, Some(Modal::DeleteProfile)));
+    assert_eq!(app.config, before);
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.focus = Focus::Details;
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::DeleteProfile)));
+    assert_eq!(app.config, before);
+}
+
+#[test]
+fn provider_form_only_displays_its_test_messages() {
+    let mut app = interactive_test_app();
+    app.status = "Unrelated global sync status".into();
+    app.modal = Some(Modal::Profile(Box::new(ProfileForm::new())));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| app.draw_modal(frame, app.modal.as_ref().unwrap()))
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!text.contains("Unrelated global sync status"));
+    app.start_profile_model_test();
+    let Some(Modal::Profile(form)) = &app.modal else {
+        panic!()
+    };
+    let message = form.test_message.as_ref().unwrap().0.clone();
+    assert!(message.contains("Cannot test model"));
+    app.status = "Another unrelated sync status".into();
+    terminal
+        .draw(|frame| app.draw_modal(frame, app.modal.as_ref().unwrap()))
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Cannot test model"));
+    assert!(!text.contains("Another unrelated sync status"));
+}
+
+#[test]
+fn home_delete_button_follows_provider_selection_and_confirms() {
+    let mut app = interactive_test_app();
+    app.select_home_index(0);
+    let screen = Rect::new(0, 0, 80, 24);
+    let footer = ui_areas(screen, app.focus, app.view_mode).footer;
+    assert!(
+        !app.client_footer_controls(footer, true)
+            .iter()
+            .any(|(c, _)| *c == FooterControl::DeleteProfile)
+    );
+    app.select_home_index(1);
+    let (_, button) = app
+        .client_footer_controls(footer, true)
+        .into_iter()
+        .find(|(c, _)| *c == FooterControl::DeleteProfile)
+        .unwrap();
+    let before = app.config.clone();
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: button.x,
+            row: button.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    assert!(matches!(app.modal, Some(Modal::DeleteProfile)));
+    assert_eq!(app.config, before);
+}
+
+#[test]
+fn deleting_models_ignores_source_cleans_roles_and_survives_catalog_refresh() {
+    for catalog_only in [false, true] {
+        let (_temp, mut app) = persisted_app();
+        let cached = app.config.profiles["one"].models.clone();
+        let profile = app.config.profiles.get_mut("one").unwrap();
+        profile.default_model = "model-a[1m]".into();
+        profile.aliases.opus = Some("model-a".into());
+        profile.subagent_model = Some("model-a[1m]".into());
+        profile.fallback_models = vec!["model-a".into()];
+        if catalog_only {
+            profile.models.clear();
+        }
+        config::update(&app.paths.config, |latest| {
+            latest.profiles = app.config.profiles.clone();
+            Ok(())
+        })
+        .unwrap();
+        app.cache.profiles.insert(
+            "one".into(),
+            CachedModels {
+                fetched_at: 0,
+                models: cached.clone(),
+            },
+        );
+        app.enter_provider_view();
+        assert_eq!(
+            canonical_model_id(&app.selected_model().unwrap().id),
+            "model-a"
+        );
+        app.delete_selected_model();
+        assert!(matches!(app.modal, Some(Modal::DeleteModel)));
+        app.handle_modal(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.config.profiles["one"].default_model, "model-b");
+        assert!(app.config.profiles["one"].aliases.opus.is_none());
+        assert!(app.config.profiles["one"].subagent_model.is_none());
+        assert!(app.config.profiles["one"].fallback_models.is_empty());
+        app.config = config::load(&app.paths.config).unwrap();
+        app.cache.profiles.insert(
+            "one".into(),
+            CachedModels {
+                fetched_at: 1,
+                models: cached,
+            },
+        );
+        app.init_provider_editor();
+        assert!(
+            app.catalog_models()
+                .iter()
+                .all(|model| canonical_model_id(&model.id) != "model-a")
+        );
+        // The last default stays protected until another model is added.
+        app.delete_selected_model();
+        app.handle_modal(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.status.contains("add another model first"));
+        assert_eq!(app.config.profiles["one"].default_model, "model-b");
+    }
+}
+
+#[test]
+fn repeated_model_click_edits_and_reasoning_arrows_cycle() {
+    let mut app = interactive_test_app();
+    app.enter_provider_view();
+    let screen = Rect::new(0, 0, 120, 30);
+    let models = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let click = |x, y| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    // The second row is initially unselected; two clicks select then edit it.
+    let event = click(models.x + 8, models.y + 5);
+    app.handle_mouse(event, screen).unwrap();
+    assert!(app.modal.is_none());
+    app.handle_mouse(event, screen).unwrap();
+    let Some(Modal::Model(form)) = &mut app.modal else {
+        panic!("second click must edit")
+    };
+    let index = form
+        .fields
+        .iter()
+        .position(|field| field.label == "Reasoning max")
+        .unwrap();
+    form.selected = index;
+    form.fields[index].value = "high".into();
+    let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
+    let inner = panel_inner(area);
+    let content = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let (form_area, _) = model_form_areas(content, false);
+    let fields = panel_inner(form_area);
+    let (_, offset) = form_viewport(fields, index);
+    let x = fields.x + (fields.width / 3).min(17) + 2;
+    let y = fields.y + (index - offset) as u16;
+    app.handle_modal_mouse(click(x, y), screen).unwrap();
+    let Some(Modal::Model(form)) = &app.modal else {
+        panic!()
+    };
+    assert_eq!(form.fields[index].value, "medium");
+    app.handle_modal_mouse(click(x + 9, y), screen).unwrap();
+    let Some(Modal::Model(form)) = &app.modal else {
+        panic!()
+    };
+    assert_eq!(form.fields[index].value, "high");
 }

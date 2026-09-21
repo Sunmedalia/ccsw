@@ -1,3 +1,4 @@
+mod metering;
 mod responses;
 mod transport;
 use std::{
@@ -37,7 +38,7 @@ use crate::config::{
 const DEFAULT_LISTEN: &str = "127.0.0.1:17321";
 const MAX_ERROR_BODY: usize = 4096;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct RouteTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_profile_id: Option<String>,
@@ -50,7 +51,7 @@ struct RouteTarget {
     models: BTreeMap<String, AggregateModelTarget>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct AggregateModelTarget {
     profile_id: String,
     model_id: String,
@@ -159,6 +160,7 @@ pub fn aggregate_profile(
             models.push(ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: exposed,
                 label: Some(format!("{} · {}", profile.name, model.label())),
                 description: Some(format!(
@@ -183,28 +185,27 @@ pub fn aggregate_profile(
             })?;
 
     let proxy_paths = ProxyPaths::from_app(paths)?;
-    let route_id =
-        update_registry(&proxy_paths, None, |registry| {
-            if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
-                target.config_path == paths.config && target.profile_id.is_none()
-            }) {
-                target.models = targets.clone();
-                target.default_profile_id = Some(default_profile_id.into());
-                return id.clone();
-            }
-            let id = Uuid::new_v4().simple().to_string();
-            registry.routes.insert(
-                id.clone(),
-                RouteTarget {
-                    default_profile_id: Some(default_profile_id.into()),
-                    codex: false,
-                    config_path: paths.config.clone(),
-                    profile_id: None,
-                    models: targets.clone(),
-                },
-            );
-            id
-        })?;
+    let route_id = update_registry(&proxy_paths, None, |registry| {
+        if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
+            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+        }) {
+            target.models = targets.clone();
+            target.default_profile_id = Some(default_profile_id.into());
+            return id.clone();
+        }
+        let id = Uuid::new_v4().simple().to_string();
+        registry.routes.insert(
+            id.clone(),
+            RouteTarget {
+                default_profile_id: Some(default_profile_id.into()),
+                codex: false,
+                config_path: paths.config.clone(),
+                profile_id: None,
+                models: targets.clone(),
+            },
+        );
+        id
+    })?;
     start(paths, None)?;
     let registry = load_registry(&proxy_paths)?;
     let expose = |model: &str| resolve_aggregate_model_id(&targets, default_profile_id, model);
@@ -216,15 +217,13 @@ pub fn aggregate_profile(
         value: registry.local_token,
     };
     routed.default_model = default_model;
-    for model in [
-        &mut routed.aliases.opus,
-        &mut routed.aliases.sonnet,
-        &mut routed.aliases.haiku,
-        &mut routed.aliases.fable,
-        &mut routed.subagent_model,
-    ] {
-        *model = model.as_deref().and_then(expose);
-    }
+    routed.aliases = config::RoleModels {
+        opus: Some("ccsw-role::opus".into()),
+        sonnet: Some("ccsw-role::sonnet".into()),
+        haiku: Some("ccsw-role::haiku".into()),
+        fable: Some("ccsw-role::fable".into()),
+    };
+    routed.subagent_model = routed.subagent_model.as_deref().and_then(expose);
     routed.fallback_models = routed
         .fallback_models
         .iter()
@@ -243,16 +242,18 @@ pub fn aggregate_checkpoint(paths: &AppPaths) -> Result<AggregateCheckpoint> {
         registry
             .routes
             .into_iter()
-            .filter(|(_, route)| route.config_path == paths.config && route.profile_id.is_none())
+            .filter(|(_, route)| {
+                !route.codex && route.config_path == paths.config && route.profile_id.is_none()
+            })
             .collect(),
     ))
 }
 
 pub fn restore_aggregate(paths: &AppPaths, checkpoint: AggregateCheckpoint) -> Result<()> {
     update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
-        registry
-            .routes
-            .retain(|_, route| route.config_path != paths.config || route.profile_id.is_some());
+        registry.routes.retain(|_, route| {
+            route.codex || route.config_path != paths.config || route.profile_id.is_some()
+        });
         registry.routes.extend(checkpoint.0);
     })
 }
@@ -263,7 +264,8 @@ pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
     let token = value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str();
     Ok(token == Some(registry.local_token.as_str())
         && registry.routes.iter().any(|(id, route)| {
-            route.profile_id.is_none()
+            !route.codex
+                && route.profile_id.is_none()
                 && route.config_path == paths.config
                 && endpoint == Some(format!("http://{}/r/{id}", registry.listen).as_str())
         }))
@@ -272,11 +274,9 @@ pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
 pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     update_registry(&proxy_paths, None, |registry| {
-        for target in registry
-            .routes
-            .values_mut()
-            .filter(|target| target.config_path == paths.config && target.profile_id.is_none())
-        {
+        for target in registry.routes.values_mut().filter(|target| {
+            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+        }) {
             target.models.clear();
         }
     })?;
@@ -347,7 +347,13 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
                 status.listen
             );
         }
-        return Ok(status);
+        let health = health_document(paths)?;
+        if health_matches_build(&health) {
+            return Ok(status);
+        }
+        // An old daemon may still be running after the executable/config upgrade.
+        // Replace it through the authenticated shutdown path under the same lock.
+        stop_locked(paths)?;
     }
     let saved = load_or_default_registry(&proxy_paths, None)?;
     let address = listen.unwrap_or(&saved.listen);
@@ -373,12 +379,8 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     let executable = std::env::current_exe().context("cannot resolve ccsw executable")?;
     let mut command = Command::new(executable);
     command
-        .args([
-            "internal",
-            "proxy-serve",
-            "--registry",
-            proxy_paths.registry.to_string_lossy().as_ref(),
-        ])
+        .args(["internal", "proxy-serve", "--registry"])
+        .arg(&proxy_paths.registry)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -390,8 +392,6 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     ] {
         command.env_remove(name);
     }
-    #[cfg(windows)]
-    crate::windows::background(&mut command)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -406,11 +406,14 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         }
     }
     drop(probe);
+    #[cfg(windows)]
+    crate::windows::spawn_background(&mut command).context("failed to start CCSW proxy")?;
+    #[cfg(not(windows))]
     command.spawn().context("failed to start CCSW proxy")?;
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
         let current = status(paths)?;
-        if current.running {
+        if current.running && health_matches_build(&health_document(paths)?) {
             return Ok(current);
         }
     }
@@ -418,6 +421,25 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         "CCSW proxy did not become ready; inspect {}",
         proxy_paths.log.display()
     )
+}
+
+fn health_matches_build(value: &Value) -> bool {
+    value["name"] == "ccsw-proxy"
+        && value["config_version"].as_u64() == Some(u64::from(config::CONFIG_VERSION))
+        && value["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+}
+
+fn health_document(paths: &AppPaths) -> Result<Value> {
+    let registry = load_or_default_registry(&ProxyPaths::from_app(paths)?, None)?;
+    Ok(reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?
+        .get(format!("http://{}/health", registry.listen))
+        .bearer_auth(&registry.local_token)
+        .send()?
+        .error_for_status()?
+        .json()?)
 }
 
 pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
@@ -470,6 +492,10 @@ pub fn service_status() -> Result<ProxyServiceStatus> {
 
 pub fn stop(paths: &AppPaths) -> Result<()> {
     let _lifecycle = lifecycle_lock(paths)?;
+    stop_locked(paths)
+}
+
+fn stop_locked(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     if !status(paths)?.running {
         fs::remove_file(&proxy_paths.pid).ok();
@@ -658,9 +684,11 @@ fn update_registry<T>(
 
 #[derive(Clone)]
 struct ServerState {
+    sessions: std::sync::Arc<std::sync::Mutex<SessionProviders>>,
     shutdown: std::sync::Arc<tokio::sync::Notify>,
     registry: PathBuf,
     client: Client,
+    usage: crate::usage::Writer,
 }
 
 pub async fn serve(registry_path: PathBuf) -> Result<()> {
@@ -680,6 +708,14 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     singleton
         .try_lock_exclusive()
         .context("another CCSW proxy is already running")?;
+    let usage = crate::usage::Writer::new(registry_path.with_file_name(crate::usage::FILE));
+    let recovery = usage.clone();
+    if tokio::task::spawn_blocking(move || recovery.recover())
+        .await?
+        .is_err()
+    {
+        eprintln!("CCSW usage: database unavailable; request statistics may be incomplete");
+    }
     let registry = load_registry(&proxy_paths)?;
     let address: SocketAddr = registry.listen.parse()?;
     if !address.ip().is_loopback() {
@@ -692,8 +728,10 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to bind {address}"))?;
     let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let state = ServerState {
+        sessions: Default::default(),
         shutdown: shutdown.clone(),
         registry: registry_path,
+        usage,
         client: Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()?,
@@ -735,7 +773,7 @@ async fn shutdown_signal() {
 }
 
 async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Response {
-    let registry = match registry_from_path(&state.registry) {
+    let registry = match read_registry(&state.registry).await {
         Ok(registry) => registry,
         Err(error) => return anthropic_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
@@ -749,7 +787,7 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             anyhow::anyhow!("invalid local proxy credential"),
         );
     }
-    Json(json!({"name":"ccsw-proxy","status":"ok"})).into_response()
+    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION")})).into_response()
 }
 
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -765,12 +803,17 @@ fn registry_from_path(path: &Path) -> Result<Registry> {
         .with_context(|| format!("failed to load proxy registry {}", path.display()))
 }
 
-fn authenticated_target(
+async fn read_registry(path: &Path) -> Result<Registry> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || registry_from_path(&path)).await?
+}
+
+async fn authenticated_target(
     state: &ServerState,
     route: &str,
     headers: &HeaderMap,
 ) -> Result<(RouteTarget, Registry)> {
-    let registry = registry_from_path(&state.registry)?;
+    let registry = read_registry(&state.registry).await?;
     let expected = format!("Bearer {}", registry.local_token);
     let actual = headers
         .get(header::AUTHORIZATION)
@@ -789,6 +832,7 @@ fn authenticated_target(
 // Only recognize role aliases and Claude family IDs, never arbitrary names
 // containing a role (or another provider's namespaced route).
 fn requested_role(model: &str) -> Option<&'static str> {
+    let model = model.strip_prefix("ccsw-role::").unwrap_or(model);
     let normalized = model.to_ascii_lowercase();
     let normalized = strip_1m(&normalized);
     let family = normalized.strip_prefix("claude-").unwrap_or(&normalized);
@@ -845,18 +889,35 @@ fn role_target<'a>(
     })
 }
 
-fn resolve_profile(
+async fn route_config(target: &RouteTarget) -> Result<config::Config> {
+    let path = target.config_path.clone();
+    let codex = target.codex;
+    tokio::task::spawn_blocking(move || {
+        config::load_client(
+            &path,
+            if codex {
+                config::Client::Codex
+            } else {
+                config::Client::Claude
+            },
+        )
+    })
+    .await?
+}
+
+async fn resolve_profile(
     target: &RouteTarget,
     requested_model: Option<&str>,
-) -> Result<(Profile, String)> {
-    let config = config::load_client(
-        &target.config_path,
-        if target.codex {
-            config::Client::Codex
-        } else {
-            config::Client::Claude
-        },
-    )?;
+) -> Result<(Profile, String, String)> {
+    let config = route_config(target).await?;
+    resolve_profile_from_config(target, &config, requested_model)
+}
+
+fn resolve_profile_from_config(
+    target: &RouteTarget,
+    config: &config::Config,
+    requested_model: Option<&str>,
+) -> Result<(Profile, String, String)> {
     let (profile_id, model_id) = if let Some(profile_id) = &target.profile_id {
         (profile_id.as_str(), requested_model.unwrap_or_default())
     } else {
@@ -872,8 +933,12 @@ fn resolve_profile(
                     .find(|(exposed, _)| strip_1m(exposed) == canonical)
                     .map(|(_, mapped)| mapped)
             })
-            .or_else(|| role_target(target, &config, requested))
-            .with_context(|| format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p"))?;
+            .or_else(|| role_target(target, config, requested))
+            .with_context(|| if target.codex {
+                format!("model '{requested}' is not synced by CCSW; press p to sync, then restart Codex to reload /model")
+            } else {
+                format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p")
+            })?;
         (mapped.profile_id.as_str(), mapped.model_id.as_str())
     };
     let profile = config
@@ -895,18 +960,95 @@ fn resolve_profile(
         bail!("model '{model_id}' is disabled or no longer configured");
     }
     let effective = effective.map(|model| model.id).unwrap_or_default();
-    Ok((profile, effective))
+    Ok((profile, effective, profile_id.to_owned()))
 }
 
-fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
-    let config = config::load_client(
-        &target.config_path,
-        if target.codex {
-            config::Client::Codex
-        } else {
-            config::Client::Claude
-        },
-    )?;
+#[derive(Default)]
+struct SessionProviders {
+    entries: BTreeMap<(String, String), (String, std::time::Instant)>,
+}
+
+fn request_session(body: &Value) -> Option<String> {
+    let user = body.get("metadata")?.get("user_id")?.as_str()?;
+    let session = serde_json::from_str::<Value>(user)
+        .ok()
+        .and_then(|value| value.get("session_id")?.as_str().map(str::to_owned))
+        .or_else(|| {
+            user.rsplit_once("_session_")
+                .map(|(_, session)| session.to_owned())
+        })?;
+    uuid::Uuid::parse_str(&session)
+        .ok()
+        .map(|id| id.to_string())
+}
+
+impl SessionProviders {
+    fn resolve(
+        &mut self,
+        route: &str,
+        target: &RouteTarget,
+        config: &config::Config,
+        body: &Value,
+        remember: bool,
+    ) -> Result<(Profile, String, String)> {
+        let now = std::time::Instant::now();
+        self.entries
+            .retain(|_, (_, used)| now.duration_since(*used) < Duration::from_secs(24 * 60 * 60));
+        let session = request_session(body).map(|session| (route.to_owned(), session));
+        let mut effective = target.clone();
+        if let Some((provider, used)) = session.as_ref().and_then(|key| self.entries.get_mut(key)) {
+            effective.default_profile_id = Some(provider.clone());
+            *used = now;
+        }
+        let requested = body.get("model").and_then(Value::as_str);
+        let resolved = resolve_profile_from_config(&effective, config, requested)?;
+        if remember
+            && !target.codex
+            && target.profile_id.is_none()
+            && let Some(key) = session
+            && let Some(mapped) = requested.and_then(|requested| {
+                target
+                    .models
+                    .iter()
+                    .find(|(id, _)| strip_1m(id) == strip_1m(requested))
+                    .map(|(_, mapped)| mapped)
+            })
+        {
+            if self.entries.len() >= 4096
+                && !self.entries.contains_key(&key)
+                && let Some(oldest) = self
+                    .entries
+                    .iter()
+                    .min_by_key(|(_, (_, used))| *used)
+                    .map(|(key, _)| key.clone())
+            {
+                self.entries.remove(&oldest);
+            }
+            self.entries.insert(key, (mapped.profile_id.clone(), now));
+        }
+        Ok(resolved)
+    }
+}
+
+// Read a fresh configuration before taking the session lock. Only in-memory
+// selection and session updates are serialized; disk IO cannot block sessions.
+async fn resolve_request(
+    state: &ServerState,
+    route: &str,
+    target: &RouteTarget,
+    body: &Value,
+    remember: bool,
+) -> Result<(Profile, String, String)> {
+    let config = route_config(target).await?;
+    state
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .resolve(route, target, &config, body, remember)
+}
+
+async fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
+    let config = route_config(target).await?;
     let active: BTreeMap<_, std::collections::BTreeSet<String>> = config
         .profiles
         .iter()
@@ -943,9 +1085,9 @@ async fn models(
     AxumPath(route): AxumPath<String>,
     headers: HeaderMap,
 ) -> Response {
-    match authenticated_target(&state, &route, &headers) {
+    match authenticated_target(&state, &route, &headers).await {
         Ok((target, _)) => {
-            let ids = match visible_route_models(&target) {
+            let ids = match visible_route_models(&target).await {
                 Ok(ids) => ids,
                 Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
             };
@@ -964,12 +1106,12 @@ async fn count_tokens(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let target = match authenticated_target(&state, &route, &headers) {
+    let target = match authenticated_target(&state, &route, &headers).await {
         Ok((target, _)) => target,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
     if target.profile_id.is_none()
-        && let Err(error) = resolve_profile(&target, body.get("model").and_then(Value::as_str))
+        && let Err(error) = resolve_request(&state, &route, &target, &body, false).await
     {
         return anthropic_error(StatusCode::BAD_REQUEST, error);
     }
@@ -985,12 +1127,12 @@ async fn messages(
     headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
-    let (target, _) = match authenticated_target(&state, &route, &headers) {
+    let (target, _) = match authenticated_target(&state, &route, &headers).await {
         Ok(value) => value,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
-    let (profile, upstream_model) =
-        match resolve_profile(&target, body.get("model").and_then(Value::as_str)) {
+    let (profile, upstream_model, profile_id) =
+        match resolve_request(&state, &route, &target, &body, true).await {
             Ok(value) => value,
             Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
         };
@@ -1003,7 +1145,18 @@ async fn messages(
     let deadline = tokio::time::Instant::now() + TOTAL_TIMEOUT;
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let anthropic = profile.api_format == ApiFormat::Anthropic;
-    let upstream_body = match translate_request(&body, profile.api_format) {
+    let upstream_body = match translate_request_with_effort(
+        &body,
+        profile.api_format,
+        profile
+            .models
+            .iter()
+            .find(|m| {
+                config::canonical_model_id(&m.id) == config::canonical_model_id(&upstream_model)
+            })
+            .and_then(|m| m.reasoning_max.as_deref())
+            .unwrap_or("high"),
+    ) {
         Ok(body) => body,
         Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
     };
@@ -1037,6 +1190,15 @@ async fn messages(
         Credential::ApiKey { value } => request.header("api-key", value),
         Credential::None => request,
     };
+    let ticket = metering::begin(
+        &state,
+        &target,
+        &profile_id,
+        &profile,
+        &upstream_model,
+        "generation",
+    )
+    .await;
     let response = match tokio::time::timeout(HEADER_TIMEOUT, request.send()).await {
         Ok(Ok(response)) => response,
         error => {
@@ -1046,6 +1208,7 @@ async fn messages(
             );
         }
     };
+    let response = metering::observe(response, ticket, stream);
     let status = response.status();
     let upstream_headers = forwarding_response_headers(response.headers());
     // Native responses keep the upstream body and status, including errors.
@@ -1208,7 +1371,7 @@ fn anthropic_error(status: StatusCode, error: anyhow::Error) -> Response {
         .into_response()
 }
 
-fn completion_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
+pub(crate) fn completion_endpoint(base: &str, format: ApiFormat) -> Result<Url> {
     let wanted = match format {
         ApiFormat::OpenaiChat => "chat/completions",
         ApiFormat::OpenaiResponses => "responses",
@@ -1225,7 +1388,7 @@ pub fn models_endpoint(base: &str, _format: ApiFormat) -> Result<Url> {
     Ok(endpoint)
 }
 
-fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
+pub(crate) fn api_endpoint(base: &str, wanted: &str) -> Result<Url> {
     let mut url = Url::parse(base).context("API URL is invalid")?;
     if !matches!(url.scheme(), "http" | "https") {
         bail!("API URL must use http or https");
@@ -1278,9 +1441,15 @@ fn apply_model_limits(profile: &Profile, model: &str, body: &mut Value) -> Resul
 }
 
 fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
+    translate_request_with_effort(input, format, "high")
+}
+
+fn translate_request_with_effort(input: &Value, format: ApiFormat, maximum: &str) -> Result<Value> {
     if format == ApiFormat::Anthropic {
         return Ok(input.clone());
     }
+    let normalized = normalize_client_tool_search(input)?;
+    let input = &normalized;
     let object = input
         .as_object()
         .context("request body must be an object")?;
@@ -1298,6 +1467,9 @@ fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
     match format {
         ApiFormat::OpenaiChat => {
             let mut converted = Vec::new();
+            if object.get("stream").and_then(Value::as_bool) == Some(true) {
+                result.insert("stream_options".into(), json!({"include_usage":true}));
+            }
             if !system.is_empty() {
                 converted.push(json!({"role":"system","content":system}));
             }
@@ -1318,14 +1490,22 @@ fn translate_request(input: &Value, format: ApiFormat) -> Result<Value> {
             result.insert("input".into(), Value::Array(converted));
             result.insert("store".into(), Value::Bool(false));
             copy_number(object, &mut result, "max_tokens", "max_output_tokens");
-            if object.get("thinking").is_some() {
-                result.insert(
-                    "reasoning".into(),
-                    json!({"effort":"high","summary":"auto"}),
-                );
-            }
         }
         ApiFormat::Anthropic => unreachable!("handled before translation"),
+    }
+    if let Some(effort) = mapped_effort(input, maximum)? {
+        match format {
+            ApiFormat::OpenaiChat => {
+                result.insert("reasoning_effort".into(), json!(effort));
+            }
+            ApiFormat::OpenaiResponses => {
+                result.insert(
+                    "reasoning".into(),
+                    json!({"effort":effort,"summary":"auto"}),
+                );
+            }
+            ApiFormat::Anthropic => unreachable!(),
+        }
     }
     for key in ["temperature", "top_p"] {
         if let Some(value) = object.get(key) {
@@ -1449,7 +1629,7 @@ fn chat_messages(message: &Value) -> Result<Vec<Value>> {
             Some("tool_result") => result.push(json!({
                 "role":"tool",
                 "tool_call_id":block.get("tool_use_id").and_then(Value::as_str).context("tool_result has no tool_use_id")?,
-                "content":flatten_tool_result(block.get("content"))?
+                "content":formatted_tool_result(&block)?
             })),
             Some(other) => bail!("unsupported user content block: {other}"),
             None => bail!("content block has no type"),
@@ -1513,7 +1693,7 @@ fn response_items(message: &Value) -> Result<Vec<Value>> {
             Some("tool_result") if role == "user" => result.push(json!({
                 "type":"function_call_output",
                 "call_id":block.get("tool_use_id").and_then(Value::as_str).context("tool_result has no tool_use_id")?,
-                "output":flatten_tool_result(block.get("content"))?
+                "output":formatted_tool_result(&block)?
             })),
             Some("thinking" | "redacted_thinking") if role == "assistant" => {}
             Some(other) => bail!("unsupported {role} content block: {other}"),
@@ -1540,6 +1720,15 @@ fn text_only_blocks(blocks: &[Value], role: &str) -> Result<String> {
         );
     }
     Ok(text.join("\n"))
+}
+
+fn formatted_tool_result(block: &Value) -> Result<String> {
+    let text = flatten_tool_result(block.get("content"))?;
+    Ok(if block["is_error"] == true {
+        format!("Tool error: {text}")
+    } else {
+        text
+    })
 }
 
 fn flatten_tool_result(value: Option<&Value>) -> Result<String> {
@@ -2143,40 +2332,309 @@ pub fn shutdown_authenticated(paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
-/// A dedicated route keeps Codex selection independent from Claude's aggregate binding.
-pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String)> {
-    let proxy_paths = ProxyPaths::from_app(paths)?;
-    let id = update_registry(&proxy_paths, None, |registry| {
-        if let Some((id, _)) = registry.routes.iter().find(|(_, target)| {
-            target.codex
-                && target.config_path == paths.config
-                && target.profile_id.as_deref() == Some(profile_id)
-        }) {
-            return id.clone();
+/// The journal stores only route mappings, never upstream credentials.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CodexRoutePlan {
+    id: String,
+    before: Option<RouteTarget>,
+    after: RouteTarget,
+}
+
+pub(crate) fn codex_model_id(profile_id: &str, model_id: &str) -> String {
+    format!("{profile_id}::{}", config::canonical_model_id(model_id))
+}
+
+/// Build the picker and proxy mapping from the same client-scoped snapshot.
+/// Do not install the route until the Codex transaction has been journaled.
+pub(crate) fn prepare_codex_route(
+    paths: &AppPaths,
+    config: &Config,
+) -> Result<(CodexRoutePlan, Vec<ModelEntry>, String, String)> {
+    let mut models = Vec::new();
+    let mut targets = BTreeMap::new();
+    for (profile_id, profile) in &config.profiles {
+        for mut model in crate::discovery::active_models(profile, &[]) {
+            let exposed = codex_model_id(profile_id, &model.id);
+            targets.insert(
+                exposed.clone(),
+                AggregateModelTarget {
+                    profile_id: profile_id.clone(),
+                    model_id: model.id.clone(),
+                },
+            );
+            model.context_window = Some(model.context_window.unwrap_or(
+                if model.id.to_ascii_lowercase().ends_with("[1m]") {
+                    1_000_000
+                } else {
+                    128_000
+                },
+            ));
+            model.label = Some(format!("{} · {}", profile.name, model.label()));
+            model.id = exposed;
+            models.push(model);
         }
-        let id = Uuid::new_v4().simple().to_string();
-        registry.routes.insert(
-            id.clone(),
-            RouteTarget {
-                default_profile_id: None,
-                codex: true,
-                config_path: paths.config.clone(),
-                profile_id: Some(profile_id.into()),
-                models: BTreeMap::new(),
-            },
-        );
-        id
-    })?;
+    }
+    if models.is_empty() {
+        bail!("Enable at least one Codex model before applying");
+    }
     start(paths, None)?;
-    let registry = load_registry(&proxy_paths)?;
-    Ok((
-        format!("http://{}/r/{id}/v1", registry.listen),
-        registry.local_token,
-    ))
+    let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
+    let existing = registry.routes.iter().find(|(_, target)| {
+        target.codex && target.config_path == paths.config && target.profile_id.is_none()
+    });
+    let plan = CodexRoutePlan {
+        id: existing
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+        before: existing.map(|(_, target)| target.clone()),
+        after: RouteTarget {
+            default_profile_id: None,
+            codex: true,
+            config_path: paths.config.clone(),
+            profile_id: None,
+            models: targets,
+        },
+    };
+    let url = format!("http://{}/r/{}/v1", registry.listen, plan.id);
+    Ok((plan, models, url, registry.local_token))
+}
+
+pub(crate) fn apply_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != plan.before.as_ref() {
+            bail!("Codex proxy route changed during preparation; retry");
+        }
+        registry.routes.insert(plan.id.clone(), plan.after.clone());
+        Ok(())
+    })?
+}
+
+pub(crate) fn restore_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        let current = registry.routes.get(&plan.id);
+        if current == plan.before.as_ref() {
+            return Ok(());
+        }
+        if current != Some(&plan.after) {
+            bail!("Codex proxy route changed during recovery; preserve the recovery journal");
+        }
+        if let Some(before) = &plan.before {
+            registry.routes.insert(plan.id.clone(), before.clone());
+        } else {
+            registry.routes.remove(&plan.id);
+        }
+        Ok(())
+    })?
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aggregate_operations_and_recovery_are_client_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state_dir: temp.path().join("state"),
+            cache: temp.path().join("cache.json"),
+        };
+        let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+        let claude = RouteTarget {
+            default_profile_id: Some("local".into()),
+            codex: false,
+            config_path: paths.config.clone(),
+            profile_id: None,
+            models: BTreeMap::from([(
+                "local::old".into(),
+                AggregateModelTarget {
+                    profile_id: "local".into(),
+                    model_id: "old".into(),
+                },
+            )]),
+        };
+        let codex = RouteTarget {
+            codex: true,
+            ..claude.clone()
+        };
+        update_registry(&proxy_paths, None, |registry| {
+            registry.routes.insert("claude".into(), claude.clone());
+            registry.routes.insert("codex".into(), codex.clone());
+        })
+        .unwrap();
+        let checkpoint = aggregate_checkpoint(&paths).unwrap();
+        clear_aggregate_models(&paths).unwrap();
+        let cleared = load_registry(&proxy_paths).unwrap();
+        assert!(cleared.routes["claude"].models.is_empty());
+        assert_eq!(cleared.routes["codex"], codex);
+
+        let changed = RouteTarget {
+            models: BTreeMap::new(),
+            ..codex.clone()
+        };
+        let plan = CodexRoutePlan {
+            id: "codex".into(),
+            before: Some(codex.clone()),
+            after: changed.clone(),
+        };
+        apply_codex_route(&paths, &plan).unwrap();
+        restore_aggregate(&paths, checkpoint).unwrap();
+        let restored = load_registry(&proxy_paths).unwrap();
+        assert_eq!(restored.routes["claude"], claude);
+        assert_eq!(restored.routes["codex"], changed);
+        let settings = json!({"env":{
+            "ANTHROPIC_BASE_URL":format!("http://{}/r/codex", restored.listen),
+            "ANTHROPIC_AUTH_TOKEN":restored.local_token,
+        }});
+        assert!(!owns_settings(&paths, &settings).unwrap());
+        restore_codex_route(&paths, &plan).unwrap();
+        assert_eq!(load_registry(&proxy_paths).unwrap().routes["codex"], codex);
+        restore_codex_route(&paths, &plan).unwrap(); // Recovery can safely retry.
+    }
+
+    #[test]
+    fn proxy_health_requires_current_config_and_binary_versions() {
+        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION")});
+        assert!(super::health_matches_build(&current));
+        assert!(!super::health_matches_build(
+            &serde_json::json!({"name":"ccsw-proxy"})
+        ));
+        let mut old = current.clone();
+        old["config_version"] = serde_json::json!(4);
+        assert!(!super::health_matches_build(&old));
+        old = current;
+        old["version"] = serde_json::json!("older");
+        assert!(!super::health_matches_build(&old));
+    }
+
+    #[tokio::test]
+    async fn roles_follow_models_per_session_and_never_cross_routes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        config::update(&path, |config| {
+            for id in ["a", "b"] {
+                let profile: Profile = toml::from_str(&format!("name='{id}'\nbase_url='https://example.invalid'\ndefault_model='x'\n[aliases]\nsonnet='{id}-sonnet'\nopus='{id}-opus'\n"))?;
+                config.profiles.insert(id.into(), profile);
+            }
+            Ok(())
+        }).unwrap();
+        let config = config::load(&path).unwrap();
+        let mut target = RouteTarget {
+            default_profile_id: Some("a".into()),
+            codex: false,
+            config_path: path.clone(),
+            profile_id: None,
+            models: BTreeMap::new(),
+        };
+        for (id, profile) in &config.profiles {
+            for model in crate::discovery::active_models(profile, &[]) {
+                target.models.insert(
+                    format!("{id}::{}", model.id),
+                    AggregateModelTarget {
+                        profile_id: id.clone(),
+                        model_id: model.id,
+                    },
+                );
+            }
+        }
+        let first = uuid::Uuid::new_v4().to_string();
+        let second = uuid::Uuid::new_v4().to_string();
+        let body = |session: &str, model: &str| json!({"model":model,"metadata":{"user_id":json!({"session_id":session}).to_string()}});
+        let mut sessions = SessionProviders::default();
+        sessions
+            .resolve("route", &target, &config, &body(&first, "b::x"), true)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve(
+                    "route",
+                    &target,
+                    &config,
+                    &body(&first, "ccsw-role::sonnet"),
+                    true
+                )
+                .unwrap()
+                .1,
+            "b-sonnet"
+        );
+        assert_eq!(
+            sessions
+                .resolve(
+                    "route",
+                    &target,
+                    &config,
+                    &body(&second, "ccsw-role::opus"),
+                    true
+                )
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        assert_eq!(
+            sessions
+                .resolve("other", &target, &config, &body(&first, "sonnet5"), true)
+                .unwrap()
+                .1,
+            "a-sonnet"
+        );
+        sessions
+            .resolve("route", &target, &config, &body(&first, "a::x"), false)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &config, &body(&first, "opus"), true)
+                .unwrap()
+                .1,
+            "b-opus"
+        );
+        sessions
+            .resolve("route", &target, &config, &body(&first, "a::x"), true)
+            .unwrap();
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &config, &body(&first, "opus"), true)
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        assert_eq!(
+            sessions
+                .resolve("route", &target, &config, &json!({"model":"sonnet"}), true)
+                .unwrap()
+                .1,
+            "a-sonnet"
+        );
+        assert_eq!(
+            request_session(
+                &json!({"metadata":{"user_id":format!("user_test_account_test_session_{first}")}})
+            ),
+            Some(first.clone())
+        );
+        assert!(request_session(&json!({"metadata":{"user_id":"shared-user"}})).is_none());
+        let state = ServerState {
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(sessions)),
+            shutdown: Default::default(),
+            registry: temp.path().join("proxy.json"),
+            client: Client::new(),
+            usage: crate::usage::Writer::new(temp.path().join(crate::usage::FILE)),
+        };
+        assert_eq!(
+            resolve_request(&state, "route", &target, &body(&first, "opus"), true)
+                .await
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        config::update(&path, |config| {
+            config.profiles.get_mut("a").unwrap().enabled = false;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            resolve_request(&state, "route", &target, &body(&first, "opus"), true)
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn deepseek_catalog_uses_root_without_changing_messages_endpoint() {
         for suffix in [
@@ -2248,8 +2706,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn role_routes_respect_exact_matches_and_live_model_state() {
+    #[tokio::test]
+    async fn role_routes_respect_exact_matches_and_live_model_state() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         config::update(&path, |config| {
@@ -2275,13 +2733,23 @@ mod tests {
                 })
                 .collect(),
         };
-        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "a");
         assert_eq!(
-            resolve_profile(&target, Some("claude-opus-4-6")).unwrap().1,
+            resolve_profile(&target, Some("sonnet5")).await.unwrap().1,
+            "a"
+        );
+        assert_eq!(
+            resolve_profile(&target, Some("claude-opus-4-6"))
+                .await
+                .unwrap()
+                .1,
             "b"
         );
-        assert!(resolve_profile(&target, Some("haiku")).is_err());
-        assert!(resolve_profile(&target, Some("other::sonnet5")).is_err());
+        assert!(resolve_profile(&target, Some("haiku")).await.is_err());
+        assert!(
+            resolve_profile(&target, Some("other::sonnet5"))
+                .await
+                .is_err()
+        );
         target.models.insert(
             "sonnet5".into(),
             AggregateModelTarget {
@@ -2289,7 +2757,10 @@ mod tests {
                 model_id: "b".into(),
             },
         );
-        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "b");
+        assert_eq!(
+            resolve_profile(&target, Some("sonnet5")).await.unwrap().1,
+            "b"
+        );
         config::update(&path, |config| {
             config
                 .profiles
@@ -2300,12 +2771,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("sonnet")).is_err());
+        assert!(resolve_profile(&target, Some("sonnet")).await.is_err());
         target.default_profile_id = None;
-        assert!(resolve_profile(&target, Some("opus")).is_err());
+        assert!(resolve_profile(&target, Some("opus")).await.is_err());
         target.default_profile_id = Some("one".into());
         target.models.clear();
-        assert!(resolve_profile(&target, Some("opus")).is_err());
+        assert!(resolve_profile(&target, Some("opus")).await.is_err());
     }
 
     #[test]
@@ -2794,6 +3265,17 @@ mod tests {
         assert!(upstream_request.contains("authorization: Bearer upstream-secret"));
         assert!(upstream_request.contains("\"model\":\"gpt-test\""));
         assert!(!upstream_request.contains(&registry.local_token));
+        let usage = crate::usage::tests::settled_for(
+            &app_paths.state_dir.join(crate::usage::FILE),
+            &app_paths.config,
+            1,
+        )
+        .await;
+        let totals = usage.total(Some("Claude"), Some("openai"), None, "generation");
+        assert_eq!(
+            (totals.calls, totals.success, totals.input, totals.output),
+            (1, 1, 4, 1)
+        );
         server.abort();
         upstream_task.join().unwrap();
     }
@@ -2917,8 +3399,8 @@ mod tests {
         server.abort();
         upstream_task.join().unwrap();
     }
-    #[test]
-    fn stale_registry_cannot_expose_or_resolve_disabled_models() {
+    #[tokio::test]
+    async fn stale_registry_cannot_expose_or_resolve_disabled_models() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         fs::write(
@@ -2950,7 +3432,7 @@ enabled_models = ["b"]
                 })
                 .collect(),
         };
-        assert_eq!(visible_route_models(&target).unwrap().len(), 2);
+        assert_eq!(visible_route_models(&target).await.unwrap().len(), 2);
         config::update(&path, |config| {
             let profile = config.profiles.get_mut("one").unwrap();
             profile.enabled_models.clear();
@@ -2958,15 +3440,15 @@ enabled_models = ["b"]
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("one::b")).is_err());
-        assert_eq!(visible_route_models(&target).unwrap(), ["one::a"]);
+        assert!(resolve_profile(&target, Some("one::b")).await.is_err());
+        assert_eq!(visible_route_models(&target).await.unwrap(), ["one::a"]);
         config::update(&path, |config| {
             config.profiles.get_mut("one").unwrap().enabled = false;
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("one::a")).is_err());
-        assert!(visible_route_models(&target).unwrap().is_empty());
+        assert!(resolve_profile(&target, Some("one::a")).await.is_err());
+        assert!(visible_route_models(&target).await.unwrap().is_empty());
     }
     #[test]
     fn port_configuration_checks_availability_and_preserves_registry_on_failure() {
@@ -3005,5 +3487,319 @@ enabled_models = ["b"]
                 .contains("stop this user's proxy")
         );
         assert_eq!(fs::read(&registry).unwrap(), before);
+    }
+}
+
+fn mapped_effort(input: &Value, maximum: &str) -> Result<Option<String>> {
+    if maximum == "off" {
+        return Ok(None);
+    }
+    let levels = ["low", "medium", "high", "xhigh"];
+    let limit = levels
+        .iter()
+        .position(|v| *v == maximum)
+        .context("invalid model reasoning maximum")?;
+    let requested = input
+        .pointer("/output_config/effort")
+        .or_else(|| input.pointer("/reasoning/effort"));
+    let requested = if let Some(value) = requested {
+        value.as_str().context("effort must be a string")?
+    } else if input
+        .get("thinking")
+        .is_some_and(|v| v["type"] != "disabled")
+    {
+        "high"
+    } else {
+        return Ok(None);
+    };
+    if requested == "auto" {
+        return Ok(None);
+    }
+    let index = if requested == "max" {
+        limit
+    } else {
+        levels
+            .iter()
+            .position(|v| *v == requested)
+            .context("unsupported effort level")?
+            .min(limit)
+    };
+    Ok(Some(levels[index].into()))
+}
+
+/// Client-executed search remains a function call. OpenAI-compatible servers
+/// receive the request's full tool catalog instead of Anthropic deferred loading.
+fn normalize_client_tool_search(input: &Value) -> Result<Value> {
+    let mut output = input.clone();
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(tools) = output.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools {
+            if tool
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "custom")
+            {
+                bail!("server-side Anthropic tools are not supported by this OpenAI route");
+            }
+            let name = tool["name"]
+                .as_str()
+                .context("tool has no name")?
+                .to_owned();
+            if !names.insert(name) {
+                bail!("duplicate tool name in request");
+            }
+            tool.as_object_mut()
+                .context("tool must be an object")?
+                .remove("defer_loading");
+        }
+    }
+    if let Some(messages) = output.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages {
+            if let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) {
+                for block in blocks {
+                    if block["type"] != "tool_result" {
+                        continue;
+                    }
+                    if let Some(results) = block.get_mut("content").and_then(Value::as_array_mut) {
+                        for result in results {
+                            if result["type"] == "tool_reference" {
+                                let name = result["tool_name"]
+                                    .as_str()
+                                    .context("tool_reference has no tool_name")?;
+                                if !names.contains(name) {
+                                    bail!(
+                                        "tool_reference {name} is missing from this request's tool catalog"
+                                    );
+                                }
+                                *result =
+                                    json!({"type":"text","text":format!("Available tool: {name}")});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod client_preference_tests {
+    use super::*;
+    #[test]
+    fn client_search_roundtrip_preserves_calls_and_resolves_references() {
+        let request = json!({"model":"test","max_tokens":100,
+            "tools":[{"name":"ToolSearch","input_schema":{"type":"object"}},
+                {"name":"lookup","defer_loading":true,"input_schema":{"type":"object","properties":{"id":{"type":"string"}}}}],
+            "messages":[{"role":"assistant","content":[{"type":"tool_use","id":"search-1","name":"ToolSearch","input":{"query":"lookup"}}]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"search-1","content":[{"type":"text","text":"Found"},{"type":"tool_reference","tool_name":"lookup"}]}]}]});
+        for format in [ApiFormat::OpenaiChat, ApiFormat::OpenaiResponses] {
+            let converted = translate_request(&request, format).unwrap();
+            assert_eq!(converted["tools"].as_array().unwrap().len(), 2);
+            assert!(converted.to_string().contains("Available tool: lookup"));
+            assert!(converted.to_string().contains("search-1"));
+            assert!(!converted.to_string().contains("tool_reference"));
+            assert!(!converted.to_string().contains("defer_loading"));
+            let mut bad = request.clone();
+            bad["messages"][1]["content"][0]["content"][1]["tool_name"] = json!("missing");
+            assert!(
+                translate_request(&bad, format)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("missing")
+            );
+            let mut server = request.clone();
+            server["tools"][0]["type"] = json!("tool_search_tool_regex_20251119");
+            assert!(translate_request(&server, format).is_err());
+        }
+        assert_eq!(
+            translate_request(&request, ApiFormat::Anthropic).unwrap(),
+            request
+        );
+    }
+    #[test]
+    fn effort_caps_are_model_specific_and_explicit_disable_stays_disabled() {
+        let mut request = json!({"model":"test","messages":[],"output_config":{"effort":"max"}});
+        for (maximum, expected) in [("low", "low"), ("high", "high"), ("xhigh", "xhigh")] {
+            let chat =
+                translate_request_with_effort(&request, ApiFormat::OpenaiChat, maximum).unwrap();
+            assert_eq!(chat["reasoning_effort"], expected);
+            let responses =
+                translate_request_with_effort(&request, ApiFormat::OpenaiResponses, maximum)
+                    .unwrap();
+            assert_eq!(responses["reasoning"]["effort"], expected);
+        }
+        assert!(
+            translate_request_with_effort(&request, ApiFormat::OpenaiChat, "off")
+                .unwrap()
+                .get("reasoning_effort")
+                .is_none()
+        );
+        request["output_config"]["effort"] = json!("auto");
+        assert!(mapped_effort(&request, "high").unwrap().is_none());
+        request.as_object_mut().unwrap().remove("output_config");
+        request["thinking"] = json!({"type":"disabled"});
+        assert!(mapped_effort(&request, "high").unwrap().is_none());
+        request["thinking"] = json!({"type":"adaptive"});
+        assert_eq!(
+            mapped_effort(&request, "medium").unwrap().as_deref(),
+            Some("medium")
+        );
+        request["output_config"] = json!({"effort":"low"});
+        assert_eq!(
+            mapped_effort(&request, "xhigh").unwrap().as_deref(),
+            Some("low")
+        );
+    }
+}
+
+#[cfg(test)]
+mod client_search_integration {
+    use super::*;
+    #[tokio::test]
+    async fn proxy_search_and_tool_call_work_for_chat_responses_and_streaming() {
+        for format in [ApiFormat::OpenaiChat, ApiFormat::OpenaiResponses] {
+            for streaming in [false, true] {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = upstream.local_addr().unwrap();
+                let handler = move |Json(request): Json<Value>| {
+                    let tx = tx.clone();
+                    async move {
+                        let found = request.to_string().contains("Available tool: lookup");
+                        tx.send(request).unwrap();
+                        let name = if found { "lookup" } else { "ToolSearch" };
+                        let args = if found {
+                            r#"{"id":"42"}"#
+                        } else {
+                            r#"{"query":"lookup"}"#
+                        };
+                        let response = match format {
+                            ApiFormat::OpenaiChat => {
+                                json!({"id":"r1","model":"test","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"call1","type":"function","function":{"name":name,"arguments":args}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5}})
+                            }
+                            _ => {
+                                json!({"id":"r1","model":"test","status":"completed","output":[{"id":"fc1","type":"function_call","call_id":"call1","name":name,"arguments":args}],"usage":{"input_tokens":10,"output_tokens":5}})
+                            }
+                        };
+                        if !streaming {
+                            return Json(response).into_response();
+                        }
+                        let body = match format {
+                            ApiFormat::OpenaiChat => format!(
+                                "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                                json!({"id":"r1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":name,"arguments":args}}]},"finish_reason":null}]}),
+                                json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]})
+                            ),
+                            _ => format!(
+                                "event: response.output_item.added\ndata: {}\n\nevent: response.function_call_arguments.delta\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                                json!({"type":"response.output_item.added","output_index":0,"item":{"id":"fc1","type":"function_call","call_id":"call1","name":name,"arguments":""}}),
+                                json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":args}),
+                                json!({"type":"response.completed","response":response})
+                            ),
+                        };
+                        (
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            body,
+                        )
+                            .into_response()
+                    }
+                };
+                let upstream_app = axum::Router::new()
+                    .route("/v1/chat/completions", axum::routing::post(handler.clone()))
+                    .route("/v1/responses", axum::routing::post(handler));
+                let upstream_task = tokio::spawn(async move {
+                    axum::serve(upstream, upstream_app).await.unwrap();
+                });
+                let temp = tempfile::tempdir().unwrap();
+                let paths = AppPaths {
+                    config: temp.path().join("config.toml"),
+                    state_dir: temp.path().join("state"),
+                    cache: temp.path().join("cache.json"),
+                };
+                let mut profile: Profile = toml::from_str("name='Test'\nbase_url='http://localhost'\ndefault_model='test'\n[[models]]\nid='test'\nreasoning_max='xhigh'\n").unwrap();
+                profile.api_format = format;
+                profile.base_url = format!("http://{address}");
+                config::update(&paths.config, |c| {
+                    c.profiles.insert("test".into(), profile);
+                    Ok(())
+                })
+                .unwrap();
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let proxy_address = listener.local_addr().unwrap();
+                drop(listener);
+                let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+                update_registry(&proxy_paths, Some(&proxy_address.to_string()), |r| {
+                    r.routes.insert(
+                        "search".into(),
+                        RouteTarget {
+                            config_path: paths.config.clone(),
+                            profile_id: Some("test".into()),
+                            codex: false,
+                            default_profile_id: None,
+                            models: BTreeMap::new(),
+                        },
+                    );
+                })
+                .unwrap();
+                let registry = load_registry(&proxy_paths).unwrap();
+                let server = tokio::spawn(async move { serve(proxy_paths.registry).await });
+                let client = Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap();
+                let url = format!("http://{proxy_address}/r/search/v1/messages");
+                for _ in 0..50 {
+                    if client
+                        .get(format!("http://{proxy_address}/health"))
+                        .send()
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let mut request = json!({"model":"test","stream":streaming,"max_tokens":100,"output_config":{"effort":"max"},
+                    "tools":[{"name":"ToolSearch","input_schema":{"type":"object"}},{"name":"lookup","defer_loading":true,"input_schema":{"type":"object"}}],
+                    "messages":[{"role":"user","content":"Find and call lookup"}]});
+                for name in ["ToolSearch", "lookup"] {
+                    let response = client
+                        .post(&url)
+                        .bearer_auth(&registry.local_token)
+                        .json(&request)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert!(response.status().is_success());
+                    let text = response.text().await.unwrap();
+                    assert!(
+                        text.contains(name),
+                        "{format:?} streaming={streaming}: {text}"
+                    );
+                    assert!(text.contains("tool_use"));
+                    if streaming {
+                        assert!(text.contains("message_stop"));
+                    }
+                    let captured = rx.recv().await.unwrap();
+                    let effort = if format == ApiFormat::OpenaiChat {
+                        &captured["reasoning_effort"]
+                    } else {
+                        &captured["reasoning"]["effort"]
+                    };
+                    assert_eq!(effort, "xhigh");
+                    assert!(!captured.to_string().contains("defer_loading"));
+                    if name == "lookup" {
+                        assert!(captured.to_string().contains("Available tool: lookup"));
+                    }
+                    request["messages"].as_array_mut().unwrap().extend([
+                        json!({"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"ToolSearch","input":{"query":"lookup"}}]}),
+                        json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":[{"type":"tool_reference","tool_name":"lookup"}]}]}),
+                    ]);
+                }
+                server.abort();
+                upstream_task.abort();
+            }
+        }
     }
 }

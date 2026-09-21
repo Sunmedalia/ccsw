@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -12,12 +11,14 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use url::Url;
 
-pub const CONFIG_VERSION: u32 = 4;
+pub const CONFIG_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_version")]
     pub version: u32,
+    #[serde(default)]
+    pub claude: crate::claude_preferences::Settings,
     #[serde(default)]
     pub codex: crate::codex::Settings,
     #[serde(default)]
@@ -30,6 +31,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
+            claude: Default::default(),
             codex: Default::default(),
             pi: Default::default(),
             profiles: BTreeMap::new(),
@@ -165,6 +167,8 @@ pub struct ModelEntry {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_max: Option<String>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -174,6 +178,13 @@ pub struct ModelEntry {
 
 impl ModelEntry {
     pub fn validate(&self) -> Result<()> {
+        if self
+            .reasoning_max
+            .as_deref()
+            .is_some_and(|v| !["off", "low", "medium", "high", "xhigh"].contains(&v))
+        {
+            bail!("invalid reasoning maximum");
+        }
         if self.max_output_tokens == Some(0) || self.context_window == Some(0) {
             bail!("token limits must be positive integers");
         }
@@ -222,11 +233,14 @@ pub(crate) fn deduplicate_model_entries(
                     preferred.max_output_tokens =
                         existing.max_output_tokens.or(preferred.max_output_tokens);
                     preferred.context_window = existing.context_window.or(preferred.context_window);
+                    preferred.reasoning_max =
+                        existing.reasoning_max.clone().or(preferred.reasoning_max);
                     *existing = preferred;
                 } else {
                     existing.max_output_tokens =
                         existing.max_output_tokens.or(model.max_output_tokens);
                     existing.context_window = existing.context_window.or(model.context_window);
+                    existing.reasoning_max = existing.reasoning_max.clone().or(model.reasoning_max);
                     if existing.label.is_none() {
                         existing.label = model.label;
                     }
@@ -342,9 +356,8 @@ pub struct AppPaths {
 impl AppPaths {
     pub fn discover() -> Result<Self> {
         let (config_dir, state_dir, cache_dir) = crate::platform::directories()?;
-        let config = env::var_os("CCSW_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config_dir.join("config.toml"));
+        let config =
+            crate::platform::override_path("CCSW_CONFIG", || Ok(config_dir.join("config.toml")))?;
         let cache = cache_dir.join("models.json");
         Ok(Self {
             config,
@@ -368,7 +381,7 @@ pub fn load(path: &Path) -> Result<Config> {
         .unwrap_or(1);
     if version == 1 {
         migrate_v1(&mut raw)?;
-    } else if version == 2 || version == 3 {
+    } else if version == 2 || version == 3 || version == 4 {
         raw["version"] = toml::Value::Integer(i64::from(CONFIG_VERSION));
     } else if version != i64::from(CONFIG_VERSION) {
         bail!(
@@ -424,7 +437,33 @@ pub fn load(path: &Path) -> Result<Config> {
             .validate()
             .with_context(|| format!("invalid profile {id}"))?;
     }
+    suspend_codex_api_providers(&mut config);
+    config.claude.validate()?;
     Ok(config)
+}
+
+/// A ChatGPT subscription and API providers are mutually exclusive for Codex.
+/// Keep the original provider flags so disabling the subscription can restore them.
+fn suspend_codex_api_providers(config: &mut Config) {
+    if !matches!(
+        config.codex.active,
+        Some(crate::codex::Selection::Account { .. })
+    ) {
+        return;
+    }
+    if config.codex.suspended_providers.is_none() {
+        config.codex.suspended_providers = Some(
+            config
+                .codex
+                .profiles
+                .iter()
+                .map(|(id, profile)| (id.clone(), profile.enabled))
+                .collect(),
+        );
+    }
+    for profile in config.codex.profiles.values_mut() {
+        profile.enabled = false;
+    }
 }
 
 fn migrate_v1(raw: &mut toml::Value) -> Result<()> {
@@ -499,6 +538,7 @@ fn update_locked(
     }
     let mut latest = load(path)?;
     edit(&mut latest)?;
+    suspend_codex_api_providers(&mut latest);
     latest.version = CONFIG_VERSION;
     for (id, profile) in latest
         .profiles
@@ -509,6 +549,7 @@ fn update_locked(
         validate_profile_id(id)?;
         profile.validate()?;
     }
+    latest.claude.validate()?;
     write_unlocked(path, &latest)?;
     FileExt::unlock(&lock).ok();
     Ok(latest)
@@ -629,6 +670,11 @@ pub fn update_client(
         swap_scope(config, client);
         let result = edit(config);
         swap_scope(config, client);
+        if config.codex.suspended_providers.is_some() {
+            for profile in config.codex.profiles.values_mut() {
+                profile.enabled = false;
+            }
+        }
         result
     })?;
     swap_scope(&mut config, client);
@@ -675,6 +721,7 @@ mod tests {
             models: vec![ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: "claude-sonnet".into(),
                 label: Some("Sonnet".into()),
                 description: None,
@@ -850,5 +897,32 @@ value = "secret"
         let error = try_update(&path, |_| Ok(())).unwrap_err();
         assert!(error.to_string().contains("configuration is busy"));
         assert!(!path.exists());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_file_tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn replacement_failure_preserves_original_then_retry_succeeds() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("用户 %literal% !& config.toml");
+        let mut config = Config::default();
+        write_unlocked(&path, &config).unwrap();
+        let before = fs::read(&path).unwrap();
+        // Deny FILE_SHARE_DELETE to simulate a Windows editor holding the target.
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        config.profiles.insert("test".into(), serde_json::from_value(serde_json::json!({"name":"test", "base_url":"https://example.invalid", "default_model":"test"})).unwrap());
+        assert!(write_unlocked(&path, &config).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        drop(handle);
+        write_unlocked(&path, &config).unwrap();
+        assert_ne!(fs::read(&path).unwrap(), before);
     }
 }

@@ -3,14 +3,15 @@ use super::*;
 pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)] {
     match section {
         HelpSection::Home => &[
+            ("F6", "Provider usage: daily / total calls and tokens"),
             ("↑↓ / j k", "Select All Models or a provider"),
             ("Enter / Click", "Open selection"),
             ("Space", "Toggle provider; auto-sync after connection"),
             ("n / x", "New / delete provider"),
             ("e", "Edit selected provider"),
-            ("r / t", "Test connection and fetch model catalog"),
             ("A", "Enable all models in the selected provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
+            ("F4", "TUI theme; Claude presets and custom environment"),
             (
                 "Click top tabs / F2",
                 "Switch independent Claude Code / Codex / Pi configurations",
@@ -18,6 +19,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("q", "Quit CCSW"),
         ],
         HelpSection::AllEnabled => &[
+            ("F6", "Provider usage: daily / total calls and tokens"),
             ("↑↓ / j k", "Select a model across providers"),
             (
                 "PgUp / PgDn",
@@ -26,9 +28,11 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("Space", "Toggle model; auto-sync after connection"),
             ("Enter / click again", "Open the selected model’s provider"),
             ("p / P", "Connect or sync all models / manage proxy"),
+            ("F4", "TUI theme; Claude presets and custom environment"),
             ("Esc", "Return to providers"),
         ],
         HelpSection::Provider => &[
+            ("F6", "Selected provider usage and daily history"),
             (
                 "↑↓ / j k",
                 "Browse models; Tab switches panels in narrow windows",
@@ -39,10 +43,13 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
                 "A / C",
                 "Enable filtered models / clear non-essential enabled models",
             ),
-            ("a / x", "Add model / delete custom model"),
+            ("a", "Add model"),
+            ("x", "Models: delete model; Details: delete provider"),
             ("e", "Edit selected model from either panel"),
             ("E (Shift+e)", "Edit provider configuration"),
-            ("r / p / P", "Fetch models / sync / proxy"),
+            ("p / P", "Sync / proxy"),
+            ("F4", "TUI theme / Claude client settings"),
+            ("F5", "Send a minimal request to the selected model"),
         ],
         HelpSection::Forms => &[
             (
@@ -136,7 +143,16 @@ pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static
 pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal) {
     let compact = area.width < 58 || area.height < 14;
     let label = if help.codex {
-        ["Providers", "Accounts", "Models", "Forms"][help.section.index()]
+        [
+            "Providers",
+            if help.codex_accounts {
+                "Accounts"
+            } else {
+                "All Models"
+            },
+            "Models",
+            "Forms",
+        ][help.section.index()]
     } else {
         help.section.label()
     };
@@ -175,7 +191,16 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
                     .iter()
                     .enumerate()
                     .map(|(i, section)| {
-                        let label = ["Providers", "Accounts", "Models", "Forms"][i];
+                        let label = [
+                            "Providers",
+                            if help.codex_accounts {
+                                "Accounts"
+                            } else {
+                                "All Models"
+                            },
+                            "Models",
+                            "Forms",
+                        ][i];
                         Span::styled(
                             format!(" {} {} ", i + 1, label),
                             if *section == help.section {
@@ -225,7 +250,9 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     if content.height > 0 {
         frame.render_widget(
             Paragraph::new(if help.codex {
-                codex_help_content(help.section)
+                if help.section == HelpSection::AllEnabled && !help.codex_accounts {
+                    vec![Line::raw("All Models · enabled models across API providers"), Line::raw("↑↓ select · Enter open provider · Space disable model"), Line::raw("p sync catalog and set startup default · Esc back"), Line::raw("ChatGPT enabled: API models pause; the ChatGPT Account card shows the subscription state."), Line::raw("Home → ChatGPT Account → Space: confirm enable or disable and restore API models.")]
+                } else { codex_help_content(help.section) }
             } else if help.pi {
                 pi_help_content(help.section)
             } else {
@@ -296,22 +323,40 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
             ),
             (
                 "Enter / click again",
-                "Open selected provider or ChatGPT Account",
+                "Open All Models, a provider or ChatGPT Account",
+            ),
+            (
+                "Space",
+                "Toggle provider; ChatGPT enable/disable requires confirmation",
+            ),
+            (
+                "All Models",
+                "Browse enabled models; subscription mode pauses API models",
             ),
             ("n / e / x", "Add / edit / remove an API provider"),
-            ("p", "Apply selected provider or saved ChatGPT account"),
+            ("p", "Sync all API models or apply saved ChatGPT account"),
             (
                 "Top tabs / F2",
                 "Switch independent Claude / Codex / Pi configurations",
             ),
             (
                 "",
-                "Exactly one provider is selected: ChatGPT account or API provider.",
+                "ChatGPT pauses API providers; disabling restores their previous enablement.",
             ),
         ],
         HelpSection::AllEnabled => &[
-            ("i", "Import current Codex login; enter a name"),
-            ("I", "Import an auth.json file by absolute path"),
+            (
+                "b / d",
+                "Browser / device code login; optional account label",
+            ),
+            ("e", "Rename the highlighted account"),
+            ("r", "Refresh account usage and status"),
+            ("PgUp / PgDn", "Scroll cached account details"),
+            ("i", "Import current Codex login; optional account label"),
+            (
+                "I",
+                "Import auth.json: file path, then optional account label",
+            ),
             ("Up/Down", "Move the account cursor"),
             ("Space", "Select the highlighted account without applying"),
             ("p / Apply", "Activate the account and ChatGPT provider"),
@@ -331,19 +376,25 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
         ],
         HelpSection::Provider => &[
             ("a / e / E", "Add model / edit model / edit provider"),
-            ("r", "Fetch API models"),
+            (
+                "Mouse",
+                "Click Provider status once to select, again to edit",
+            ),
             (
                 "Space / d / 1",
                 "Enable model / set default / toggle 1M context",
             ),
-            ("p / g", "Use API model / set reasoning"),
+            (
+                "p / g",
+                "Sync all API models, set startup default / set reasoning",
+            ),
             (
                 "s / D",
                 "Local status / disconnect and restore managed settings",
             ),
             (
                 "",
-                "API selection uses its endpoint and model; ChatGPT uses saved login.",
+                "Restart Codex after syncing catalog changes, then use /model without restarting.",
             ),
         ],
         HelpSection::Forms => return help_content(section, false),

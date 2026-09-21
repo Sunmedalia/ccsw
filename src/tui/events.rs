@@ -8,6 +8,7 @@ impl App {
         loop {
             redraw |= self.poll_background();
             redraw |= self.poll_codex();
+            redraw |= self.poll_usage();
             if redraw {
                 terminal.draw(|frame| self.draw(frame))?;
                 redraw = false;
@@ -33,7 +34,7 @@ impl App {
             let input = event::read()?;
             redraw = true;
             if self.screen.width < 40 || self.screen.height < 12 {
-                if matches!(input, Event::Key(key) if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)))
+                if matches!(input, Event::Key(key) if key.kind == event::KeyEventKind::Press && (key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))))
                 {
                     closing = true;
                 }
@@ -60,6 +61,7 @@ impl App {
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        self.provider_card_selected = false;
         let before = self.config.clone();
         let result = self.handle_key_inner(key);
         if before != self.config {
@@ -70,11 +72,34 @@ impl App {
     }
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if matches!(self.modal, Some(Modal::Appearance(_))) {
+            self.handle_modal(key)?;
+            return Ok(false);
+        }
+        if self.modal.is_none() && key.code == KeyCode::F(4) {
+            self.open_appearance();
+            return Ok(false);
+        }
+        if self.usage.active {
+            return Ok(self.usage_key(key));
+        }
+        if self.modal.is_none() && key.code == KeyCode::F(6) {
+            self.open_usage();
+            return Ok(false);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
+            && self.view_mode == ViewMode::Home
+            && self.modal.is_none()
+            && !self.codex_ui.accounts
+        {
             self.codex_ui
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(true);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Ok(false);
         }
         if self.modal.is_none()
             && let Some(quit) = self.handle_pi_key(key)?
@@ -88,6 +113,10 @@ impl App {
         }
         if self.modal.is_some() {
             self.handle_modal(key)?;
+            return Ok(false);
+        }
+        if key.code == KeyCode::F(5) {
+            self.start_model_test();
             return Ok(false);
         }
         match self.view_mode {
@@ -107,7 +136,6 @@ impl App {
                 KeyCode::Char('x') if self.selected_profile().is_some() => {
                     self.modal = Some(Modal::DeleteProfile);
                 }
-                KeyCode::Char('r') | KeyCode::Char('t') => self.refresh_models(),
                 KeyCode::Char(' ') if self.selected_profile().is_some() => {
                     self.toggle_selected_provider()?;
                 }
@@ -117,7 +145,6 @@ impl App {
                 _ => {}
             },
             ViewMode::AllEnabled => match key.code {
-                KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('?') => self.open_help(),
                 KeyCode::Esc | KeyCode::Char('h') => self.return_home(),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -183,7 +210,6 @@ impl App {
                     }
                 } else {
                     match key.code {
-                        KeyCode::Char('q') => return Ok(true),
                         KeyCode::Char('?') => self.open_help(),
                         KeyCode::Esc => {
                             self.return_home();
@@ -318,15 +344,14 @@ impl App {
                         KeyCode::Char('a') if self.selected_profile().is_some() => {
                             self.open_add_model_modal();
                         }
+                        KeyCode::Char('x') if self.focus == Focus::Details => {
+                            self.modal = Some(Modal::DeleteProfile);
+                        }
                         KeyCode::Char('x') => {
                             self.delete_selected_model();
                         }
                         KeyCode::Char('e') => self.edit_model(),
                         KeyCode::Char('E') => self.edit_profile(),
-                        KeyCode::Char('r') | KeyCode::Char('t') => {
-                            self.refresh_models();
-                            self.init_provider_editor();
-                        }
                         KeyCode::Char('p') => self.sync_all_to_claude(),
                         KeyCode::Char('P') => self.open_proxy_manager(),
                         _ => {}
@@ -338,6 +363,35 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<MouseAction> {
+        if matches!(self.modal, Some(Modal::Appearance(_))) {
+            let modal_area = modal_area_for(self.modal.as_ref().unwrap(), area);
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                if let Some((theme, _)) = theme::rows(modal_area)
+                    .into_iter()
+                    .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                {
+                    if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
+                        form.theme = theme;
+                    }
+                } else {
+                    let claude = !self.pi_enabled && !self.codex_ui.enabled;
+                    if let Some(index) = modal_button_rects(modal_area, if claude { 3 } else { 2 })
+                        .iter()
+                        .position(|rect| contains(*rect, mouse.column, mouse.row))
+                    {
+                        let code = if index == 0 {
+                            KeyCode::Enter
+                        } else if claude && index == 1 {
+                            KeyCode::Char('c')
+                        } else {
+                            KeyCode::Esc
+                        };
+                        self.handle_modal(KeyEvent::new(code, KeyModifiers::NONE))?;
+                    }
+                }
+            }
+            return Ok(MouseAction::None);
+        }
         if area.width >= 40
             && area.height >= 12
             && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -348,8 +402,29 @@ impl App {
             self.select_client_tab(tab);
             return Ok(MouseAction::None);
         }
+        if self.usage.active {
+            self.usage_mouse(mouse, area);
+            return Ok(MouseAction::None);
+        }
         if self.codex_mouse(mouse, area)? {
             return Ok(MouseAction::None);
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.modal.is_none()
+            && self.view_mode == ViewMode::Provider
+        {
+            let is_provider_card = ui_areas(area, self.focus, self.view_mode)
+                .details
+                .map(provider_detail_cards)
+                .is_some_and(|(_, card)| {
+                    contains(card, mouse.column, mouse.row)
+                        && !detail_controls(card)
+                            .iter()
+                            .any(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                });
+            if !is_provider_card {
+                self.provider_card_selected = false;
+            }
         }
         let before = self.config.clone();
         let result = self.handle_mouse_inner(mouse, area);
@@ -433,7 +508,10 @@ impl App {
                         mouse.column,
                         mouse.row,
                         if self.view_mode == ViewMode::Home {
-                            self.config.profiles.len().saturating_add(1)
+                            self.config
+                                .profiles
+                                .len()
+                                .saturating_add(self.home_prefix_count())
                         } else {
                             self.config.profiles.len()
                         },
@@ -483,6 +561,8 @@ impl App {
                                         offset + usize::from(mouse.row.saturating_sub(inner_y));
                                     let filtered = editor.filtered_indices();
                                     if index < filtered.len() {
+                                        let was_selected =
+                                            editor.selected == index && !editor.search_active;
                                         editor.selected = index;
                                         let should_toggle = !pi && mouse.column < list_area.x + 4;
                                         if should_toggle {
@@ -490,7 +570,7 @@ impl App {
                                         } else {
                                             editor.search_active = false;
                                         }
-                                        Some((index, should_toggle))
+                                        Some((index, should_toggle, was_selected))
                                     } else {
                                         None
                                     }
@@ -500,10 +580,15 @@ impl App {
                             } else {
                                 None
                             };
-                            if let Some((index, should_toggle)) = clicked {
+                            if let Some((index, should_toggle, was_selected)) = clicked {
                                 self.model_idx = index;
                                 if should_toggle {
                                     self.commit_provider_editor()?;
+                                } else if was_selected
+                                    && mouse.column >= list_area.x + 4
+                                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                                {
+                                    self.edit_model();
                                 }
                                 return Ok(MouseAction::None);
                             }
@@ -554,6 +639,10 @@ impl App {
                             self.focus = Focus::Details;
                             MouseAction::None
                         }
+                        FooterControl::DeleteProfile => {
+                            self.modal = Some(Modal::DeleteProfile);
+                            MouseAction::None
+                        }
                         FooterControl::AddProfile => {
                             self.new_profile();
                             MouseAction::None
@@ -564,6 +653,10 @@ impl App {
                         }
                         FooterControl::Proxy => {
                             self.open_proxy_manager();
+                            MouseAction::None
+                        }
+                        FooterControl::Settings => {
+                            self.open_appearance();
                             MouseAction::None
                         }
                         FooterControl::Help => {
@@ -586,20 +679,35 @@ impl App {
                         clicked_list_index(panel, mouse.column, mouse.row, self.profile_offset, 1)
                     };
                     let item_count = if self.view_mode == ViewMode::Home {
-                        self.config.profiles.len().saturating_add(1)
+                        self.config
+                            .profiles
+                            .len()
+                            .saturating_add(self.home_prefix_count())
                     } else {
                         self.config.profiles.len()
                     };
                     if let Some(index) = index.filter(|index| *index < item_count) {
                         self.focus = Focus::Profiles;
                         if self.view_mode == ViewMode::Home {
-                            if !pi && index > 0 && mouse.column < panel.x.saturating_add(5) {
+                            if !pi
+                                && self.codex_ui.enabled
+                                && index == 1
+                                && mouse.column < panel.x.saturating_add(5)
+                            {
+                                self.select_home_index(index);
+                                self.toggle_codex_subscription();
+                                return Ok(MouseAction::None);
+                            }
+                            if !pi
+                                && index >= self.home_prefix_count()
+                                && mouse.column < panel.x.saturating_add(5)
+                            {
                                 self.select_home_index(index);
                                 self.toggle_selected_provider()?;
                                 return Ok(MouseAction::None);
                             }
                             if self.home_selected_index() == index {
-                                if index == 0 {
+                                if index < self.home_prefix_count() {
                                     self.enter_all_enabled_view();
                                 } else {
                                     self.enter_provider_view();
@@ -697,25 +805,37 @@ impl App {
                                         self.toggle_selected_model_1m();
                                         return Ok(MouseAction::None);
                                     }
+                                    ShowcaseControl::Test => {
+                                        self.start_model_test();
+                                        return Ok(MouseAction::None);
+                                    }
                                     ShowcaseControl::Delete => {
                                         self.delete_selected_model();
                                         return Ok(MouseAction::None);
                                     }
                                 }
                             }
-                        } else if contains(provider_card, mouse.column, mouse.row)
-                            && let Some((control, _)) = detail_controls(provider_card)
+                        } else if contains(provider_card, mouse.column, mouse.row) {
+                            if let Some((control, _)) = detail_controls(provider_card)
                                 .into_iter()
                                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
-                        {
-                            match control {
-                                DetailControl::FetchModels => {
-                                    self.refresh_models();
-                                    self.init_provider_editor();
+                            {
+                                self.provider_card_selected = false;
+                                match control {
+                                    DetailControl::Delete => {
+                                        self.modal = Some(Modal::DeleteProfile)
+                                    }
+                                    DetailControl::Edit => self.edit_profile(),
                                 }
-                                DetailControl::Edit => {
-                                    self.edit_profile();
-                                }
+                                return Ok(MouseAction::None);
+                            }
+                            if self.provider_card_selected {
+                                self.provider_card_selected = false;
+                                self.edit_profile();
+                            } else {
+                                self.provider_card_selected = true;
+                                self.status_error = false;
+                                self.status = "Provider selected · click again to edit".into();
                             }
                             return Ok(MouseAction::None);
                         }
@@ -724,9 +844,7 @@ impl App {
                         .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                     {
                         match control {
-                            DetailControl::FetchModels => {
-                                self.refresh_models();
-                            }
+                            DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
                             DetailControl::Edit => {
                                 self.edit_profile();
                             }
@@ -823,6 +941,61 @@ impl App {
             return Ok(());
         }
 
+        if matches!(&self.modal, Some(Modal::Preferences(form)) if form.discard) {
+            if let Some(button) = modal_button_rects(area, 2)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                self.handle_modal(KeyEvent::new(
+                    KeyCode::Char(if button == 0 { 'y' } else { 'n' }),
+                    KeyModifiers::NONE,
+                ))?;
+            }
+            return Ok(());
+        }
+        if matches!(self.modal, Some(Modal::Preferences(_))) {
+            if let Some(action) = preference_actions(area)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                self.handle_modal(KeyEvent::new(
+                    KeyCode::Char(['d', 'v', 'x'][action]),
+                    KeyModifiers::ALT,
+                ))?;
+                return Ok(());
+            }
+            if let Some(button) = modal_button_rects(area, 4)
+                .iter()
+                .position(|rect| contains(*rect, mouse.column, mouse.row))
+            {
+                let key = match button {
+                    0 => KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+                    1 => KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+                    2 => KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+                    _ => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                };
+                self.handle_modal(key)?;
+            } else if let Some(Modal::Preferences(form)) = self.modal.as_mut() {
+                let inner = panel_inner(area);
+                let content = Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width,
+                    inner.height.saturating_sub(4),
+                );
+                if contains(content, mouse.column, mouse.row) {
+                    let (_, offset) = form_viewport(content, form.selected);
+                    let index = offset + usize::from(mouse.row - content.y);
+                    if index < form.fields.len() {
+                        form.selected = index;
+                        if !form.fields[index].choices.is_empty() {
+                            cycle_choice(&mut form.fields[index], true);
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
         let button_count = match self.modal.as_ref() {
             Some(Modal::Help(_)) => 1,
             Some(Modal::Proxy(_)) => 0,
@@ -925,7 +1098,35 @@ impl App {
                     && index < form.fields.len()
                 {
                     form.selected = index;
-                    if !form.fields[index].choices.is_empty() {
+                    if index == 3
+                        && contains(
+                            profile_test_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        self.start_profile_connection_test();
+                        return Ok(());
+                    }
+                    if index >= 6
+                        && contains(
+                            profile_test_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        self.start_profile_model_test();
+                        return Ok(());
+                    }
+                    if index >= 6
+                        && contains(
+                            profile_1m_rect(content, (index - offset) as u16),
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        form.toggle_model_field_1m(index);
+                    } else if !form.fields[index].choices.is_empty() {
                         cycle_choice(&mut form.fields[index], true);
                     }
                 }
@@ -950,6 +1151,9 @@ impl App {
                         form.selected = index;
                         if form.fields[index].toggle {
                             toggle_form_field(&mut form.fields[index]);
+                        } else if !form.fields[index].choices.is_empty() {
+                            let value_x = form_inner.x + (form_inner.width / 3).min(17) + 2;
+                            cycle_choice(&mut form.fields[index], mouse.column > value_x);
                         }
                     }
                 } else if contains(api_area, mouse.column, mouse.row) {
@@ -989,6 +1193,19 @@ impl App {
             return Ok(());
         };
         match &mut modal {
+            Modal::Appearance(form) => {
+                if self.appearance_key(form, key)? {
+                    return Ok(());
+                }
+            }
+            Modal::Preferences(form) => {
+                if self.preferences_key(form, key) {
+                    if let Some(theme) = form.return_theme {
+                        self.modal = Some(Modal::Appearance(theme::Appearance { theme }));
+                    }
+                    return Ok(());
+                }
+            }
             Modal::Import(candidate) => match key.code {
                 KeyCode::Char('i') | KeyCode::Enter => {
                     let profile = candidate.profile.clone();
@@ -1066,85 +1283,78 @@ impl App {
                         (self.selected_profile_id(), self.selected_model())
                     {
                         let model_base = canonical_model_id(&model.id);
-                        let is_manual = self.config.profiles[&profile_id]
-                            .models
-                            .iter()
-                            .any(|entry| canonical_model_id(&entry.id) == model_base);
-                        if !is_manual {
+                        let model_id = model.id.clone();
+                        let deleting_default =
+                            canonical_model_id(&self.config.profiles[&profile_id].default_model)
+                                == model_base;
+                        let replacement = self.provider_editor.as_ref().and_then(|editor| {
+                            editor
+                                .catalog
+                                .iter()
+                                .find(|entry| {
+                                    canonical_model_id(&entry.id) != model_base
+                                        && editor.is_enabled(&entry.id)
+                                })
+                                .or_else(|| {
+                                    editor
+                                        .catalog
+                                        .iter()
+                                        .find(|entry| canonical_model_id(&entry.id) != model_base)
+                                })
+                                .map(|entry| editor.effective_id(&entry.id))
+                        });
+                        if deleting_default && replacement.is_none() {
                             self.set_error(
-                                "Gateway models cannot be deleted · use Space to disable them",
+                                "The only model cannot be deleted · add another model first",
                             );
-                        } else {
-                            let model_id = model.id.clone();
-                            let deleting_default = canonical_model_id(
-                                &self.config.profiles[&profile_id].default_model,
-                            ) == model_base;
-                            let replacement = self.provider_editor.as_ref().and_then(|editor| {
-                                editor
-                                    .catalog
-                                    .iter()
-                                    .find(|entry| {
-                                        entry.id != model_base && editor.is_enabled(&entry.id)
-                                    })
-                                    .or_else(|| {
-                                        editor.catalog.iter().find(|entry| entry.id != model_base)
-                                    })
-                                    .map(|entry| editor.effective_id(&entry.id))
-                            });
-                            if deleting_default && replacement.is_none() {
-                                self.set_error(
-                                    "The only model cannot be deleted · add another model first",
-                                );
-                                return Ok(());
+                            return Ok(());
+                        }
+                        let original = self.config.profiles[&profile_id].clone();
+                        let mut edited = original.clone();
+                        {
+                            let profile = &mut edited;
+                            profile
+                                .models
+                                .retain(|entry| canonical_model_id(&entry.id) != model_base);
+                            profile
+                                .enabled_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            profile
+                                .disabled_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            for alias in [
+                                &mut profile.aliases.opus,
+                                &mut profile.aliases.sonnet,
+                                &mut profile.aliases.haiku,
+                                &mut profile.aliases.fable,
+                                &mut profile.subagent_model,
+                            ] {
+                                if alias
+                                    .as_ref()
+                                    .is_some_and(|id| canonical_model_id(id) == model_base)
+                                {
+                                    *alias = None;
+                                }
                             }
-                            let original = self.config.profiles[&profile_id].clone();
-                            let mut edited = original.clone();
+                            profile
+                                .fallback_models
+                                .retain(|id| canonical_model_id(id) != model_base);
+                            if let Some(replacement) = &replacement
+                                && deleting_default
                             {
-                                let profile = &mut edited;
-                                profile
-                                    .models
-                                    .retain(|entry| canonical_model_id(&entry.id) != model_base);
-                                profile
-                                    .enabled_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
+                                let replacement_base = canonical_model_id(replacement);
                                 profile
                                     .disabled_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
-                                for alias in [
-                                    &mut profile.aliases.opus,
-                                    &mut profile.aliases.sonnet,
-                                    &mut profile.aliases.haiku,
-                                    &mut profile.aliases.fable,
-                                    &mut profile.subagent_model,
-                                ] {
-                                    if alias
-                                        .as_ref()
-                                        .is_some_and(|id| canonical_model_id(id) == model_base)
-                                    {
-                                        *alias = None;
-                                    }
-                                }
-                                profile
-                                    .fallback_models
-                                    .retain(|id| canonical_model_id(id) != model_base);
-                                if let Some(replacement) = &replacement
-                                    && deleting_default
-                                {
-                                    let replacement_base = canonical_model_id(replacement);
-                                    profile
-                                        .disabled_models
-                                        .retain(|id| canonical_model_id(id) != replacement_base);
-                                    profile.default_model = replacement.clone();
-                                }
+                                    .retain(|id| canonical_model_id(id) != replacement_base);
+                                profile.default_model = replacement.clone();
                             }
-                            self.config =
-                                self.update_client_profile(&profile_id, &original, &edited)?;
-                            self.model_idx =
-                                self.model_idx.min(self.models().len().saturating_sub(1));
-                            self.status_error = false;
-                            self.status = format!("Deleted custom model {model_id}");
-                            self.init_provider_editor();
                         }
+                        self.config =
+                            self.update_client_profile(&profile_id, &original, &edited)?;
+                        self.model_idx = self.model_idx.min(self.models().len().saturating_sub(1));
+                        self.status_error = false;
+                        self.status = format!("Deleted model {model_id}");
+                        self.init_provider_editor();
                     }
                     return Ok(());
                 }
@@ -1282,6 +1492,21 @@ impl App {
                             );
                         }
                     }
+                    self.modal = Some(modal);
+                    return Ok(());
+                }
+                if key.code == KeyCode::F(5) {
+                    let connection = form.selected == 3;
+                    self.modal = Some(modal);
+                    if connection {
+                        self.start_profile_connection_test();
+                    } else {
+                        self.start_profile_model_test();
+                    }
+                    return Ok(());
+                }
+                if key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('1') {
+                    form.toggle_model_field_1m(form.selected);
                     self.modal = Some(modal);
                     return Ok(());
                 }

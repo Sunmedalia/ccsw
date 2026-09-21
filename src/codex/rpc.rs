@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc,
@@ -13,7 +13,7 @@ use std::{
 };
 
 pub struct Client {
-    child: Child,
+    child: crate::managed_process::ManagedChild,
     input: ChildStdin,
     output: mpsc::Receiver<Result<Value>>,
     sequence: u64,
@@ -21,14 +21,20 @@ pub struct Client {
 }
 impl Client {
     pub fn start(home: &Path) -> Result<Self> {
-        let binary = std::env::var_os("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
-        let mut child = Command::new(binary)
-            .args([
-                "app-server",
-                "--stdio",
-                "-c",
-                "cli_auth_credentials_store=\"file\"",
-            ])
+        let binary =
+            crate::platform::nonempty_env("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
+        let binary = crate::platform::resolve_program(&binary)?;
+        let doc: toml::Value = toml::from_str(&std::fs::read_to_string(home.join("config.toml"))?)?;
+        if doc
+            .get("cli_auth_credentials_store")
+            .and_then(toml::Value::as_str)
+            != Some("file")
+        {
+            bail!("RPC requires an isolated CODEX_HOME with file credential storage");
+        }
+        let mut command = Command::new(binary);
+        command
+            .args(["app-server", "--stdio"])
             .current_dir(home)
             .env("CODEX_HOME", home)
             .env_remove("OPENAI_API_KEY")
@@ -36,8 +42,8 @@ impl Client {
             .env_remove("CODEX_AUTH")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        let mut child = crate::managed_process::ManagedChild::spawn(&mut command)
             .context("Cannot start Codex; install Codex CLI or set CCSW_CODEX_BIN")?;
         let input = child.stdin.take().context("Codex stdin unavailable")?;
         let out = child.stdout.take().context("Codex stdout unavailable")?;
@@ -112,7 +118,8 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             if cancel.load(Ordering::Relaxed) || Instant::now() >= deadline {
-                let _ = self.call("account/login/cancel", json!({"loginId":login_id}));
+                self.sequence += 1;
+                let _ = self.send(json!({"id": self.sequence, "method": "account/login/cancel", "params": {"loginId": login_id}}));
                 bail!("Login cancelled or timed out");
             }
             let value = if !self.pending.is_empty() {
@@ -137,7 +144,6 @@ impl Client {
 }
 impl Drop for Client {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.terminate();
     }
 }

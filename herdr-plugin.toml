@@ -1,0 +1,26 @@
+id = "ccsw"
+name = "CCSW Pulse"
+version = "0.1.13"
+description = "Persistent side-pane monitor for Claude usage, request health and traffic"
+min_herdr_version = "0.7.0"
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release", "--bin", "ccsw"]
+
+[[panes]]
+id = "quick"
+title = "CCSW Pulse"
+placement = "split"
+command = ["./target/release/ccsw", "quick"]
+
+[[panes]]
+id = "editor"
+title = "CCSW"
+placement = "tab"
+command = ["./target/release/ccsw"]
+
+[[actions]]
+id = "open"
+title = "Toggle CCSW Pulse beside this pane"
+command = ["./target/release/ccsw", "quick", "--open"]

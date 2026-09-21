@@ -45,19 +45,69 @@ impl App {
         })
     }
 
+    pub(super) fn footer_uses_short_labels(&self, area: Rect, compact: bool) -> bool {
+        let controls: Vec<_> = footer_controls(Rect::new(0, 0, 200, 1), compact, self.view_mode)
+            .into_iter()
+            .filter(|(control, _)| match control {
+                FooterControl::DeleteProfile => {
+                    !self.home_all_selected && self.selected_profile().is_some()
+                }
+                FooterControl::Proxy => !self.pi_enabled,
+                _ => true,
+            })
+            .collect();
+        let width: usize = controls
+            .iter()
+            .map(|(control, _)| {
+                let (label, _) = self.footer_control_style(*control, compact, false);
+                UnicodeWidthStr::width(label.as_str())
+            })
+            .sum();
+        width + controls.len().saturating_sub(1) > usize::from(area.width)
+    }
+
     pub(super) fn client_footer_controls(
         &self,
         area: Rect,
         compact: bool,
     ) -> Vec<(FooterControl, Rect)> {
-        let mut x = area.x;
-        footer_controls(area, compact, self.view_mode)
+        if area.width == 0 || area.height == 0 {
+            return vec![];
+        }
+        // Collect the complete control list before filtering and measuring labels.
+        let template_area = Rect::new(0, area.y, if area.width < 55 { 54 } else { 200 }, 1);
+        let controls: Vec<_> = footer_controls(template_area, compact, self.view_mode)
             .into_iter()
+            .filter(|(control, _)| {
+                *control != FooterControl::DeleteProfile
+                    || (!self.home_all_selected && self.selected_profile().is_some())
+            })
             .filter(|(control, _)| !self.pi_enabled || *control != FooterControl::Proxy)
-            .map(|(control, mut rect)| {
-                rect.x = x;
-                x = x.saturating_add(rect.width).saturating_add(1);
-                (control, rect)
+            .map(|(control, _)| {
+                let (label, _) = self.footer_control_style(
+                    control,
+                    compact,
+                    self.footer_uses_short_labels(area, compact),
+                );
+                (control, UnicodeWidthStr::width(label.as_str()) as u16)
+            })
+            .collect();
+        let count = controls.len() as u16;
+        let label_width: u16 = controls.iter().map(|(_, width)| *width).sum();
+        let roomy = label_width + count * 2 + count.saturating_sub(1) * 2 <= area.width;
+        let padding = if roomy { 2 } else { 0 };
+        let gap = if roomy { 2 } else { 1 };
+        let mut x = area.x;
+        controls
+            .into_iter()
+            .filter_map(|(control, width)| {
+                let width = width + padding;
+                if x + width > area.right() {
+                    return None;
+                }
+                let rect = Rect::new(x, area.y, width, 1);
+                x += width + gap;
+                Some((control, rect))
             })
             .collect()
     }

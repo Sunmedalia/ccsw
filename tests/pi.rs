@@ -1,8 +1,6 @@
+mod support;
 use serde_json::{Value, json};
-use std::{
-    fs,
-    process::{Command, Output},
-};
+use std::{fs, process::Output};
 struct Sandbox {
     root: tempfile::TempDir,
 }
@@ -25,7 +23,7 @@ impl Sandbox {
         s
     }
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(self.root.path())
             .args(args)
             .env("HOME", self.root.path())
             .env("PI_CODING_AGENT_DIR", self.root.path().join("pi"))

@@ -25,6 +25,12 @@ pub struct Settings {
     #[serde(default)]
     pub accounts: BTreeMap<String, accounts::Account>,
     pub active: Option<Selection>,
+    #[serde(default)]
+    pub suspended_providers: Option<BTreeMap<String, bool>>,
+    #[serde(default)]
+    pub last_api: Option<Selection>,
+    #[serde(default)]
+    pub last_account: Option<String>,
     pub api_model: Option<String>,
     pub subscription_model: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -62,6 +68,8 @@ pub enum Command {
 #[derive(Subcommand)]
 pub enum AccountCommand {
     List,
+    /// Disable subscription mode and restore previously enabled API providers
+    Disable,
     Login {
         #[arg(long)]
         name: String,
@@ -102,7 +110,7 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
         } => {
             apply(paths, &profile, model.as_deref(), reasoning.as_deref())?;
             println!(
-                "Codex configuration applied. Restart CLI / ChatGPT App; existing chats retain their settings."
+                "Codex model catalog synced. Restart Codex CLI to load the catalog, then switch registered models with /model without restarting. The selected model is the startup default."
             );
         }
         Command::Disconnect => {
@@ -110,6 +118,10 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
             println!("Restored previous Codex settings. Restart CLI / ChatGPT App.");
         }
         Command::Accounts { command } => match command {
+            AccountCommand::Disable => {
+                disable_subscription(paths)?;
+                println!("ChatGPT disabled; previous API providers restored. Restart Codex.");
+            }
             AccountCommand::List => {
                 for (id, a) in config::load(&paths.config)?.codex.accounts {
                     println!(
@@ -151,12 +163,9 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
     Ok(())
 }
 pub fn home() -> Result<PathBuf> {
-    let path = std::env::var_os("CODEX_HOME")
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(crate::platform::home()?.join(".codex"));
-    Ok(std::path::absolute(path)?)
+    crate::platform::override_path("CODEX_HOME", || Ok(crate::platform::home()?.join(".codex")))
 }
+
 pub(super) fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -262,7 +271,7 @@ fn binding(paths: &AppPaths) -> Result<Option<Binding>> {
     }
 }
 fn check_managed(binding: &Binding, home: &Path, doc: &DocumentMut) -> Result<()> {
-    if binding.home != home {
+    if !crate::platform::same_path(&binding.home, home)? {
         bail!("CODEX_HOME changed; disconnect the previous home before applying to another home");
     }
     for (key, expected) in &binding.managed {
@@ -287,6 +296,8 @@ struct Transaction {
     #[serde(default)]
     old_settings: Settings,
     new_selection: Selection,
+    #[serde(default)]
+    route: Option<proxy::CodexRoutePlan>,
 }
 fn journal_path(paths: &AppPaths) -> PathBuf {
     paths.state_dir.join("codex-transaction.json")
@@ -337,6 +348,14 @@ fn rollback(paths: &AppPaths, transaction: &Transaction) -> Result<()> {
             {
                 bail!("CCSW selection changed during recovery");
             }
+            for (id, profile) in &transaction.old_settings.profiles {
+                if let Some(current) = config.codex.profiles.get_mut(id) {
+                    current.enabled = profile.enabled;
+                }
+            }
+            config.codex.suspended_providers = transaction.old_settings.suspended_providers.clone();
+            config.codex.last_api = transaction.old_settings.last_api.clone();
+            config.codex.last_account = transaction.old_settings.last_account.clone();
             config.codex.active = transaction.old_selection.clone();
             config.codex.api_model = transaction.old_settings.api_model.clone();
             config.codex.subscription_model = transaction.old_settings.subscription_model.clone();
@@ -346,6 +365,9 @@ fn rollback(paths: &AppPaths, transaction: &Transaction) -> Result<()> {
             Ok(())
         })?;
     }
+    if let Some(route) = &transaction.route {
+        proxy::restore_codex_route(paths, route)?;
+    }
     fs::remove_file(journal_path(paths))?;
     Ok(())
 }
@@ -354,7 +376,7 @@ pub fn recover(paths: &AppPaths) -> Result<()> {
     let transaction: Transaction = serde_json::from_slice(
         &fs::read(journal_path(paths)).context("No recovery journal exists")?,
     )?;
-    if transaction.home != home()? {
+    if !crate::platform::same_path(&transaction.home, &home()?)? {
         bail!("Use the original CODEX_HOME to recover this transaction");
     }
     rollback(paths, &transaction)
@@ -410,6 +432,18 @@ pub(super) fn commit(
     auth: Option<&Value>,
     selection: Selection,
 ) -> Result<()> {
+    commit_with_route(paths, home, old, new, auth, selection, None)
+}
+
+fn commit_with_route(
+    paths: &AppPaths,
+    home: &Path,
+    old: &DocumentMut,
+    new: &DocumentMut,
+    auth: Option<&Value>,
+    selection: Selection,
+    route: Option<proxy::CodexRoutePlan>,
+) -> Result<()> {
     if journal_path(paths).exists() {
         bail!("An interrupted transaction needs recovery: ccsw codex recover");
     }
@@ -463,9 +497,13 @@ pub(super) fn commit(
         old_selection,
         old_settings,
         new_selection: selection.clone(),
+        route,
     };
     atomic_write(&journal_path(paths), &serde_json::to_vec(&transaction)?)?;
     let result = (|| {
+        if let Some(route) = &transaction.route {
+            proxy::apply_codex_route(paths, route)?;
+        }
         if let Some(auth) = auth {
             accounts::write_live_auth(home, new, auth)?;
         }
@@ -494,6 +532,31 @@ pub(super) fn commit(
                     .and_then(Item::as_str)
                     .map(str::to_owned);
             }
+            match &selection {
+                Selection::Account { id } => {
+                    config.codex.last_account = Some(id.clone());
+                    if config.codex.suspended_providers.is_none() {
+                        config.codex.suspended_providers = Some(
+                            config
+                                .codex
+                                .profiles
+                                .iter()
+                                .map(|(id, p)| (id.clone(), p.enabled))
+                                .collect(),
+                        );
+                        if matches!(config.codex.active, Some(Selection::Api { .. })) {
+                            config.codex.last_api = config.codex.active.clone();
+                        }
+                    }
+                    for profile in config.codex.profiles.values_mut() {
+                        profile.enabled = false;
+                    }
+                }
+                Selection::Api { .. } => {
+                    restore_api_enabled(&mut config.codex);
+                    config.codex.last_api = Some(selection.clone());
+                }
+            }
             config.codex.active = Some(selection);
             Ok(())
         })?;
@@ -514,7 +577,14 @@ pub fn apply(
     reasoning: Option<&str>,
 ) -> Result<()> {
     let _guard = lock(paths)?;
-    let config = config::load_client(&paths.config, config::Client::Codex)?;
+    let mut config = config::load_client(&paths.config, config::Client::Codex)?;
+    if let Some(saved) = &config.codex.suspended_providers {
+        for (id, enabled) in saved {
+            if let Some(profile) = config.profiles.get_mut(id) {
+                profile.enabled = *enabled;
+            }
+        }
+    }
     let profile = config
         .profiles
         .get(profile_id)
@@ -524,7 +594,7 @@ pub fn apply(
     }
     let wanted = config::canonical_model_id(model.unwrap_or(&profile.default_model));
     let models = crate::discovery::active_models(profile, &[]);
-    let entry = models
+    models
         .iter()
         .find(|m| config::canonical_model_id(&m.id) == wanted)
         .context("Model is disabled or not configured")?;
@@ -536,9 +606,9 @@ pub fn apply(
     if let Some(binding) = binding(paths)? {
         check_managed(&binding, &home, &old)?;
     }
-    let (url, token) = proxy::codex_route(paths, profile_id)?;
+    let (route, models, url, token) = proxy::prepare_codex_route(paths, &config)?;
     let mut new = old.clone();
-    new["model"] = value(wanted);
+    new["model"] = value(proxy::codex_model_id(profile_id, wanted));
     new["model_provider"] = value("ccsw");
     let catalog = write_model_catalog(paths, &models)?;
     new["model_catalog_json"] = value(catalog.to_string_lossy().as_ref());
@@ -557,17 +627,16 @@ pub fn apply(
     if let Some(effort) = reasoning.or(config.codex.reasoning_effort.as_deref()) {
         new["model_reasoning_effort"] = value(effort);
     }
-    if profile.api_format != config::ApiFormat::OpenaiResponses {
+    if config.profiles.values().any(|profile| {
+        !crate::discovery::active_models(profile, &[]).is_empty()
+            && profile.api_format != config::ApiFormat::OpenaiResponses
+    }) {
         new["web_search"] = value("disabled");
     }
-    if let Some(context) = entry.context_window {
-        new["model_context_window"] = value(i64::from(context));
-        new["model_auto_compact_token_limit"] = value(i64::from(context) * 9 / 10);
-    } else {
-        new.remove("model_context_window");
-        new.remove("model_auto_compact_token_limit");
-    }
-    commit(
+    // Global overrides would pin every /model choice to the initial model's limits.
+    new.remove("model_context_window");
+    new.remove("model_auto_compact_token_limit");
+    commit_with_route(
         paths,
         &home,
         &old,
@@ -577,8 +646,56 @@ pub fn apply(
             profile: profile_id.into(),
             model: wanted.into(),
         },
+        Some(route),
     )
 }
+fn restore_api_enabled(settings: &mut Settings) {
+    if let Some(saved) = settings.suspended_providers.take() {
+        for (id, enabled) in saved {
+            if let Some(profile) = settings.profiles.get_mut(&id) {
+                profile.enabled = enabled;
+            }
+        }
+    }
+}
+
+pub fn disable_subscription(paths: &AppPaths) -> Result<()> {
+    let mut config = config::load(&paths.config)?;
+    if !matches!(config.codex.active, Some(Selection::Account { .. })) {
+        return Ok(());
+    }
+    restore_api_enabled(&mut config.codex);
+    let preferred = config
+        .codex
+        .last_api
+        .as_ref()
+        .and_then(|selection| match selection {
+            Selection::Api { profile, model } => config
+                .codex
+                .profiles
+                .get(profile)
+                .filter(|p| {
+                    crate::discovery::active_models(p, &[])
+                        .iter()
+                        .any(|m| config::canonical_model_id(&m.id) == model)
+                })
+                .map(|_| (profile.clone(), model.clone())),
+            _ => None,
+        });
+    let selected = preferred.or_else(|| {
+        config.codex.profiles.iter().find_map(|(id, p)| {
+            crate::discovery::active_models(p, &[])
+                .first()
+                .map(|m| (id.clone(), config::canonical_model_id(&m.id).to_owned()))
+        })
+    });
+    if let Some((profile, model)) = selected {
+        apply(paths, &profile, Some(&model), None)
+    } else {
+        disconnect(paths)
+    }
+}
+
 pub fn validate_reasoning(value: &str) -> Result<()> {
     if !["none", "minimal", "low", "medium", "high", "xhigh"].contains(&value) {
         bail!("Reasoning must be none, minimal, low, medium, high or xhigh");
@@ -590,7 +707,7 @@ pub fn status(paths: &AppPaths) -> Result<String> {
     let config = config::load(&paths.config)?;
     let doc = document(&home)?;
     let mut message = format!(
-        "Codex home: {}\nDesired: {:?}\nProvider: {}\nModel: {}",
+        "Codex home: {}\nConfigured selection: {:?}\nProvider: {}\nStartup default model (on disk): {}",
         home.display(),
         config.codex.active,
         doc.get("model_provider")
@@ -622,7 +739,11 @@ pub fn status(paths: &AppPaths) -> Result<String> {
                 message.push_str("\nLogin conflict: an old client may have restored another account. Restart clients and apply again.");
             }
         }
-        message.push_str("\nOn-disk configuration only; restart CLI / ChatGPT App and verify a new chat. Project/launch overrides may take precedence.");
+        if matches!(config.codex.active, Some(Selection::Api { .. })) {
+            message.push_str("\nOn-disk configuration only, not the running session model. Restart Codex CLI after syncing a changed catalog; use /model to switch loaded models without restarting. Project/launch overrides may take precedence.");
+        } else {
+            message.push_str("\nOn-disk configuration only; restart CLI / ChatGPT App and verify a new chat. Project/launch overrides may take precedence.");
+        }
     }
     Ok(message)
 }
@@ -695,12 +816,13 @@ pub(crate) fn execute_detach(plan: &DetachPlan) -> Result<()> {
 pub fn disconnect(paths: &AppPaths) -> Result<()> {
     let _guard = lock(paths)?;
     let plan = prepare_detach(paths)?.context("Codex is not managed by CCSW")?;
-    if plan.home != home()? {
+    if !crate::platform::same_path(&plan.home, &home()?)? {
         bail!("Use the original CODEX_HOME to disconnect");
     }
     accounts::capture_current(paths, plan.live_auth.as_ref())?;
     execute_detach(&plan)?;
     config::update(&paths.config, |config| {
+        restore_api_enabled(&mut config.codex);
         config.codex.active = None;
         Ok(())
     })?;
@@ -714,7 +836,7 @@ fn write_model_catalog(paths: &AppPaths, models: &[config::ModelEntry]) -> Resul
         let context = entry.context_window.unwrap_or(if entry.id.ends_with("[1m]") { 1_000_000 } else { 128_000 });
         json!({
             "slug":config::canonical_model_id(&entry.id), "display_name":entry.label(),
-            "description":"User-configured model managed by CCSW",
+            "description":entry.label(),
             "default_reasoning_level":"none", "supported_reasoning_levels":[],
             "shell_type":"unified_exec", "visibility":"list", "supported_in_api":true,
             "priority":0, "base_instructions":"You are a coding assistant. Inspect the workspace, use tools to perform the requested work, and verify your changes.",
@@ -788,6 +910,7 @@ mod tests {
             old_binding: None,
             old_selection: None,
             old_settings: Default::default(),
+            route: None,
             new_selection: Selection::Api {
                 profile: "test".into(),
                 model: "new".into(),
@@ -817,7 +940,12 @@ mod tests {
         // Make CCSW config locking fail after external settings and the binding were written.
         fs::remove_file(paths.config.with_extension("toml.lock")).unwrap();
         fs::create_dir(paths.config.with_extension("toml.lock")).unwrap();
-        let result = commit(
+        let route: proxy::CodexRoutePlan = serde_json::from_value(json!({
+            "id":"new-codex-route", "before":null,
+            "after":{"codex":true,"config_path":paths.config,"models":{}}
+        }))
+        .unwrap();
+        let result = commit_with_route(
             &paths,
             &home,
             &old,
@@ -827,9 +955,14 @@ mod tests {
                 profile: "test".into(),
                 model: "new".into(),
             },
+            Some(route),
         );
         assert!(result.is_err());
         assert_eq!(document(&home).unwrap().to_string(), old.to_string());
+        let registry: Value =
+            serde_json::from_slice(&fs::read(paths.state_dir.join("proxy.json")).unwrap()).unwrap();
+        assert!(registry["routes"].get("new-codex-route").is_none());
+        assert!(!journal_path(&paths).exists());
     }
     #[test]
     fn quota_cache_round_trips_nullable_fields_without_leaking_credentials() {

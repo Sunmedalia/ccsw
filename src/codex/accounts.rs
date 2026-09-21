@@ -195,11 +195,11 @@ pub fn login(
         .context("Codex did not return a login ID")?;
     if device {
         notify(format!(
-            "Open {} and enter {}",
+            "Code: {}\nOpen: {}",
+            response["userCode"].as_str().unwrap_or(""),
             response["verificationUrl"]
                 .as_str()
-                .unwrap_or("the Codex login page"),
-            response["userCode"].as_str().unwrap_or("")
+                .unwrap_or("the Codex login page")
         ));
     } else {
         let url = response["authUrl"]
@@ -226,20 +226,19 @@ fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let mut command = std::process::Command::new("open");
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut c = std::process::Command::new("rundll32.exe");
-        c.arg("url.dll,FileProtocolHandler");
-        c
-    };
+    return crate::windows::open_browser(url);
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let mut command = std::process::Command::new("xdg-open");
-    command
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        command
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        Ok(())
+    }
 }
 pub(super) fn capture_current(paths: &AppPaths, auth: Option<&Value>) -> Result<()> {
     let Some(auth) = auth else {
@@ -452,6 +451,24 @@ pub fn summary(paths: &AppPaths, id: &str) -> Result<String> {
         .accounts
         .get(id)
         .context("Account does not exist")?;
+    Ok(cached_summary(account))
+}
+
+fn reset_display(timestamp: u64, current: u64) -> String {
+    let date = i64::try_from(timestamp)
+        .ok()
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M %:z")
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown date".into());
+    let minutes = timestamp.saturating_sub(current).div_ceil(60);
+    format!("{date} ({}h {}min)", minutes / 60, minutes % 60)
+}
+
+pub fn cached_summary(account: &Account) -> String {
     let mut lines = vec![
         format!(
             "{} · {} · {}",
@@ -476,25 +493,35 @@ pub fn summary(paths: &AppPaths, id: &str) -> Result<String> {
     }
     for (name, bucket) in buckets {
         for window in ["primary", "secondary"] {
-            if let Some(used) = bucket[window]["usedPercent"].as_i64() {
+            if let Some(used) = bucket[window]["usedPercent"].as_f64() {
                 let reset = bucket[window]["resetsAt"]
                     .as_u64()
-                    .map(|time| format!("in {} min", time.saturating_sub(now()).div_ceil(60)))
+                    .map(|time| reset_display(time, now()))
                     .unwrap_or("unknown".into());
-                lines.push(format!("{name} {window}: {used}% used · resets {reset}"));
+                let duration = bucket[window]["windowDurationMins"]
+                    .as_u64()
+                    .map(|minutes| {
+                        if minutes > 0 && minutes % 1440 == 0 {
+                            format!("{}d", minutes / 1440)
+                        } else if minutes % 60 == 0 {
+                            format!("{}h", minutes / 60)
+                        } else {
+                            format!("{minutes}m")
+                        }
+                    })
+                    .unwrap_or_else(|| window.into());
+                lines.push(format!("{name} {duration}: {used}% used · resets {reset}"));
             }
         }
     }
-    if let Some(time) = account.refreshed_at {
-        lines.push(format!(
-            "Updated {} min ago",
-            now().saturating_sub(time) / 60
-        ));
-    }
+    lines.push(match account.refreshed_at {
+        Some(time) => format!("Last refresh: {} min ago", now().saturating_sub(time) / 60),
+        None => "Last refresh: never · r to check".into(),
+    });
     if let Some(error) = &account.error {
         lines.push(error.clone());
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 mod json_string {
@@ -564,5 +591,60 @@ pub fn live_login() -> Result<(Option<String>, String)> {
             None,
             format!("Provider: {mode} · No readable subscription identity · n login"),
         )),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_keyring_tests {
+    use super::*;
+    #[test]
+    fn credential_manager_round_trip_uses_only_unique_temporary_home() {
+        let root = tempfile::tempdir().unwrap();
+        let entry = keyring_entry(root.path()).unwrap();
+        struct Cleanup(keyring::Entry);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.delete_credential();
+            }
+        }
+        let cleanup = Cleanup(entry);
+        assert!(matches!(
+            cleanup.0.get_password(),
+            Err(keyring::Error::NoEntry)
+        ));
+        let doc: DocumentMut = "cli_auth_credentials_store = 'keyring'".parse().unwrap();
+        let auth = json!({"test_only": "值 %PATH% !x! & \\\""});
+        write_live_auth(root.path(), &doc, &auth).unwrap();
+        assert_eq!(read_live_auth(root.path(), &doc).unwrap(), Some(auth));
+        assert!(!root.path().join("auth.json").exists());
+        cleanup.0.set_password("invalid-json").unwrap();
+        assert!(read_live_auth(root.path(), &doc).is_err());
+        cleanup.0.delete_credential().unwrap();
+        assert_eq!(read_live_auth(root.path(), &doc).unwrap(), None);
+        let auto: DocumentMut = "cli_auth_credentials_store = 'auto'".parse().unwrap();
+        atomic_write(&root.path().join("auth.json"), b"{\"file_fallback\":true}").unwrap();
+        assert_eq!(
+            read_live_auth(root.path(), &auto).unwrap(),
+            Some(json!({"file_fallback":true}))
+        );
+    }
+}
+
+#[cfg(test)]
+mod usage_display_tests {
+    use super::*;
+
+    #[test]
+    fn cached_usage_formats_windows_without_claiming_live_login() {
+        let mut account = Account::default();
+        assert!(cached_summary(&account).contains("Last refresh: never"));
+        account.limits = serde_json::json!({"rateLimits": {"primary": {"usedPercent": 12.5, "windowDurationMins": 300, "resetsAt": now() + 3600}, "secondary": {"usedPercent": 80, "windowDurationMins": 10080}}});
+        account.refreshed_at = Some(now());
+        let summary = cached_summary(&account);
+        assert!(summary.contains("5h: 12.5% used"));
+        assert!(summary.contains("7d: 80% used"));
+        assert!(summary.contains("Last refresh: 0 min ago"));
+        account.error = Some("Refresh failed; cached limits may be stale".into());
+        assert!(cached_summary(&account).contains("cached limits may be stale"));
     }
 }

@@ -61,20 +61,16 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
     Ok(())
 }
 pub fn home() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("PI_CODING_AGENT_DIR") {
-        let path = PathBuf::from(path);
+    if let Some(value) = crate::platform::nonempty_env("PI_CODING_AGENT_DIR") {
+        let path = PathBuf::from(value);
         if let Ok(rest) = path.strip_prefix("~") {
-            return Ok(PathBuf::from(std::env::var_os("HOME").context("HOME missing")?).join(rest));
+            return Ok(crate::platform::home()?.join(rest));
         }
         return Ok(std::path::absolute(path)?);
     }
-    Ok(PathBuf::from(
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .context("Home directory missing")?,
-    )
-    .join(".pi/agent"))
+    Ok(crate::platform::home()?.join(".pi/agent"))
 }
+
 fn read(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(json!({}));
@@ -149,9 +145,8 @@ fn documents(home: &Path) -> Result<[Value; 2]> {
     ])
 }
 fn check(b: &Binding, paths: &AppPaths, home: &Path, docs: &[Value; 2]) -> Result<()> {
-    if b.home != home
-        || b.config
-            != fs::canonicalize(&paths.config).or_else(|_| std::path::absolute(&paths.config))?
+    if !crate::platform::same_path(&b.home, home)?
+        || !crate::platform::same_path(&b.config, &paths.config)?
     {
         bail!("Pi target changed; disconnect the original target first");
     }
@@ -214,7 +209,7 @@ fn recover(paths: &AppPaths, home: &Path) -> Result<()> {
         return Ok(());
     }
     let tx: Transaction = serde_json::from_slice(&fs::read(&journal)?)?;
-    if tx.home != home {
+    if !crate::platform::same_path(&tx.home, home)? {
         bail!("Interrupted Pi transaction belongs to another target");
     }
     let targets = transaction_paths(paths, home);
@@ -651,6 +646,7 @@ fn parse_provider(name: &str, value: &Value, auth: &Value) -> Result<Profile> {
             }
         }
         let entry = ModelEntry {
+            reasoning_max: None,
             id: m["id"].as_str().context("model ID missing")?.into(),
             label: m["name"].as_str().map(String::from),
             description: None,
@@ -731,9 +727,7 @@ pub(crate) fn prepare_detach(paths: &AppPaths) -> Result<Option<DetachPlan>> {
     for name in ["models.json", "settings.json", ".ccsw-pi.lock"] {
         crate::uninstall::checked(&b.home.join(name))?;
     }
-    if b.config
-        != fs::canonicalize(&paths.config).or_else(|_| std::path::absolute(&paths.config))?
-    {
+    if !crate::platform::same_path(&b.config, &paths.config)? {
         bail!("Pi binding belongs to another CCSW configuration");
     }
     let before = documents(&b.home)?;

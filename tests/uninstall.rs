@@ -1,7 +1,5 @@
-use std::{
-    fs,
-    process::{Command, Output},
-};
+mod support;
+use std::{fs, process::Output};
 
 struct Sandbox {
     root: tempfile::TempDir,
@@ -15,7 +13,7 @@ impl Sandbox {
         sandbox
     }
     fn command(&self, args: &[&str]) -> Output {
-        Command::new(assert_cmd::cargo::cargo_bin("ccsw"))
+        support::command(self.root.path())
             .args(args)
             .env("HOME", self.root.path())
             .env("USERPROFILE", self.root.path())
@@ -32,7 +30,7 @@ impl Sandbox {
         let result = self.command(args);
         assert!(
             result.status.success(),
-            "{}\n{}",
+            "{args:?}\n{}\n{}",
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
@@ -87,4 +85,22 @@ fn uninstall_stops_authenticated_proxy_and_detaches_only_managed_settings() {
             .exists()
     );
     assert!(std::net::TcpListener::bind(address).is_ok());
+}
+
+#[test]
+fn uninstall_verifies_nonempty_lock_files_while_holding_their_locks() {
+    let sandbox = Sandbox::new();
+    let state = sandbox.root.path().join("state/ccsw");
+    fs::create_dir_all(&state).unwrap();
+    for name in ["session.lock", "codex.lock", "pi.lock", "sync-state.lock"] {
+        fs::write(state.join(name), b"lock fixture\n").unwrap();
+    }
+    fs::write(
+        sandbox.root.path().join("config.toml.lock"),
+        b"lock fixture\n",
+    )
+    .unwrap();
+    sandbox.ok(&["uninstall", "--yes"]);
+    assert!(!state.exists());
+    assert!(!sandbox.root.path().join("config.toml.lock").exists());
 }

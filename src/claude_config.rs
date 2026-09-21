@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ use crate::{
     proxy,
 };
 
-const MANAGED_ENV_KEYS: &[&str] = &[
+pub(crate) const MANAGED_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
@@ -44,24 +44,27 @@ pub struct ApplyResult {
     pub path: PathBuf,
     pub backup: Option<PathBuf>,
     pub model_count: usize,
+    pub preferences: crate::claude_preferences::Ownership,
 }
 
 pub fn settings_path() -> Result<PathBuf> {
-    if let Some(directory) = env::var_os("CLAUDE_CONFIG_DIR") {
-        return Ok(PathBuf::from(directory).join("settings.json"));
-    }
-    Ok(crate::platform::home()?.join(".claude/settings.json"))
+    Ok(crate::platform::override_path("CLAUDE_CONFIG_DIR", || {
+        Ok(crate::platform::home()?.join(".claude"))
+    })?
+    .join("settings.json"))
 }
 
 #[cfg(test)]
 pub fn apply(path: &Path, profile: &Profile, models: &[ModelEntry]) -> Result<ApplyResult> {
-    apply_expected(path, profile, models, None)
+    apply_expected(path, profile, models, None, None, None)
 }
 fn apply_expected(
     path: &Path,
     profile: &Profile,
     models: &[ModelEntry],
     expected: Option<&Value>,
+    preferences: Option<&crate::claude_preferences::Settings>,
+    previous: Option<&Value>,
 ) -> Result<ApplyResult> {
     if !profile.enabled {
         anyhow::bail!("cannot apply a disabled provider to Claude");
@@ -87,7 +90,8 @@ fn apply_expected(
     } else {
         Map::new()
     };
-    verify_expected(expected, &Value::Object(root.clone()))?;
+    let original_document = Value::Object(root.clone());
+    verify_expected(expected, &original_document)?;
 
     let env = root
         .entry("env")
@@ -141,6 +145,35 @@ fn apply_expected(
         }),
     );
 
+    let mut document = Value::Object(root);
+    let owned = crate::claude_preferences::apply(
+        &mut document,
+        preferences.unwrap_or(&crate::claude_preferences::Settings::default()),
+        &crate::claude_preferences::from_snapshot(previous),
+    )?;
+    // Persist recovery metadata before replacing the client file.
+    let mut snapshot = managed_snapshot(&document);
+    snapshot["client_preferences"] = serde_json::to_value(&owned)?;
+    let mut before = managed_snapshot(&original_document);
+    let mut before_fields = crate::claude_preferences::from_snapshot(previous);
+    for path in owned.keys().chain(before_fields.clone().keys()) {
+        let value = original_document.pointer(path).cloned();
+        before_fields.insert(
+            path.clone(),
+            crate::claude_preferences::Owned {
+                before: value.clone(),
+                after: value,
+            },
+        );
+    }
+    before["client_preferences"] = serde_json::to_value(before_fields)?;
+    snapshot["client_preference_settings"] =
+        serde_json::to_value(preferences.cloned().unwrap_or_default())?;
+    write_preferences_journal(
+        path,
+        &json!({"before": before, "after": snapshot,
+        "previous_preferences": crate::claude_preferences::from_snapshot(previous)}),
+    )?;
     let backup = if path.exists() {
         let backup = path.with_extension("json.ccsw-backup");
         fs::copy(path, &backup)?;
@@ -150,7 +183,7 @@ fn apply_expected(
         None
     };
     let mut temp = NamedTempFile::new_in(parent)?;
-    temp.write_all(serde_json::to_string_pretty(&Value::Object(root))?.as_bytes())?;
+    temp.write_all(serde_json::to_string_pretty(&document)?.as_bytes())?;
     temp.write_all(b"\n")?;
     temp.as_file().sync_all()?;
     set_private(temp.path())?;
@@ -161,6 +194,7 @@ fn apply_expected(
         path: path.to_path_buf(),
         backup,
         model_count: models.len(),
+        preferences: owned,
     })
 }
 
@@ -196,7 +230,10 @@ pub(crate) fn managed_snapshot(value: &Value) -> Value {
 }
 
 pub(crate) fn managed_conflicts(snapshot: &Value, current: &Value) -> Vec<String> {
-    let mut conflicts = Vec::new();
+    let mut conflicts = crate::claude_preferences::conflicts(
+        &crate::claude_preferences::from_snapshot(Some(snapshot)),
+        current,
+    );
     for key in MANAGED_ENV_KEYS {
         if snapshot["env"].get(*key) != current.get("env").and_then(|e| e.get(*key)) {
             conflicts.push(format!("env.{key}"));
@@ -213,6 +250,11 @@ pub(crate) fn managed_conflicts(snapshot: &Value, current: &Value) -> Vec<String
 /// Called only after endpoint/token ownership is established. Legacy connections
 /// without a snapshot authorize removing the connection fields, not model fields.
 pub(crate) fn remove_managed(value: &mut Value, snapshot: Option<&Value>) {
+    // Restoration only touches values that still match our last write.
+    let _ = crate::claude_preferences::restore(
+        value,
+        &crate::claude_preferences::from_snapshot(snapshot),
+    );
     if let Some(env) = value.get_mut("env").and_then(Value::as_object_mut) {
         for key in MANAGED_ENV_KEYS {
             let removable = match snapshot {
@@ -290,6 +332,7 @@ pub fn clear_expected(path: &Path, expected: Option<&Value>) -> Result<ApplyResu
         path: path.to_path_buf(),
         backup,
         model_count: 0,
+        preferences: crate::claude_preferences::from_snapshot(expected),
     })
 }
 
@@ -300,6 +343,7 @@ pub fn apply_all(
     cache: &ModelCache,
     default_profile_id: &str,
     expected: Option<&Value>,
+    previous: Option<&Value>,
 ) -> Result<ApplyResult> {
     let models_by_profile = config
         .profiles
@@ -318,7 +362,14 @@ pub fn apply_all(
         .collect::<BTreeMap<_, _>>();
     let (profile, models) =
         proxy::aggregate_profile(paths, config, &models_by_profile, default_profile_id)?;
-    apply_expected(path, &profile, &models, expected)
+    apply_expected(
+        path,
+        &profile,
+        &models,
+        expected,
+        Some(&config.claude),
+        previous,
+    )
 }
 
 fn model_picker_row(model: &ModelEntry) -> Value {
@@ -331,6 +382,100 @@ fn model_picker_row(model: &ModelEntry) -> Value {
         row.insert("description".into(), Value::String(description.clone()));
     }
     Value::Object(row)
+}
+
+fn preferences_journal(path: &Path) -> std::path::PathBuf {
+    path.with_extension("json.ccsw-preferences-journal")
+}
+fn write_preferences_journal(path: &Path, snapshot: &Value) -> Result<()> {
+    let mut temp = NamedTempFile::new_in(path.parent().context("missing settings parent")?)?;
+    temp.write_all(&serde_json::to_vec(snapshot)?)?;
+    temp.as_file().sync_all()?;
+    set_private(temp.path())?;
+    temp.persist(preferences_journal(path))
+        .map_err(|e| e.error)?;
+    Ok(())
+}
+pub(crate) fn recover_preferences(path: &Path, document: &Value) -> Result<Option<Value>> {
+    let journal = preferences_journal(path);
+    if !journal.exists() {
+        return Ok(None);
+    }
+    let pending: Value = serde_json::from_slice(&fs::read(&journal)?)?;
+    let snapshot = pending
+        .get("after")
+        .context("invalid preference recovery journal")?;
+    if pending
+        .get("before")
+        .is_some_and(|before| managed_conflicts(before, document).is_empty())
+    {
+        return Ok(None);
+    }
+    let mut recovered = snapshot.clone();
+    let mut routing = snapshot.clone();
+    routing
+        .as_object_mut()
+        .context("invalid recovery snapshot")?
+        .remove("client_preferences");
+    if !managed_conflicts(&routing, document).is_empty() {
+        anyhow::bail!(
+            "Claude connection changed during interrupted sync; its settings were left untouched"
+        );
+    }
+    let previous: crate::claude_preferences::Ownership =
+        serde_json::from_value(pending["previous_preferences"].clone())?;
+    let next = crate::claude_preferences::from_snapshot(Some(snapshot));
+    let mut owned = next.clone();
+    // Account for removals and outside edits as well as completed additions.
+    // An unchanged old override still needs its original baseline on retry.
+    for (path, old) in previous {
+        let current = document.pointer(&path).cloned();
+        if !next.get(&path).is_some_and(|new| new.after == current) && old.after == current {
+            owned.insert(path, old);
+        }
+    }
+    recovered["client_preferences"] = serde_json::to_value(owned)?;
+    Ok(Some(recovered))
+}
+
+pub(crate) fn finish_preferences(path: &Path) -> Result<()> {
+    match fs::remove_file(preferences_journal(path)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Explicit disconnect restores only unchanged owned fields and leaves outside edits alone.
+pub(crate) fn disconnect_owned(path: &Path, snapshot: &Value) -> Result<Vec<String>> {
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("json.ccsw.lock"))?;
+    lock.lock_exclusive()?;
+    let mut document: Value = serde_json::from_slice(&fs::read(path)?)?;
+    if document["env"].get("ANTHROPIC_BASE_URL").is_some()
+        || document["env"].get("ANTHROPIC_AUTH_TOKEN").is_some()
+    {
+        for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] {
+            if document["env"].get(key) != snapshot["env"].get(key) {
+                anyhow::bail!(
+                    "Claude connection changed before disconnect; no fields were changed"
+                );
+            }
+        }
+    }
+    let conflicts = managed_conflicts(snapshot, &document);
+    remove_managed(&mut document, Some(snapshot));
+    let mut temp = NamedTempFile::new_in(path.parent().context("missing settings parent")?)?;
+    temp.write_all(&serde_json::to_vec_pretty(&document)?)?;
+    temp.as_file().sync_all()?;
+    set_private(temp.path())?;
+    temp.persist(path).map_err(|e| e.error)?;
+    finish_preferences(path)?;
+    Ok(conflicts)
 }
 
 #[cfg(test)]
@@ -395,6 +540,7 @@ mod tests {
             .map(|id| ModelEntry {
                 max_output_tokens: None,
                 context_window: None,
+                reasoning_max: None,
                 id: id.into(),
                 label: None,
                 description: None,

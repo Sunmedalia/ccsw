@@ -12,15 +12,15 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.8。新增 provider 模板、模型选择与角色转发映射，并改进上游兼容性和键盘导航。
+> 本文对应 v0.1.13。新增 Herdr Pulse 常驻用量监控，支持请求健康度、缓存命中率与输出速度统计；保留 macOS、Linux 与 Windows x64 发布包。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
 ### 下载 Release
 
-当前 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
+v0.1.13 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -33,19 +33,24 @@ chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
 ```
 
-### Windows（从源码安装）
+### Windows（x64 ZIP）
+
+从 [最新 Release 下载 Windows x64 ZIP](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip)，并下载旁边的 [SHA-256 文件](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip.sha256) 校验：
 
 ```powershell
-git clone https://github.com/Sunmedalia/ccsw.git
-cd ccsw
-cargo install --path .
+$release = 'https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip'
+Invoke-WebRequest "$release" -OutFile '.\ccsw-windows-x86_64.zip'
+Invoke-WebRequest "${release}.sha256" -OutFile '.\ccsw-windows-x86_64.zip.sha256'
+$expected = ((Get-Content '.\ccsw-windows-x86_64.zip.sha256' -Raw) -split '\s+')[0]
+$actual = (Get-FileHash '.\ccsw-windows-x86_64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA-256 校验失败' }
+Expand-Archive '.\ccsw-windows-x86_64.zip' "$env:LOCALAPPDATA\Programs\ccsw" -Force
+& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe" --version
 ```
 
-Windows 二进制构建将在后续 Release 恢复；Windows 配置路径仍为 `%APPDATA%\ccsw\config.toml`。
+无需管理员权限，CCSW 自身无需 Node、Git Bash 或 Visual C++ 运行库。完整的 PowerShell/CMD 示例、目录覆盖优先级、字符转义、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
 
-配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`；`CCSW_CONFIG` 和 XDG 路径覆盖仍然有效。Claude 设置默认使用 `%USERPROFILE%\.claude\settings.json`，优先遵循 `CLAUDE_CONFIG_DIR`。
-
-代理面板按 `P` 打开，按 `e` 修改端口；启用登录自启会在当前用户 Startup 目录创建 `CCSW Proxy.lnk`。关闭 TUI 不会停止后台代理，使用面板 Stop 或 `ccsw proxy stop` 停止。移动可执行文件后，需要禁用并重新启用登录自启。更新前先停止旧代理，再覆盖程序文件。
+配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`。关闭 TUI 不会停止后台代理；更新前先执行 `ccsw proxy stop`，移动程序前先卸载旧位置的自启项。
 
 ### 从源码安装
 
@@ -69,7 +74,7 @@ ccsw          # 打开 TUI
 首次使用时：
 
 1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；点击底部 `Fetch models` 按钮或按 `Alt+F` 从该站点 API 获取模型，输入关键词搜索、用方向键选择、按 `Enter` 或点击 `Select` 回填默认模型。无需先保存厂商，`Esc` 或 `Back` 返回表单，获取失败可点击 `Refresh` 或按 `Ctrl+R` 重试，也可手填模型 ID。
-2. 进入厂商详情，按 `r` 获取 API 模型目录；按 `a` 从候选列表添加模型，也可以手动填写模型 ID。
+2. 进入厂商详情，按 `a` 打开添加模型；在添加模型表单中按 `Alt+F` 获取 API 模型目录，也可以手动填写模型 ID。厂商详情页不再提供整站模型刷新。
 3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
 4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
 5. 在终端运行 `claude`，使用 `/model` 选择模型。退出 CCSW 不会停止代理。
@@ -83,12 +88,14 @@ ccsw import --yes
 
 ## TUI 导航
 
-界面采用统一英文标签，会随终端尺寸调整。100 列及以上并排显示模型与详情；窄窗口改为单面板，并让厂商信息自动换行。最低可用尺寸为 40×12，小于该尺寸时显示调整提示，仍可按 `q` 或 `Ctrl+C` 退出。表单会滚动以保持当前字段和文本光标可见；凭据始终遮蔽显示。任何主页面按 `?` 都会打开当前场景对应的 Help：
+界面采用统一英文标签，会随终端尺寸调整。100 列及以上并排显示模型与详情；窄窗口改为单面板，并让厂商信息自动换行。最低可用尺寸为 40×12，小于该尺寸时显示调整提示，仅在厂商首页可按 `q` 或 `Ctrl+C` 退出；其他页面使用 `Esc` 返回。表单会滚动以保持当前字段和文本光标可见；凭据始终遮蔽显示。任何主页面按 `?` 都会打开当前场景对应的 Help：
 
 - `←/→` 或 `Tab`：切换 Home、All Models、Provider、Forms 分区。
 - `↑/↓`：滚动当前帮助内容。
 - `1`–`4`：直接打开对应分区。
 - `Esc`、`q`、`?` 或 `Enter`：关闭 Help。
+
+按钮统一使用青色主题，选中状态为青色底，删除操作为红色，不可用操作为灰色。厂商详情卡提供删除按钮；详情面板按 `x` 删除厂商，模型面板按 `x` 删除模型，删除前均需确认。
 
 状态标记：`●` 已启用、`○` 已禁用、`◆` 默认模型、`◈` 角色依赖模型。
 
@@ -134,10 +141,11 @@ ccsw import --yes
 | `d` / `1` | 设为默认模型 / 切换 `[1m]` 上下文 |
 | `A` / `C` | 启用筛选结果 / 清空非必要启用项 |
 | `a` | 添加自定义模型，并选择是否立即启用 |
-| `x` | 删除自定义模型；网关模型不能删除 |
+| `x` | 删除模型；网关模型不能删除 |
 | `e` | 编辑当前模型的完整配置；模型列表和详情面板均可使用 |
 | `E`（`Shift+e`） | 编辑当前厂商配置 |
-| `r` / `p` / `P` | 刷新目录 / 同步 / 代理 |
+| 鼠标点击 Provider 状态行 | 首次选中厂商，再次点击打开编辑表单 |
+| `p` / `P` | 同步 / 代理 |
 
 ### Forms · 表单
 
@@ -157,9 +165,11 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 获取模型会回填当前选中的模型字段：先选中 `Default model`、`Opus`、`Sonnet`、`Haiku`、`Fable`、`Subagent` 或 `Fallbacks`，再点击 `Fetch models` 或按 `Alt+F`。选择界面标题会显示目标字段；`Fallbacks` 追加且不重复添加，其他字段替换当前值。焦点在地址、凭据等非模型字段时，默认回填 `Default model`。
 
-厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。同步时默认厂商的角色配置既写入 Claude 环境变量，也用于代理端兜底：例如 `Sonnet = my-model` 后，`sonnet`、`sonnet5`、`claude-sonnet-…` 和 `claude-3-5-sonnet-…` 会转发为上游 `my-model`。这里的模型 ID 仅说明匹配格式，不表示上游支持这些模型。
+厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。Claude 会话发送 `A::x` 请求后，该会话后续角色请求使用 A 的配置；发送 `B::y` 后切换到 B。同步写入 `ccsw-role::sonnet` 等角色标识，让代理根据会话选择上游模型；也兼容 `sonnet`、`sonnet5`、`claude-sonnet-…` 和旧式 Claude 模型 ID。
 
-已同步的精确路由优先；带其他厂商前缀的 ID 不会跨厂商兜底。角色未配置、目标模型未同步或已禁用时仍报错，不自动换模型。升级后需重启本地代理并按 `p` 重新同步，使现有路由记录默认厂商。
+会话识别支持 `metadata.user_id` 中 JSON 的 `session_id` 和旧式 `_session_<UUID>`。没有可识别会话、会话尚未发送具体模型请求时，使用同步时的默认厂商。不同会话及不同代理路由分别记录，角色请求和 token 计数不切换厂商。仅在模型请求实际到达代理后切换；模型选择菜单本身不会通知代理。新子会话使用自己的记录，不自动继承父会话。记录在内存中保存，24 小时不活动或代理重启后重置，最多保存 4096 个会话。
+
+已同步的精确路由优先；带其他厂商前缀的 ID 不会跨厂商兜底。当前会话厂商的角色未配置、目标模型未同步或已禁用时仍报错，不自动换厂商。升级后需重启本地代理、按 `p` 重新同步并重启 Claude，使角色请求使用新的角色标识。
 
 | 按键 | 操作 |
 | --- | --- |
@@ -251,14 +261,17 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 1. 在 Codex 的 API Providers 页面添加或选择厂商。
 2. 进入厂商页面选中模型；`e` 编辑模型、`E` 编辑厂商，`g` 设置推理强度。
-3. 按 `p` 应用。CCSW 启动本地代理，并将 `model`、专属 `model_providers.ccsw` 等字段写入 Codex 配置。
-4. 重启 Codex CLI / ChatGPT App，打开新会话确认模型和请求地址。已有会话不会迁移到新模型。
+3. 按 `p` / **Apply Codex**，同步 Codex 配置中所有已启用厂商的已启用模型，并将所选模型设为启动默认值。CCSW 启动独立的聚合代理，并写入 `model`、`model_catalog_json` 和专属 `model_providers.ccsw`。
+4. 首次接入后重启 Codex CLI。在同一会话中使用原生 `/model` 选择已登记模型，可跨厂商切换，无需再次重启；请求由代理转发到所选厂商。模型列表使用 `厂商ID::模型ID` 区分同名模型，并附带“厂商名 · 模型名”。
+5. 新增或修改模型后，再按 `p` 并重启 Codex CLI 加载新目录。Codex 的目录仅在启动时加载；禁用或删除模型后，代理立即拒绝新请求，但旧进程的列表可能仍显示它。
+
+CCSW 显示的是磁盘启动默认值，不代表运行中会话正在使用的模型。按 `p` 不会改变已有会话的选择；请在 Codex 中通过 `/model` 切换。ChatGPT 订阅账号继续独立管理，不会加入 API 模型列表；桌面端仍需在目标版本验证。
 
 支持 OpenAI Responses、Chat Completions 和 Anthropic 厂商。Responses 上游直接转发；另外两种格式转换文本、图片（取决于上游能力）、函数工具、命名空间工具、自定义编辑工具与流式输出。无法转换的内容返回明确错误，包括跨协议的加密推理历史、`previous_response_id` 和托管工具；转换型厂商默认关闭 Codex 托管网页搜索。远程 `/responses/compact` 只转发给 Responses 上游，其他上游需客户端本地压缩。
 
-应用时为所选厂商生成 `model_catalog_json`，登记自定义模型 ID，避免 Codex 提示模型元数据缺失。目录使用明确配置的上下文容量；未配置时暂用 128K，`[1m]` 使用 1M。默认只声明文本与基本工具能力，不假定第三方模型支持 Codex 托管工具或原生推理参数。切换订阅及断开管理时恢复原目录设置。
+应用时为所有已启用的 Codex API 模型生成 `model_catalog_json`，避免 Codex 提示模型元数据缺失。每个模型保留各自的上下文容量；未配置时暂用 128K，`[1m]` 使用 1M。不写入固定的全局上下文或压缩阈值覆盖，让 Codex 按当前模型的目录元数据处理。默认只声明文本与基本工具能力，不假定第三方模型支持 Codex 托管工具或原生推理参数；目录中包含 Chat Completions 或 Anthropic 厂商时关闭托管网页搜索。切换订阅及断开管理时恢复原目录设置。
 
-模型 ID 写入时移除 Claude 专用 `[1m]` 后缀。`Max output tokens` 在代理侧限制实际输出，`Context window` 写入 Codex 上下文设置，并将自动压缩阈值设为容量的 90%。推理强度仍需所选上游模型支持。
+发往上游时，代理去除厂商命名空间和 Claude 专用 `[1m]` 后缀，使用真实模型 ID。`Max output tokens` 在代理侧限制实际输出；`Context window` 写入每个模型的目录元数据。推理强度仍需所选上游模型支持；转为 Chat Completions 时，目录默认的 `none` 不作为 `reasoning_effort` 发送，而是使用上游默认行为，并不保证关闭上游推理。上游返回结构化错误时，代理显示参数和具体原因，并过滤本地及上游认证凭据。跨协议切换保留已有兼容性检查：无法转换的历史会明确报错，不会静默丢弃。
 
 ```sh
 ccsw codex apply --profile my-provider --model my-model --reasoning high
@@ -266,9 +279,27 @@ ccsw codex status
 ccsw codex disconnect
 ```
 
+可用本地模拟供应商验证真实 CLI 的 `/model` 切换（无 API 凭据，隔离配置，POSIX 环境）：
+
+```sh
+cargo build
+python3 tests/fixtures/codex_model_switch.py
+```
+
+该检查验证同一进程、同一会话跨供应商切换，保留对话历史，并确认新增模型需同步和重启后出现。可用 `CCSW_CODEX_BIN` 指定 Codex CLI。
+
 ### Codex 订阅账号
 
-Codex 的首页标题与 Claude Code 一致，显示 `CCSW Providers · F2 <下一个 Agent> · N providers`。提供商列表首项为 **ChatGPT Account**：单击选中，再次点击或按 Enter 进入账号页。首页选中 Account 后按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。账号列表中方向键或鼠标移动光标，空格选中账号，再按 `p` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，账号列表以 `[●]` 标记空格选中的账号，以 `[Applied]` 标记当前已应用账号。切换账号时不继承第三方模型目录和上下文参数。
+Codex 首页依次显示 **All Models**、**ChatGPT Account** 和 API 提供商。**All Models** 汇总所有已启用厂商的已启用模型；单击选中，再次点击或按 Enter 打开所属厂商，按 `p` 同步目录并设置选中模型为启动默认值。
+
+选中首页的 **ChatGPT Account**，按 **Space** 启用或禁用订阅配置，弹窗确认后生效（Enter / y 确认，Esc / n 取消，也可点击按钮）。首次启用前先 Enter 进入账号页，导入账号并用 Space 选中；之后会记住已使用的账号。
+
+- **启用订阅**：保存所有 API 厂商当前的启用状态，自动关闭它们并应用所选 ChatGPT 账号；TUI 在 ChatGPT Account 卡片标记订阅 Enabled、原先开启的厂商标记 Paused by ChatGPT。All Models 保持与 Claude 相同的 API 模型汇总视图，此时为空。
+- **关闭订阅**：恢复被自动关闭的厂商及其模型；原本手动关闭的厂商继续关闭。优先恢复先前使用的 API 模型；该模型已不可用时选择一个恢复启用的模型；没有可用 API 模型时断开 CCSW 管理并恢复原配置。
+- 切换订阅账号不会覆盖保存的 API 启用状态。订阅期间 API 厂商保持关闭；先禁用订阅再启用 API 厂商。新增厂商不会被自动恢复为开启。
+- 普通 API 厂商和模型的启用/禁用不弹窗；订阅的启用/禁用必须确认，包括通过 Apply 从 API 模式切入订阅。账号列表的 Space 仍仅选择账号，按 `p` 才应用。
+
+订阅与 API 模式之间切换后需重启 Codex。API 模式内已加载的模型仍可通过原生 `/model` 切换，无需重启。CLI 可用 `ccsw codex accounts disable` 关闭订阅并恢复 API 配置。
 
 账号页只提供导入与切换，不进行额度查询或浏览器登录：
 
@@ -311,7 +342,7 @@ CCSW 将“模型存在”和“模型启用”分开处理：
 
 - 添加或发现模型会把它放入目录；未启用时模型仍然存在。
 - `Space` 只切换启用状态，不删除目录项。
-- `x` 是统一的删除快捷键，只删除手动添加的自定义模型，并要求确认。
+- 模型列表中的 `x` 和删除按钮统一删除已配置模型，不区分模型来源，并要求确认。删除会清理角色、子代理和回退引用；默认模型由剩余模型接替。刷新接口目录不会自动恢复已删除模型，可通过 Add model 重新添加。最后一个默认模型需先添加替代模型才能删除。
 - `disabled_models` 记录显式禁用项，因此重启后不会被默认模型或角色引用意外重新启用。
 - `model-a` 与 `model-a[1m]` 是同一个目录模型；`[1m]` 只表示上下文规格，导入和发现时不会生成重复项。
 
@@ -416,6 +447,24 @@ ccsw proxy uninstall
 
 默认地址是 `127.0.0.1:17321`；指定过自定义监听地址后，停止并重启会保留该地址。`Sync all` 会启动代理，但不会自动安装开机启动项。代理支持流式文本、图片、工具调用、usage、停止原因与 reasoning summary；`/v1/messages/count_tokens` 使用 OpenAI tokenizer 近似估算。
 
+### Provider 用量统计
+
+日期显示在 `‹ / ›` 之间。`1 day / 1 week / 1 month / All time` 分别统计所选日期当天、截至该日最近 7 天、最近 30 天和全部记录；快捷键为 `d / w / m / y`。摘要以并排指标区突出所选范围和全部累计：调用数为主值，附带 tokens 与已完成请求成功率；各表格的累计列仍保留全部记录。All time 时日期切换禁用。
+
+点击 **Chart 5** 或按 `5` 查看时间用量柱状图，`Calls c / Tokens v` 切换调用次数和 tokens。1 day 按小时，其他范围按天；窗口较窄或数据较长时自动合并相邻时段，并标注每柱跨度，始终展示完整范围。无调用时段标记为 `0`，缺失 token 用量标记为 `?`。图表遵循当前客户端和 provider 筛选以及账本固定时区，旧记录也可按小时查看。Usage 按钮统一使用对称内边距和固定间隔，窄屏自动压缩。
+
+在 Usage 页点击 **Models 4** 或按 `4` 查看具体调用模型：按客户端、provider、模型分别展示当日/累计调用次数与 tokens，沿用当前日期和 provider 筛选。选中行下方显示模型及 provider 标识，窄屏也可查看 tokens。已有账本记录可以直接显示，无需重新开始统计；这里展示的是路由选择的上游模型，不是供应商内部实际执行模型的验证结果。
+
+Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude Code / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4` 切换 Provider、历史、指标、模型；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。统计每两秒自动刷新。
+
+- 覆盖经过 CCSW 本地代理的 Claude Code 和 Codex API 请求，按实际路由的 provider ID 和客户端分别归属。一条对话可能产生多次请求；每次向上游发起请求计一次，包括失败请求。成功、失败、中断、进行中分别显示。
+- 每日按请求开始时间归属；首次创建用量库时保存本机 UTC 偏移，此后固定使用该偏移，界面显示具体时区。累计为启用记录以来的总数，不回填历史数据。改名保留历史；删除 provider 不删除账本，复用同一 ID 会接续原有累计。
+- 输入、输出、缓存读取和缓存写入 tokens 来自上游原始 `usage`。流式响应在结束事件确认结果，同一请求的累计 usage 不重复相加。缺失值显示 `unknown` 或 `+ ?`，缓存计数单列，不重复加进 tokens 合计；不同协议的输入/缓存口径可能不同。
+- 远程 Responses 压缩调用单独计数，不混入生成调用。模型目录刷新、健康检查和本地 token 估算不计数。Pi 直连和 ChatGPT 账号显示未接入统计。
+- 账本存于 CCSW 状态目录的 `usage.sqlite3`（默认 `~/.local/state/ccsw/`）；仅保存请求时间、客户端、provider、模型、结果和 token 数，不保存对话、请求头或密钥。代理异常退出留下的进行中记录在下次启动时标记为中断。数据库读写失败会提示/记入代理日志，不阻止 API 转发；失败期间统计可能不完整。
+
+升级后需重启旧的后台代理，新的请求才会开始记录：先等待正在运行的请求结束，再执行 `ccsw proxy stop` 和 `ccsw proxy start`。
+
 ### 请求处理与停止
 
 代理使用连接 10 秒、响应头 120 秒、流式空闲 180 秒和非流式总时限 600 秒的限制。单个 SSE 事件上限 1 MiB，非流式响应上限 32 MiB；错误体最多读取 16 KiB、展示 4 KiB。流式文本按完整事件解析 UTF-8，异常断流会报告错误，不自动重试生成请求。
@@ -472,11 +521,14 @@ Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当
 ```sh
 cargo fmt -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 cargo build --locked --release
+
+# 可选：十万/百万条统计记录的查询与无变化刷新基准（使用临时数据库）
+cargo test --locked --bin ccsw large_ledger_query_benchmark -- --ignored --nocapture
 ```
 
-CI 在 Pull Request、版本标签推送或手动触发时运行：在 Ubuntu 与 macOS 上执行检查并生成对应平台二进制，同时执行依赖安全审计和 Docker 安全回归。Windows Release 构建暂时停用。版本标签通过全部发布门禁后生成 Release；普通 main 推送不会自动运行当前工作流。
+CI 在 main/dev 分支推送、Pull Request、版本标签推送或手动触发时运行：Ubuntu、macOS 与 Windows 执行检查，Windows 额外验证 Rust 1.88、npm 启动器、MSVC 静态运行库及解压后的 ZIP。版本标签通过跨平台测试、依赖安全审计和 Docker 安全回归后生成 Release。Windows ZIP 附带 SHA-256 校验文件。
 
 Codex 的自动测试使用隔离 HOME、模拟登录凭据和本地上游，不读取真实账号。可另行安装 Codex CLI 后运行真实进程冒烟测试（无 API 调用费用）：
 
@@ -502,3 +554,117 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 镜像内先执行 Rustfmt、Clippy 和 Rust 测试；卸载场景在独立临时 HOME 中运行，不挂载宿主机 HOME，也不挂载 Docker socket。检查覆盖预览、完整清理、重复卸载、中文路径、文件/目录链接、损坏文件、锁竞争、自启失败、伪造 PID、其他代理存活及无关文件内容不变。Linux Docker 测试不替代 Windows/macOS 自启管理器实机验证，也不构成对恶意同权限进程并发篡改或硬件故障的绝对保证。
 
 详细覆盖范围和实测平台见 [Docker 测试记录](tests/docker/RESULTS.md)。
+
+### Claude Code 客户端设置
+
+点击 **Settings** 或按 **F4** 打开 TUI 设置。在 Claude 标签页选择 **Claude settings**（或按 `c`）进入客户端设置。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
+
+TUI 设置提供四套完整主题：**Graphite（石墨）**采用炭黑背景与象牙白导航；**Tundra（苔原）**采用深松绿背景、羊皮纸文字和黄铜导航；**Paper（纸页）**采用浅纸色背景、深墨色文字和蓝墨导航；**Nightfall（夜航）**采用深海军蓝背景、淡紫导航与青绿成功状态。每套主题统一背景、正文、选中块、边框和状态色；Classic 保留原有配色及终端背景。方向键或 `j/k` 实时预览，也可鼠标点选；`Enter` / Save 保存，`Esc` / Cancel 取消预览。进入 Claude settings 后按 `Esc` 或点击 **Themes** 返回主题设置，保留之前的配色预览；有未保存的客户端设置时先确认放弃。主题覆盖客户端页、模型表单、账号和用量图表。配色独立保存在状态目录的 `tui-theme.json`，下次启动自动恢复；不会修改厂商配置或触发代理同步。所有客户端与用量页均可用 `F4` 打开。已有主题选择保留，按原顺序对应四套新设计。
+
+- 六项预设：AI 署名、Teammates、Tool Search、思考强度、禁用自动升级、禁用 Artifact。默认 `inherit` 表示不覆盖已有配置。
+- 点击 **Fill presets**（窄屏显示 **Presets**），或按 **Alt+P**，填入隐藏署名、开启 Teammates / Tool Search、`max` 思考、禁用自动升级和 Artifact；这只修改草稿。
+- **Add variable / Alt+N** 添加自定义变量；选中条目后 **Delete / Alt+D** 删除，**Show / Alt+V** 切换值的遮罩。值按原样保存，不执行 `$()` 或其他 shell 表达式。
+- **Ctrl+S / Save** 保存。已连接时自动同步，未连接时等待按 `p`；**Esc** 返回，有改动时按 `y` 丢弃，其他键继续编辑。
+- **Disconnect / Alt+X** 断开管理，恢复接管前的设置。删除覆盖或改回 `inherit` 也会在下一次同步时恢复原值；外部修改不会被恢复操作覆盖。
+
+存储在 CCSW 配置的 `[claude]` / `[claude.env]` 下。同步目标遵循 `CLAUDE_CONFIG_DIR`，默认 `~/.claude/settings.json`。地址、认证、模型和配置目录变量由转发管理，不能作为自定义变量重复覆盖。文件使用私有权限，自定义值不会进入同步日志。
+
+```toml
+[claude]
+hide_attribution = true
+
+[claude.env]
+CLAUDE_CODE_EFFORT_LEVEL = "max"
+ENABLE_TOOL_SEARCH = "true"
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+DISABLE_AUTOUPDATER = "1"
+CLAUDE_CODE_DISABLE_ARTIFACT = "1"
+```
+
+**同步成功表示配置已写入，不代表每个上游都支持对应功能。** 启动时读取的选项以及删除环境变量，需要重启 Claude Code。项目或组织层配置也可能影响实际生效值。
+
+Anthropic 转发保留原生 Tool Search 内容。OpenAI Chat / Responses 使用普通函数调用兼容 Claude 客户端执行的搜索：传入当前请求的完整工具目录，将搜索结果中的引用转换为工具名称，保留调用 ID。这个模式不保证延迟加载的上下文节省；引用不在请求目录中或使用 Anthropic 服务端搜索工具时，返回明确错误。
+
+模型编辑页新增 **Reasoning max**：`off / low / medium / high / xhigh`，默认 `high`，配置字段为 `reasoning_max`。转到 OpenAI 时，`max` 映射为该模型的上限，其他等级超过上限时下调，`off` 不发送推理参数。Chat 使用 `reasoning_effort`，Responses 使用 `reasoning.effort`；Anthropic 不改变原始等级。上游拒绝参数时不会暗中降级重试。
+
+配置版本升级到 5；旧配置加载后默认不接管任何客户端偏好。升级后请勿使用只支持旧配置版本的 CCSW 写回该文件。
+
+### 模型最小测试
+
+在模型详情页点击 **F5 Test model**，或按 **F5**，向所选模型所属的 Provider 发送一次简短的 `Reply OK.` 请求。支持 Anthropic、OpenAI Chat 和 Responses，最多请求 64 个输出 token，30 秒超时。收到实际模型输出（包括推理输出）即通过，不要求必须回复 OK。状态栏显示模型名称、响应耗时或失败原因；HTTP 成功但没有输出不会被判定为通过。此测试仅验证基础文本推理，不覆盖 Codex 的工具调用、流式响应、推理参数或已有对话兼容性。
+
+测试在后台执行，不改变模型选择、Provider 配置或同步状态；测试的是上游模型响应，不依赖本地转发是否启动。环境变量配置继续从底部 **Settings** 或 **F4** 进入，主页面右上角不再单独放置入口。
+
+新增或编辑 Provider 时，每个模型输入框末尾提供 `[Test]` 和 `[1m]`。Test（或选中该行按 F5）使用草稿中的 URL、认证与模型名发送最小请求，不要求先保存 Provider；Fallbacks 行依次测试全部填写的模型。测试结果显示在表单底部。`[1m]` 高亮表示启用，灰色表示未启用，仍可用 Alt+1 切换。
+
+Base URL 行也提供 `[Test]`（选中该行按 F5）。使用草稿地址和认证发送一次 GET 请求，8 秒超时，不调用模型。结果区分网络连接失败和 HTTP 状态：401/403 表示服务器可达但认证被拒绝，404/405 表示地址可达但基础路径不提供 GET 接口；需要确认模型可用时再使用模型行的 Test。
+
+Codex 账号页支持 `Browser (b)` 浏览器登录和 `Device (d)` 设备码登录。输入账号名称后开始登录；等待时按 `Esc` 或 Back 取消。登录成功后账号自动保存并高亮，按 Space 选中、p 应用。网页登录使用本机 Codex 客户端和独立临时目录，不覆盖当前登录；Import / File 仍可导入已有凭据。
+
+Codex 账号页的 `Rename (e)` 可修改当前高亮账号的显示名称；邮箱、工作区、套餐和登录凭据来自账号身份，不支持手动修改。Import 与 File 使用统一的可选账号备注，留空默认为 ChatGPT；File 先输入文件路径，再填写备注。重命名不会切换账号或重新登录。
+
+Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、最近成功刷新时间，以及已应用/本机登录状态。点击 `Refresh (r)` 主动查询，平时浏览不会请求额度接口；`PgUp/PgDn` 滚动详情。查询失败保留旧缓存并标记失败，不把网络错误直接判定为登录过期。
+
+## Herdr Pulse 常驻监控
+
+`ccsw quick` 是独立的只读监控页面，不加载配置编辑器，也不会在启动时同步配置。
+展示今日 Token、请求次数、缓存 Token、调用健康度、24 小时请求趋势，
+以及服务商/模型的调用数和失败数。蓝灰底色、三行大号数字和独立的文字层级用于常驻侧栏；
+字体家族继承终端，不修改其他 pane 的字体。面板使用完整高度，短屏可滚动，最低 32 × 12。
+
+Herdr Pulse 插件目前支持 macOS / Linux，需要 Herdr 0.7.0 或更新版本。在 Herdr 中执行以下命令安装 v0.1.13 插件；它会从该 Release tag 获取插件并构建所需的 CCSW 二进制：
+
+```sh
+herdr plugin install Sunmedalia/ccsw --ref v0.1.13
+```
+
+将快捷键配置合并到 Herdr 的 `config.toml` 中；若已有 `prefix+u` 绑定，请替换原绑定，避免冲突：
+
+```toml
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "ccsw.open"
+description = "Toggle CCSW Pulse usage monitor"
+```
+
+保存后重新加载 Herdr 配置，并确认插件已安装：
+
+```sh
+herdr server reload-config
+herdr plugin list
+```
+
+**Ctrl+B，再按 u** 在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
+再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
+首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
+未识别到这两种 agent → All。识别仅针对触发 pane，不受其他 pane 的 agent 影响。
+直接运行 `ccsw quick` 默认展示 All。
+
+- `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
+- 每两秒读取本地用量库；`r` 立即刷新。读取失败保留旧数据并标记 STALE。
+- `d` / `≡ Models` 切换服务商与模型明细；滚轮、方向键、PgUp/PgDn 滚动，Esc/Home 回到顶部。
+- `e` / `↗ Edit` 新开 Herdr 标签页运行完整 CCSW，并立即切换到新标签页和编辑 pane；监控 pane 继续常驻。
+- 监控与 Edit 均由 Herdr 原生插件直接启动，终端不再显示 `exec` 或启动命令。
+- `q` / `×` 退出监控。
+- 操作按钮直接标注 `(e)`、`(d)`、`(r)`、`(q)`，不再额外占用一行快捷键提示。
+- 24 小时趋势使用铺满内容宽度的六行柱状图，标出小时刻度与峰值；零请求不画虚假柱。
+- `?` 或右上角帮助按钮查看统计范围，`Esc` 返回，首页不再常驻显示范围说明。
+
+统计范围为当前 CCSW 配置经过本地网关的请求，**不是当前 Claude 会话统计或订阅剩余额度**。
+直连 API 和 ChatGPT/Claude 订阅流量不包含在内。成功率 = 成功 /（成功 + 失败 + 中断），
+待完成请求不计入分母；没有已完成请求时显示“无样本”。请求计数包含单独标注的压缩请求，
+Token 缺失时显示未知提示，不当作零用量。插件支持 macOS / Linux。
+
+监控首页另显示 `Cache hit` 和 `Output speed`：缓存命中率按有完整缓存计数的请求计算，
+分母统一为包含缓存读取/写入的全部输入 Token（OpenAI 输入本身已包含缓存，Anthropic 需相加），
+缓存写入不算命中。输出速度是今日成功流式生成请求的输出 Token 总数除以对应输出阶段总秒数，
+从首次内容输出计到流完成，排除首 Token 等待，包含网络传输时间。无有效样本时显示 `—`。
+旧记录保留，不回填未知计时；新版网关启动后采集新请求，面板重开即可展示。
+
+从本地 CCSW 源码目录链接开发版时，进入含 `herdr-plugin.toml` 的仓库目录后执行：
+
+```sh
+cargo build --release --bin ccsw
+herdr plugin link --enabled "$PWD"
+```

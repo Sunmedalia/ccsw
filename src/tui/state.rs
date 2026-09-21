@@ -35,6 +35,8 @@ pub(super) enum FooterControl {
     Models,
     Details,
     AddProfile,
+    DeleteProfile,
+    Settings,
     Sync,
     Proxy,
     Help,
@@ -43,12 +45,13 @@ pub(super) enum FooterControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailControl {
-    FetchModels,
+    Delete,
     Edit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ShowcaseControl {
+    Test,
     Toggle,
     Default,
     OneM,
@@ -68,6 +71,8 @@ pub(super) enum ProxyControl {
 
 #[derive(Clone)]
 pub(super) enum Modal {
+    Appearance(theme::Appearance),
+    Preferences(PreferencesForm),
     Import(Box<ImportCandidate>),
     Profile(Box<ProfileForm>),
     Model(ModelForm),
@@ -109,6 +114,7 @@ impl HelpSection {
 pub(super) struct HelpModal {
     pub(super) pi: bool,
     pub(super) codex: bool,
+    pub(super) codex_accounts: bool,
     pub(super) section: HelpSection,
     pub(super) scroll: u16,
 }
@@ -123,6 +129,7 @@ impl HelpModal {
         Self {
             pi: false,
             codex: false,
+            codex_accounts: false,
             section,
             scroll: 0,
         }
@@ -170,6 +177,7 @@ pub(super) struct ProxyManager {
 
 #[derive(Clone)]
 pub(super) struct ProfileForm {
+    pub(super) test_message: Option<(String, bool)>,
     pub(super) template_selected: Option<usize>,
     pub(super) instance: uuid::Uuid,
     pub(super) picker: Option<ModelForm>,

@@ -7,10 +7,14 @@ mod help;
 mod layout;
 mod models;
 mod pi;
+mod preferences;
+mod quick;
 mod state;
 mod tabs;
 #[cfg(test)]
 mod tests;
+mod theme;
+mod usage;
 mod views;
 
 use background::Background;
@@ -18,6 +22,7 @@ use forms::*;
 use help::*;
 use layout::*;
 use models::*;
+use preferences::*;
 use state::*;
 use tabs::*;
 
@@ -63,7 +68,31 @@ const WARNING: Color = Color::Rgb(255, 215, 95);
 const ERROR: Color = Color::Rgb(255, 107, 107);
 const MUTED: Color = Color::Rgb(128, 138, 148);
 
+pub fn run_quick(paths: AppPaths, open: bool) -> Result<()> {
+    if open {
+        quick::open_pane()
+    } else {
+        quick::run(paths)
+    }
+}
+
+/// Shared button states across pages and dialogs.
+fn button_style(selected: bool, disabled: bool, destructive: bool) -> Style {
+    let accent = if destructive { ERROR } else { ROUTE };
+    if disabled {
+        Style::default().fg(MUTED).add_modifier(Modifier::DIM)
+    } else if selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(accent)
+    }
+}
+
 pub struct App {
+    theme: theme::Theme,
     paths: AppPaths,
     config: Config,
     cache: ModelCache,
@@ -79,16 +108,19 @@ pub struct App {
     modal: Option<Modal>,
     proxy_status: Option<proxy::ProxyStatus>,
     provider_editor: Option<RouteEditor>,
+    provider_card_selected: bool,
     background: Background,
     codex_ui: codex::CodexUi,
     pi_enabled: bool,
     pi_home: std::path::PathBuf,
     screen: Rect,
+    usage: usage::UsageUi,
 }
 
 pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> Result<()> {
     let proxy_status = None;
     let mut app = App {
+        theme: theme::Theme::load(&paths),
         cache: discovery::load_cache(&paths.cache),
         paths,
         config,
@@ -104,11 +136,13 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         modal: None,
         proxy_status,
         provider_editor: None,
+        provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
         pi_home: crate::pi::home()?,
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
+        usage: usage::UsageUi::default(),
     };
     if app.config.profiles.is_empty()
         && let Some(candidate) = import
