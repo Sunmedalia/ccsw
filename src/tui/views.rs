@@ -141,37 +141,19 @@ impl App {
         let mut item_heights = Vec::with_capacity(ids.len().saturating_add(1));
         let mut items = Vec::with_capacity(ids.len().saturating_add(1));
         if is_home {
-            let lines = all_enabled_lines(
-                self.config
-                    .profiles
-                    .values()
-                    .filter(|profile| profile.enabled)
-                    .count(),
-                self.all_enabled_model_count(),
-                self.all_managed_models().len(),
-                content_width,
-                self.pi_enabled,
-            );
-            let lines = if self.codex_ui.enabled {
-                self.chatgpt_provider_lines(content_width)
-            } else {
-                lines
-            };
+            let lines = self.all_models_home_lines(content_width);
+            if self.codex_ui.enabled {
+                let account = self.chatgpt_provider_lines(content_width);
+                item_heights.push(account.len());
+                items.push(ListItem::new(account));
+            }
             item_heights.push(lines.len());
             items.push(ListItem::new(lines));
         }
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];
             if is_home {
-                let discovered = self
-                    .cache
-                    .profiles
-                    .get(id)
-                    .map(|cached| cached.models.as_slice())
-                    .unwrap_or_default();
-                let enabled_count = discovery::active_models(profile, discovered).len();
-                let lines =
-                    home_profile_lines(id, profile, enabled_count, content_width, self.pi_enabled);
+                let lines = self.provider_home_lines(id, content_width);
                 item_heights.push(lines.len());
                 ListItem::new(lines)
             } else {
@@ -220,6 +202,26 @@ impl App {
     }
 
     pub(super) fn draw_models(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        if self.view_mode == ViewMode::AllEnabled && self.subscription_enabled() {
+            let model = self
+                .config
+                .codex
+                .subscription_model
+                .as_deref()
+                .unwrap_or("Codex default (choose with /model)");
+            let mut lines = self.chatgpt_provider_lines(area.width.saturating_sub(2));
+            lines.push(Line::raw(format!("Model: {model}")));
+            lines.push(Line::raw(
+                "API models are paused. Disable ChatGPT Account to restore them.",
+            ));
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .block(panel(" All Models · ChatGPT subscription ", true)),
+                area,
+            );
+            return;
+        }
         if self.view_mode == ViewMode::AllEnabled {
             let models = self.all_managed_models();
             let enabled_count = models.iter().filter(|entry| entry.enabled).count();
@@ -733,9 +735,12 @@ impl App {
         area: Rect,
         profile: &Profile,
         active: bool,
+        selected: bool,
     ) {
-        let title = if active {
-            " Provider · r fetch · E edit "
+        let title = if selected {
+            " Provider · click again to edit "
+        } else if active {
+            " Provider · click twice / E edit "
         } else {
             " Provider connection "
         };
@@ -766,17 +771,23 @@ impl App {
         } else {
             profile.api_format.label().into()
         };
+        let provider_identity = detail(
+            "Provider",
+            if self.pi_enabled {
+                "● configured"
+            } else if profile.enabled {
+                "● enabled"
+            } else {
+                "○ disabled"
+            },
+        );
+        let provider_identity = if selected {
+            provider_identity.style(Style::default().bg(SELECTION).add_modifier(Modifier::BOLD))
+        } else {
+            provider_identity
+        };
         let mut lines = vec![
-            detail(
-                "Provider",
-                if self.pi_enabled {
-                    "● configured"
-                } else if profile.enabled {
-                    "● enabled"
-                } else {
-                    "○ disabled"
-                },
-            ),
+            provider_identity,
             detail("Calls", &self.provider_usage_label(false)),
             detail("Tokens", &self.provider_usage_label(true)),
             detail("API format", &api_format),
@@ -825,7 +836,7 @@ impl App {
         lines.push(Line::styled(
             match self.config_tab() {
                 ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
-                ClientTab::Codex => "Apply changes, then start a new Codex session.",
+                ClientTab::Codex => "Sync with p, restart to load models, then switch with /model.",
                 ClientTab::Pi => "Sync changes, then open /model in Pi.",
                 ClientTab::Usage => unreachable!(),
             },
@@ -836,8 +847,8 @@ impl App {
     }
 
     pub(super) fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
-        if self.codex_ui.enabled && self.home_all_selected && self.view_mode == ViewMode::Home {
-            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nUse an API provider to switch back to its endpoint and model.")
+        if self.home_account_selected() {
+            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nSpace: enable / disable subscription (confirmation required).\nEnabling pauses API providers; disabling restores their previous states.")
                 .block(panel(" ChatGPT provider ", active)).wrap(Wrap { trim: false }), area);
             return;
         }
@@ -873,11 +884,17 @@ impl App {
 
             let (showcase_card, provider_card) = provider_detail_cards(area);
             self.draw_showcase(frame, showcase_card, editor, profile);
-            self.draw_provider_details(frame, provider_card, profile, active);
+            self.draw_provider_details(
+                frame,
+                provider_card,
+                profile,
+                active,
+                self.provider_card_selected,
+            );
             return;
         }
 
-        self.draw_provider_details(frame, area, profile, active);
+        self.draw_provider_details(frame, area, profile, active, false);
     }
 
     pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
@@ -908,7 +925,7 @@ impl App {
                     if self.pi_enabled {
                         "Pi · direct API"
                     } else if self.codex_ui.enabled {
-                        "Codex · restart after apply"
+                        "Codex · /model switches loaded models"
                     } else {
                         self.background.status.label()
                     }

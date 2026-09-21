@@ -21,59 +21,109 @@ impl App {
 
     pub(super) fn home_profile_item_heights(&self, panel: Rect) -> Vec<usize> {
         let mut heights = vec![
-            all_enabled_lines(
-                self.config
-                    .profiles
-                    .values()
-                    .filter(|profile| profile.enabled)
-                    .count(),
-                self.all_enabled_model_count(),
-                self.all_managed_models().len(),
-                panel.width.saturating_sub(2),
-                self.pi_enabled,
-            )
-            .len(),
+            self.all_models_home_lines(panel.width.saturating_sub(2))
+                .len(),
         ];
         if self.codex_ui.enabled {
-            heights[0] = self
-                .chatgpt_provider_lines(panel.width.saturating_sub(2))
-                .len();
+            heights.insert(
+                0,
+                self.chatgpt_provider_lines(panel.width.saturating_sub(2))
+                    .len(),
+            );
         }
         heights.extend(self.profile_ids().iter().map(|id| {
-            let profile = &self.config.profiles[id];
-            let discovered = self
-                .cache
-                .profiles
-                .get(id)
-                .map(|cached| cached.models.as_slice())
-                .unwrap_or_default();
-            home_profile_lines(
-                id,
-                profile,
-                discovery::active_models(profile, discovered).len(),
-                panel.width.saturating_sub(2),
-                self.pi_enabled,
-            )
-            .len()
+            self.provider_home_lines(id, panel.width.saturating_sub(2))
+                .len()
         }));
         heights
     }
 
+    pub(super) fn all_models_home_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.subscription_enabled() {
+            let mut lines = wrap_styled_segments(
+                vec![(
+                    " All Models · ChatGPT subscription".into(),
+                    Style::default().fg(CONNECTED),
+                )],
+                width,
+            );
+            lines.extend(wrap_styled_segments(
+                vec![(
+                    "     API models paused · Enter to view".into(),
+                    Style::default().fg(MUTED),
+                )],
+                width,
+            ));
+            lines.push(Line::raw(""));
+            lines
+        } else {
+            all_enabled_lines(
+                self.config.profiles.values().filter(|p| p.enabled).count(),
+                self.all_enabled_model_count(),
+                self.all_managed_models().len(),
+                width,
+                self.pi_enabled,
+            )
+        }
+    }
+
+    pub(super) fn provider_home_lines(&self, id: &str, width: u16) -> Vec<Line<'static>> {
+        let profile = &self.config.profiles[id];
+        let discovered = self
+            .cache
+            .profiles
+            .get(id)
+            .map(|c| c.models.as_slice())
+            .unwrap_or_default();
+        let mut lines = home_profile_lines(
+            id,
+            profile,
+            discovery::active_models(profile, discovered).len(),
+            width,
+            self.pi_enabled,
+        );
+        if self.subscription_enabled()
+            && self
+                .config
+                .codex
+                .suspended_providers
+                .as_ref()
+                .and_then(|saved| saved.get(id))
+                == Some(&true)
+        {
+            let note = wrap_styled_segments(
+                vec![(
+                    "     Paused by ChatGPT · restored when disabled".into(),
+                    Style::default().fg(WARNING),
+                )],
+                width,
+            );
+            lines.splice(1..1, note);
+        }
+        lines
+    }
+
+    pub(super) fn home_prefix_count(&self) -> usize {
+        if self.codex_ui.enabled { 2 } else { 1 }
+    }
+
     pub(super) fn home_selected_index(&self) -> usize {
         if self.home_all_selected || self.config.profiles.is_empty() {
-            0
+            usize::from(self.codex_ui.enabled && self.codex_ui.home_models)
         } else {
-            self.profile_idx.saturating_add(1)
+            self.profile_idx.saturating_add(self.home_prefix_count())
         }
     }
 
     pub(super) fn select_home_index(&mut self, index: usize) {
-        if index == 0 {
+        self.codex_ui.home_models = self.codex_ui.enabled && index == 1;
+        if index < self.home_prefix_count() {
             self.home_all_selected = true;
             self.model_idx = 0;
         } else {
             self.home_all_selected = false;
-            self.profile_idx = (index - 1).min(self.config.profiles.len().saturating_sub(1));
+            self.profile_idx = (index - self.home_prefix_count())
+                .min(self.config.profiles.len().saturating_sub(1));
             self.model_idx = self.default_model_index();
         }
         self.model_offset = 0;
@@ -159,6 +209,9 @@ impl App {
                 });
             }
         }
+        if self.codex_ui.enabled {
+            models.retain(|model| model.enabled);
+        }
         models
     }
 
@@ -208,12 +261,16 @@ impl App {
 
     pub(super) fn move_selection(&mut self, delta: isize) {
         if self.view_mode == ViewMode::Home && self.focus == Focus::Profiles {
-            let len = self.config.profiles.len().saturating_add(1);
+            let len = self
+                .config
+                .profiles
+                .len()
+                .saturating_add(self.home_prefix_count());
             let current = self.home_selected_index();
             let next = ((current as isize + delta).rem_euclid(len as isize)) as usize;
             self.select_home_index(next);
             self.status_error = false;
-            self.status = if self.home_all_selected && self.codex_ui.enabled {
+            self.status = if self.home_account_selected() {
                 "ChatGPT Account · Enter to import or switch accounts".into()
             } else if self.home_all_selected {
                 format!(
@@ -525,6 +582,7 @@ impl App {
     }
 
     pub(super) fn enter_provider_view(&mut self) {
+        self.provider_card_selected = false;
         self.view_mode = ViewMode::Provider;
         self.focus = Focus::Models;
         self.init_provider_editor();
@@ -544,7 +602,7 @@ impl App {
     }
 
     pub(super) fn enter_all_enabled_view(&mut self) {
-        if self.codex_ui.enabled {
+        if self.home_account_selected() {
             self.open_codex_accounts();
             return;
         }
@@ -564,6 +622,7 @@ impl App {
     }
 
     pub(super) fn return_home(&mut self) {
+        self.provider_card_selected = false;
         self.view_mode = ViewMode::Home;
         self.focus = Focus::Profiles;
         self.status_error = false;
@@ -584,6 +643,7 @@ impl App {
         self.profile_idx = profile_idx;
         self.home_all_selected = false;
         self.view_mode = ViewMode::Provider;
+        self.provider_card_selected = false;
         self.focus = Focus::Models;
         self.provider_editor = self.create_route_editor_for(selected.profile_id);
         if let Some(editor) = &mut self.provider_editor {
@@ -648,6 +708,7 @@ impl App {
         let mut help = HelpModal::for_view(self.view_mode);
         help.pi = self.pi_enabled;
         help.codex = self.codex_ui.enabled;
+        help.codex_accounts = self.codex_ui.accounts;
         if help.codex && self.codex_ui.accounts {
             help.section = HelpSection::AllEnabled;
         }
@@ -725,6 +786,10 @@ impl App {
     }
 
     pub(super) fn toggle_selected_provider(&mut self) -> Result<()> {
+        if self.subscription_enabled() {
+            self.set_error("API providers are paused · disable ChatGPT Account with Space first");
+            return Ok(());
+        }
         let Some(profile_id) = self.selected_profile_id() else {
             return Ok(());
         };

@@ -897,28 +897,102 @@ fn draw_summary(
     tracked: bool,
     range_label: &str,
 ) {
-    if !tracked {
+    if !tracked || area.is_empty() {
         return;
     }
-    let cols =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
-    for (index, (label, totals)) in [(range_label, daily), ("Total", total)].iter().enumerate() {
-        let color = if index == 0 { ROUTE } else { Color::White };
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(format!("{label}  "), Style::default().fg(MUTED)),
-                Span::styled(
-                    format!("{} calls", compact(totals.calls)),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+
+    // A compact, two-column ledger: accent rail marks the selected range while
+    // the lifetime column stays quiet. Very short terminals get a dense single
+    // line so the tables keep their rows.
+    if area.height < 3 {
+        let range = match range_label {
+            "1 day" => "1d",
+            "1 week" => "7d",
+            "1 month" => "30d",
+            _ => "All",
+        };
+        let line = Line::from(vec![
+            Span::styled(format!("{range} "), Style::default().fg(ROUTE)),
+            Span::styled(
+                format!(
+                    "{}c·{}t  │  All {}c·{}t",
+                    compact(daily.calls),
+                    compact(daily.input + daily.output),
+                    compact(total.calls),
+                    compact(total.input + total.output),
                 ),
-            ]),
-            Line::from(vec![
-                Span::styled(tokens(totals), Style::default().fg(color)),
-                Span::styled(" tokens", Style::default().fg(MUTED)),
-            ]),
-        ];
-        frame.render_widget(Paragraph::new(lines), cols[index]);
+                Style::default().fg(Color::White),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+        return;
     }
+
+    let columns = Layout::horizontal([
+        Constraint::Percentage(49),
+        Constraint::Length(1),
+        Constraint::Percentage(50),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new("│").style(Style::default().fg(MUTED)),
+        columns[1],
+    );
+    draw_stat_card(frame, columns[0], range_label, daily, true);
+    draw_stat_card(frame, columns[2], "All time", total, false);
+}
+
+fn draw_stat_card(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    label: &str,
+    totals: &Totals,
+    featured: bool,
+) {
+    let accent = if featured { ROUTE } else { MUTED };
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(accent));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+
+    let completed = totals.success + totals.failed + totals.interrupted;
+    let rate = (completed > 0).then(|| totals.success.saturating_mul(100) / completed);
+    let detail = match rate {
+        Some(rate) if inner.width >= 30 => format!(
+            "{} tokens  ·  {rate}% ok  ·  {} failed",
+            tokens(totals),
+            compact(totals.failed)
+        ),
+        Some(rate) if inner.width >= 16 => format!("{} tokens  ·  {rate}% ok", tokens(totals)),
+        Some(rate) => format!("{} tok · {rate}%", compact(totals.input + totals.output)),
+        None if inner.width >= 16 => format!("{} tokens  ·  no completed calls", tokens(totals)),
+        None => format!("{} tok", compact(totals.input + totals.output)),
+    };
+    let label = label.to_ascii_uppercase();
+    let lines = vec![
+        Line::styled(
+            label,
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
+        Line::from(vec![
+            Span::styled(
+                compact(totals.calls),
+                Style::default()
+                    .fg(if featured { ROUTE } else { Color::White })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" calls", Style::default().fg(MUTED)),
+        ]),
+        Line::from(vec![Span::styled(
+            detail,
+            Style::default().fg(if rate.is_some() { CONNECTED } else { MUTED }),
+        )]),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 fn draw_table(

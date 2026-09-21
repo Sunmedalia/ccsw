@@ -393,6 +393,7 @@ fn renders_empty_state_in_narrow_terminal() {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
@@ -1626,6 +1627,7 @@ fn interactive_test_app() -> App {
         modal: None,
         proxy_status: None,
         provider_editor: None,
+        provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
@@ -2564,6 +2566,99 @@ fn codex_account_apply_without_login_stays_on_provider_home() {
             assert!(line.width() <= usize::from(width));
         }
     }
+}
+
+#[test]
+fn codex_all_models_has_separate_home_row_and_only_enabled_models() {
+    let (_temp, mut app) = persisted_app();
+    config::update(&app.paths.config, |c| {
+        let mut profile = c.profiles.values().next().unwrap().clone();
+        profile.default_model = "enabled-model".into();
+        profile.models.clear();
+        profile.aliases = Default::default();
+        profile.enabled_models.clear();
+        profile.disabled_models = vec!["hidden-model".into()];
+        profile.fallback_models.clear();
+        profile.subagent_model = None;
+        c.codex.profiles.clear();
+        c.codex.profiles.insert("api".into(), profile);
+        Ok(())
+    })
+    .unwrap();
+    app.select_client_tab(ClientTab::Codex);
+    app.select_home_index(1);
+    assert!(app.codex_ui.home_models);
+    assert_eq!(app.home_selected_index(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.view_mode, ViewMode::AllEnabled);
+    assert!(!app.codex_ui.accounts);
+    assert_eq!(app.all_managed_models().len(), 1);
+    assert_eq!(app.all_managed_models()[0].model.id, "enabled-model");
+    assert!(app.all_managed_models().iter().all(|m| m.enabled));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.select_home_index(0);
+    assert!(app.home_account_selected());
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_ui.accounts);
+}
+
+#[test]
+fn subscription_toggle_requires_confirmation_and_cancel_preserves_config() {
+    let (_temp, mut app) = persisted_app();
+    app.select_client_tab(ClientTab::Codex);
+    app.config.codex.accounts.insert(
+        "saved".into(),
+        crate::codex::accounts::Account {
+            name: "Saved".into(),
+            ..Default::default()
+        },
+    );
+    // Choose the account using the existing account-list selection mechanism.
+    app.open_codex_accounts();
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.select_home_index(0);
+    let before = app.config.clone();
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.codex_navigation_blocked());
+    assert!(!app.codex_ui.busy);
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Enable ChatGPT subscription?"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.config, before);
+    assert!(!app.codex_navigation_blocked());
+
+    app.config.codex.active = Some(crate::codex::Selection::Account { id: "saved".into() });
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Disable ChatGPT subscription?"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.subscription_enabled());
+    assert!(!app.codex_navigation_blocked());
 }
 
 #[test]

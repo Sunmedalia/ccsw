@@ -110,6 +110,7 @@ impl App {
         self.profile_offset = 0;
         self.model_offset = 0;
         self.home_all_selected = false;
+        self.codex_ui.home_models = false;
         self.pi_enabled = tab == ClientTab::Pi;
         self.codex_ui.enabled = tab == ClientTab::Codex;
         self.return_home();

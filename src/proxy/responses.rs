@@ -32,7 +32,7 @@ async fn serve(
     mut body: Value,
     compact: bool,
 ) -> Response {
-    let (target, _) = match authenticated_target(&state, &route, &headers).await {
+    let (target, registry) = match authenticated_target(&state, &route, &headers).await {
         Ok(v) => v,
         Err(_) => {
             return error(
@@ -120,9 +120,7 @@ async fn serve(
                     if let Some(parallel) = body.get("parallel_tool_calls") {
                         v["parallel_tool_calls"] = parallel.clone();
                     }
-                    if let Some(effort) = body["reasoning"].get("effort") {
-                        v["reasoning_effort"] = effort.clone();
-                    }
+                    apply_chat_reasoning(&body, &mut v);
                 }
                 v
             }
@@ -186,12 +184,25 @@ async fn serve(
     };
     let response = metering::observe(response, ticket, streaming);
     if !response.status().is_success() {
+        let status = response.status();
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            read_body(response, ERROR_LIMIT, true),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok);
+        let detail = bytes.as_deref().and_then(|bytes| {
+            upstream_error_detail(bytes, &profile.credential, &registry.local_token)
+        });
         return error(
-            response.status(),
-            format!(
-                "Provider returned HTTP {}; check its credentials, model and request compatibility",
-                response.status()
-            ),
+            status,
+            match detail {
+                Some(detail) => format!("Provider returned HTTP {status}: {detail}"),
+                None => format!(
+                    "Provider returned HTTP {status}; check its credentials, model and request compatibility"
+                ),
+            },
         );
     }
     if streaming {
@@ -238,6 +249,56 @@ async fn serve(
         }
         Err(e) => error(StatusCode::BAD_GATEWAY, e),
     }
+}
+
+fn apply_chat_reasoning(body: &Value, upstream: &mut Value) {
+    // The generated Codex catalog uses `none` when no reasoning capability was
+    // declared. Chat-compatible gateways may only accept positive effort levels;
+    // leave their default alone rather than emitting an unsupported enum value.
+    if let Some(effort) = body["reasoning"]["effort"]
+        .as_str()
+        .filter(|effort| *effort != "none")
+    {
+        upstream["reasoning_effort"] = json!(effort);
+    }
+}
+
+fn upstream_error_detail(
+    bytes: &[u8],
+    credential: &Credential,
+    local_token: &str,
+) -> Option<String> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let upstream = value.get("error").unwrap_or(&value);
+    let message = upstream.get("message")?.as_str()?;
+    if message.trim().is_empty() {
+        return None;
+    }
+    // Extract only useful diagnostics, never headers, full bodies or HTML pages.
+    let mut detail = match upstream
+        .get("param")
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty())
+    {
+        Some(param) => format!("{param}: {message}"),
+        None => message.to_owned(),
+    };
+    let secret = match credential {
+        Credential::Bearer { value }
+        | Credential::XApiKey { value }
+        | Credential::ApiKey { value } => value.as_str(),
+        Credential::None => "",
+    };
+    for secret in [secret, local_token] {
+        if !secret.is_empty() {
+            detail = detail.replace(secret, "[redacted]");
+        }
+    }
+    let clean: String = detail
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    Some(truncate_utf8(&clean, 1024).to_owned())
 }
 type Namespaces = HashMap<String, (String, String)>;
 fn namespace_alias(namespace: &str, name: &str) -> String {
@@ -794,6 +855,50 @@ fn converted_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chat_reasoning_omits_catalog_default_and_preserves_explicit_levels() {
+        for effort in [None, Some("none"), Some("low"), Some("high")] {
+            let mut body = json!({"model":"m","input":"Hello"});
+            if let Some(effort) = effort {
+                body["reasoning"] = json!({"effort":effort});
+            }
+            let messages = to_messages(&body).unwrap();
+            let mut upstream = translate_request(&messages, ApiFormat::OpenaiChat).unwrap();
+            apply_chat_reasoning(&body, &mut upstream);
+            assert_eq!(
+                upstream.get("reasoning_effort").and_then(Value::as_str),
+                effort.filter(|e| *e != "none")
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_diagnostics_report_invalid_parameter_without_credentials() {
+        let credential = Credential::Bearer {
+            value: "upstream-secret".into(),
+        };
+        let bytes = serde_json::to_vec(&json!({"error":{
+            "message":"Invalid option: expected low|medium|high; upstream-secret local-secret\n",
+            "param":"reasoning_effort", "headers":{"Authorization":"do-not-show"}
+        }}))
+        .unwrap();
+        let detail = upstream_error_detail(&bytes, &credential, "local-secret").unwrap();
+        assert!(detail.starts_with("reasoning_effort: Invalid option"));
+        assert!(!detail.contains("secret"));
+        assert!(!detail.contains("do-not-show"));
+        assert!(!detail.contains('\n'));
+        assert!(
+            upstream_error_detail(b"<html>private debug page</html>", &credential, "").is_none()
+        );
+        let long = serde_json::to_vec(&json!({"message":"中".repeat(1000)})).unwrap();
+        assert!(
+            upstream_error_detail(&long, &Credential::None, "")
+                .unwrap()
+                .len()
+                <= 1024
+        );
+    }
+
     #[test]
     fn custom_tools_and_multi_turn_results_round_trip() {
         let request = json!({"model":"m","instructions":"Be helpful","input":[{"role":"developer","content":[{"type":"input_text","text":"Use tools"}]},{"role":"user","content":"Edit a file"},{"type":"custom_tool_call","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n*** End Patch"},{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"}],"tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch","format":{"type":"text"}}]});

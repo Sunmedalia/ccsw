@@ -22,10 +22,12 @@ enum Input {
     Rename(String),
     Reasoning,
     Disconnect,
+    Subscription(Option<String>),
 }
 pub(super) struct CodexUi {
     pub enabled: bool,
     pub accounts: bool,
+    pub home_models: bool,
     selected: usize,
     pending_selection: Option<String>,
     chosen_account: Option<String>,
@@ -49,6 +51,7 @@ impl Default for CodexUi {
         Self {
             enabled: false,
             accounts: false,
+            home_models: false,
             selected: 0,
             pending_selection: None,
             chosen_account: None,
@@ -106,7 +109,17 @@ impl App {
                 ),
                 WARNING,
             ),
-            ("     Provider: ChatGPT".into(), MUTED),
+            (
+                format!(
+                    "     {} · Space toggle (confirm)",
+                    if selected {
+                        "Enabled · API providers paused"
+                    } else {
+                        "Disabled · API providers available"
+                    }
+                ),
+                if selected { CONNECTED } else { MUTED },
+            ),
             ("     Credential: Saved Codex login".into(), MUTED),
         ] {
             lines.extend(wrap_styled_segments(
@@ -118,11 +131,38 @@ impl App {
         lines
     }
 
+    pub(super) fn subscription_enabled(&self) -> bool {
+        self.codex_ui.enabled
+            && matches!(
+                self.config.codex.active,
+                Some(service::Selection::Account { .. })
+            )
+    }
+
+    pub(super) fn home_account_selected(&self) -> bool {
+        self.codex_ui.enabled
+            && self.view_mode == ViewMode::Home
+            && !self.codex_ui.home_models
+            && (self.home_all_selected || self.config.profiles.is_empty())
+    }
+
+    pub(super) fn toggle_codex_subscription(&mut self) {
+        if self.subscription_enabled() {
+            self.codex_input(Input::Subscription(None), String::new());
+        } else {
+            self.apply_codex_account();
+        }
+    }
+
     fn apply_codex_account(&mut self) {
         let Some(id) = self.chosen_codex_account() else {
             self.set_error("No saved account selected · Enter Account, import a login, then press Space to select");
             return;
         };
+        if !self.subscription_enabled() {
+            self.codex_input(Input::Subscription(Some(id)), String::new());
+            return;
+        }
         self.codex_job(move |paths, _, _| {
             service::accounts::activate(&paths, &id)?;
             Ok("Codex account applied · restart CLI / Codex App and open a new chat".into())
@@ -216,6 +256,7 @@ impl App {
                 Some(service::Selection::Account { id }) => Some(id.clone()),
                 _ => None,
             })
+            .or_else(|| self.config.codex.last_account.clone())
             .filter(|id| self.config.codex.accounts.contains_key(id))
     }
 
@@ -234,20 +275,43 @@ impl App {
             .cloned()
     }
     pub(super) fn apply_codex(&mut self) {
-        if self.view_mode == ViewMode::Home
-            && (self.home_all_selected || self.config.profiles.is_empty())
-        {
+        if self.home_account_selected() {
             self.apply_codex_account();
             return;
         }
-        let Some(profile) = self.selected_profile_id() else {
-            self.set_error("Select a provider and model to apply to Codex");
+        if self.subscription_enabled() {
+            if self.view_mode == ViewMode::AllEnabled
+                || (self.view_mode == ViewMode::Home && self.codex_ui.home_models)
+            {
+                self.apply_codex_account();
+            } else {
+                self.toggle_codex_subscription();
+            }
+            return;
+        }
+        let global = self.all_managed_models();
+        let global_selection = if self.view_mode == ViewMode::AllEnabled {
+            global.get(self.model_idx)
+        } else {
+            global.first()
+        };
+        let Some(profile) = self
+            .selected_profile_id()
+            .or_else(|| global_selection.map(|m| m.profile_id.clone()))
+        else {
+            self.set_error("Enable a provider and model to apply to Codex");
             return;
         };
-        let model = self.selected_model().map(|m| canonical_model_id(&m.id));
+        let model = self
+            .selected_model()
+            .or_else(|| global_selection.map(|m| m.model.clone()))
+            .map(|m| canonical_model_id(&m.id));
         self.codex_job(move |paths, _, _| {
             service::apply(&paths, &profile, model.as_deref(), None)?;
-            Ok("Codex API applied · restart CLI / ChatGPT App and open a new chat".into())
+            Ok(
+                "Catalog synced · restart Codex to load changes, then switch models with /model"
+                    .into(),
+            )
         });
     }
     fn codex_input(&mut self, input: Input, initial: String) {
@@ -279,6 +343,25 @@ impl App {
                 }
                 KeyCode::PageUp => {
                     self.codex_ui.help_scroll = self.codex_ui.help_scroll.saturating_sub(5)
+                }
+                _ => {}
+            }
+            return Ok(Some(false));
+        }
+        if let Some(Input::Subscription(account)) = self.codex_ui.input.clone() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('n') => self.codex_ui.input = None,
+                KeyCode::Enter | KeyCode::Char('y') => {
+                    self.codex_ui.input = None;
+                    self.codex_job(move |paths, _, _| {
+                        if let Some(id) = account {
+                            service::accounts::activate(&paths, &id)?;
+                            Ok("ChatGPT enabled · API providers paused · restart Codex".into())
+                        } else {
+                            service::disable_subscription(&paths)?;
+                            Ok("ChatGPT disabled · previous API providers restored · restart Codex".into())
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -359,6 +442,7 @@ impl App {
                             })?;
                             Ok("Reasoning saved · p apply to Codex".into())
                         }
+                        Input::Subscription(_) => unreachable!("handled by confirmation"),
                         Input::Disconnect => {
                             if text != "disconnect" {
                                 anyhow::bail!("Disconnect cancelled");
@@ -375,11 +459,12 @@ impl App {
         if !self.codex_ui.enabled {
             return Ok(None);
         }
-        if key.code == KeyCode::Enter
-            && !self.codex_ui.accounts
-            && self.view_mode == ViewMode::Home
-            && (self.home_all_selected || self.config.profiles.is_empty())
+        if !self.codex_ui.accounts && self.home_account_selected() && key.code == KeyCode::Char(' ')
         {
+            self.toggle_codex_subscription();
+            return Ok(Some(false));
+        }
+        if key.code == KeyCode::Enter && !self.codex_ui.accounts && self.home_account_selected() {
             self.open_codex_accounts();
             return Ok(Some(false));
         }
@@ -743,6 +828,8 @@ impl App {
             Input::ImportFile => "Import auth.json · File path",
             Input::Reasoning => "Reasoning: none/minimal/low/medium/high/xhigh",
             Input::Disconnect => "Type disconnect to restore previous configuration",
+            Input::Subscription(Some(_)) => "Enable ChatGPT subscription?",
+            Input::Subscription(None) => "Disable ChatGPT subscription?",
         });
         if let Some(title) = title {
             let popup = account_input_area(area);
@@ -771,18 +858,39 @@ impl App {
                 Some(Input::Rename(_)) => {
                     "Edit the display name only.\nEmail and plan come from your login."
                 }
+                Some(Input::Subscription(Some(_))) => {
+                    "Pause all API providers and use the selected account.\nPrevious enablement will be saved. Restart Codex after applying."
+                }
+                Some(Input::Subscription(None)) => {
+                    "Restore previously enabled API providers and their models.\nPreviously disabled providers stay disabled. Restart Codex after applying."
+                }
                 _ => "Enter a value, then confirm. Ctrl+U clears the field.",
             };
             frame.render_widget(Clear, popup);
             frame.render_widget(panel(title, true), popup);
             let inner = panel_inner(popup);
+            if matches!(self.codex_ui.input, Some(Input::Subscription(_))) {
+                frame.render_widget(
+                    Paragraph::new(description).wrap(Wrap { trim: false }),
+                    Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(1),
+                    ),
+                );
+                draw_modal_buttons(frame, popup, &["Confirm (Enter)", "Cancel (Esc)"]);
+                return;
+            }
             frame.render_widget(
                 Paragraph::new(description).wrap(Wrap { trim: false }),
                 Rect::new(inner.x, inner.y, inner.width, 2),
             );
             frame.render_widget(
                 Paragraph::new(
-                    if login || matches!(self.codex_ui.input, Some(Input::Rename(_))) {
+                    if matches!(self.codex_ui.input, Some(Input::Subscription(_))) {
+                        "Enter / y confirm · Esc / n cancel".into()
+                    } else if login || matches!(self.codex_ui.input, Some(Input::Rename(_))) {
                         format!(
                             "Name: {}",
                             if self.codex_ui.field.is_empty() {

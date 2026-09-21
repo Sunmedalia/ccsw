@@ -38,7 +38,7 @@ use crate::config::{
 const DEFAULT_LISTEN: &str = "127.0.0.1:17321";
 const MAX_ERROR_BODY: usize = 4096;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct RouteTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_profile_id: Option<String>,
@@ -51,7 +51,7 @@ struct RouteTarget {
     models: BTreeMap<String, AggregateModelTarget>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct AggregateModelTarget {
     profile_id: String,
     model_id: String,
@@ -185,28 +185,27 @@ pub fn aggregate_profile(
             })?;
 
     let proxy_paths = ProxyPaths::from_app(paths)?;
-    let route_id =
-        update_registry(&proxy_paths, None, |registry| {
-            if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
-                target.config_path == paths.config && target.profile_id.is_none()
-            }) {
-                target.models = targets.clone();
-                target.default_profile_id = Some(default_profile_id.into());
-                return id.clone();
-            }
-            let id = Uuid::new_v4().simple().to_string();
-            registry.routes.insert(
-                id.clone(),
-                RouteTarget {
-                    default_profile_id: Some(default_profile_id.into()),
-                    codex: false,
-                    config_path: paths.config.clone(),
-                    profile_id: None,
-                    models: targets.clone(),
-                },
-            );
-            id
-        })?;
+    let route_id = update_registry(&proxy_paths, None, |registry| {
+        if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
+            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+        }) {
+            target.models = targets.clone();
+            target.default_profile_id = Some(default_profile_id.into());
+            return id.clone();
+        }
+        let id = Uuid::new_v4().simple().to_string();
+        registry.routes.insert(
+            id.clone(),
+            RouteTarget {
+                default_profile_id: Some(default_profile_id.into()),
+                codex: false,
+                config_path: paths.config.clone(),
+                profile_id: None,
+                models: targets.clone(),
+            },
+        );
+        id
+    })?;
     start(paths, None)?;
     let registry = load_registry(&proxy_paths)?;
     let expose = |model: &str| resolve_aggregate_model_id(&targets, default_profile_id, model);
@@ -243,16 +242,18 @@ pub fn aggregate_checkpoint(paths: &AppPaths) -> Result<AggregateCheckpoint> {
         registry
             .routes
             .into_iter()
-            .filter(|(_, route)| route.config_path == paths.config && route.profile_id.is_none())
+            .filter(|(_, route)| {
+                !route.codex && route.config_path == paths.config && route.profile_id.is_none()
+            })
             .collect(),
     ))
 }
 
 pub fn restore_aggregate(paths: &AppPaths, checkpoint: AggregateCheckpoint) -> Result<()> {
     update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
-        registry
-            .routes
-            .retain(|_, route| route.config_path != paths.config || route.profile_id.is_some());
+        registry.routes.retain(|_, route| {
+            route.codex || route.config_path != paths.config || route.profile_id.is_some()
+        });
         registry.routes.extend(checkpoint.0);
     })
 }
@@ -263,7 +264,8 @@ pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
     let token = value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str();
     Ok(token == Some(registry.local_token.as_str())
         && registry.routes.iter().any(|(id, route)| {
-            route.profile_id.is_none()
+            !route.codex
+                && route.profile_id.is_none()
                 && route.config_path == paths.config
                 && endpoint == Some(format!("http://{}/r/{id}", registry.listen).as_str())
         }))
@@ -272,11 +274,9 @@ pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
 pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     update_registry(&proxy_paths, None, |registry| {
-        for target in registry
-            .routes
-            .values_mut()
-            .filter(|target| target.config_path == paths.config && target.profile_id.is_none())
-        {
+        for target in registry.routes.values_mut().filter(|target| {
+            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+        }) {
             target.models.clear();
         }
     })?;
@@ -934,7 +934,11 @@ fn resolve_profile_from_config(
                     .map(|(_, mapped)| mapped)
             })
             .or_else(|| role_target(target, config, requested))
-            .with_context(|| format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p"))?;
+            .with_context(|| if target.codex {
+                format!("model '{requested}' is not synced by CCSW; press p to sync, then restart Codex to reload /model")
+            } else {
+                format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p")
+            })?;
         (mapped.profile_id.as_str(), mapped.model_id.as_str())
     };
     let profile = config
@@ -2328,40 +2332,164 @@ pub fn shutdown_authenticated(paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
-/// A dedicated route keeps Codex selection independent from Claude's aggregate binding.
-pub fn codex_route(paths: &AppPaths, profile_id: &str) -> Result<(String, String)> {
-    let proxy_paths = ProxyPaths::from_app(paths)?;
-    let id = update_registry(&proxy_paths, None, |registry| {
-        if let Some((id, _)) = registry.routes.iter().find(|(_, target)| {
-            target.codex
-                && target.config_path == paths.config
-                && target.profile_id.as_deref() == Some(profile_id)
-        }) {
-            return id.clone();
+/// The journal stores only route mappings, never upstream credentials.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CodexRoutePlan {
+    id: String,
+    before: Option<RouteTarget>,
+    after: RouteTarget,
+}
+
+pub(crate) fn codex_model_id(profile_id: &str, model_id: &str) -> String {
+    format!("{profile_id}::{}", config::canonical_model_id(model_id))
+}
+
+/// Build the picker and proxy mapping from the same client-scoped snapshot.
+/// Do not install the route until the Codex transaction has been journaled.
+pub(crate) fn prepare_codex_route(
+    paths: &AppPaths,
+    config: &Config,
+) -> Result<(CodexRoutePlan, Vec<ModelEntry>, String, String)> {
+    let mut models = Vec::new();
+    let mut targets = BTreeMap::new();
+    for (profile_id, profile) in &config.profiles {
+        for mut model in crate::discovery::active_models(profile, &[]) {
+            let exposed = codex_model_id(profile_id, &model.id);
+            targets.insert(
+                exposed.clone(),
+                AggregateModelTarget {
+                    profile_id: profile_id.clone(),
+                    model_id: model.id.clone(),
+                },
+            );
+            model.context_window = Some(model.context_window.unwrap_or(
+                if model.id.to_ascii_lowercase().ends_with("[1m]") {
+                    1_000_000
+                } else {
+                    128_000
+                },
+            ));
+            model.label = Some(format!("{} · {}", profile.name, model.label()));
+            model.id = exposed;
+            models.push(model);
         }
-        let id = Uuid::new_v4().simple().to_string();
-        registry.routes.insert(
-            id.clone(),
-            RouteTarget {
-                default_profile_id: None,
-                codex: true,
-                config_path: paths.config.clone(),
-                profile_id: Some(profile_id.into()),
-                models: BTreeMap::new(),
-            },
-        );
-        id
-    })?;
+    }
+    if models.is_empty() {
+        bail!("Enable at least one Codex model before applying");
+    }
     start(paths, None)?;
-    let registry = load_registry(&proxy_paths)?;
-    Ok((
-        format!("http://{}/r/{id}/v1", registry.listen),
-        registry.local_token,
-    ))
+    let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
+    let existing = registry.routes.iter().find(|(_, target)| {
+        target.codex && target.config_path == paths.config && target.profile_id.is_none()
+    });
+    let plan = CodexRoutePlan {
+        id: existing
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+        before: existing.map(|(_, target)| target.clone()),
+        after: RouteTarget {
+            default_profile_id: None,
+            codex: true,
+            config_path: paths.config.clone(),
+            profile_id: None,
+            models: targets,
+        },
+    };
+    let url = format!("http://{}/r/{}/v1", registry.listen, plan.id);
+    Ok((plan, models, url, registry.local_token))
+}
+
+pub(crate) fn apply_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != plan.before.as_ref() {
+            bail!("Codex proxy route changed during preparation; retry");
+        }
+        registry.routes.insert(plan.id.clone(), plan.after.clone());
+        Ok(())
+    })?
+}
+
+pub(crate) fn restore_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        let current = registry.routes.get(&plan.id);
+        if current == plan.before.as_ref() {
+            return Ok(());
+        }
+        if current != Some(&plan.after) {
+            bail!("Codex proxy route changed during recovery; preserve the recovery journal");
+        }
+        if let Some(before) = &plan.before {
+            registry.routes.insert(plan.id.clone(), before.clone());
+        } else {
+            registry.routes.remove(&plan.id);
+        }
+        Ok(())
+    })?
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aggregate_operations_and_recovery_are_client_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state_dir: temp.path().join("state"),
+            cache: temp.path().join("cache.json"),
+        };
+        let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+        let claude = RouteTarget {
+            default_profile_id: Some("local".into()),
+            codex: false,
+            config_path: paths.config.clone(),
+            profile_id: None,
+            models: BTreeMap::from([(
+                "local::old".into(),
+                AggregateModelTarget {
+                    profile_id: "local".into(),
+                    model_id: "old".into(),
+                },
+            )]),
+        };
+        let codex = RouteTarget {
+            codex: true,
+            ..claude.clone()
+        };
+        update_registry(&proxy_paths, None, |registry| {
+            registry.routes.insert("claude".into(), claude.clone());
+            registry.routes.insert("codex".into(), codex.clone());
+        })
+        .unwrap();
+        let checkpoint = aggregate_checkpoint(&paths).unwrap();
+        clear_aggregate_models(&paths).unwrap();
+        let cleared = load_registry(&proxy_paths).unwrap();
+        assert!(cleared.routes["claude"].models.is_empty());
+        assert_eq!(cleared.routes["codex"], codex);
+
+        let changed = RouteTarget {
+            models: BTreeMap::new(),
+            ..codex.clone()
+        };
+        let plan = CodexRoutePlan {
+            id: "codex".into(),
+            before: Some(codex.clone()),
+            after: changed.clone(),
+        };
+        apply_codex_route(&paths, &plan).unwrap();
+        restore_aggregate(&paths, checkpoint).unwrap();
+        let restored = load_registry(&proxy_paths).unwrap();
+        assert_eq!(restored.routes["claude"], claude);
+        assert_eq!(restored.routes["codex"], changed);
+        let settings = json!({"env":{
+            "ANTHROPIC_BASE_URL":format!("http://{}/r/codex", restored.listen),
+            "ANTHROPIC_AUTH_TOKEN":restored.local_token,
+        }});
+        assert!(!owns_settings(&paths, &settings).unwrap());
+        restore_codex_route(&paths, &plan).unwrap();
+        assert_eq!(load_registry(&proxy_paths).unwrap().routes["codex"], codex);
+        restore_codex_route(&paths, &plan).unwrap(); // Recovery can safely retry.
+    }
+
     #[test]
     fn proxy_health_requires_current_config_and_binary_versions() {
         let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION")});

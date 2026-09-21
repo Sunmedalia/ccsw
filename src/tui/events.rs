@@ -61,6 +61,7 @@ impl App {
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        self.provider_card_selected = false;
         let before = self.config.clone();
         let result = self.handle_key_inner(key);
         if before != self.config {
@@ -408,6 +409,23 @@ impl App {
         if self.codex_mouse(mouse, area)? {
             return Ok(MouseAction::None);
         }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.modal.is_none()
+            && self.view_mode == ViewMode::Provider
+        {
+            let is_provider_card = ui_areas(area, self.focus, self.view_mode)
+                .details
+                .map(provider_detail_cards)
+                .is_some_and(|(_, card)| {
+                    contains(card, mouse.column, mouse.row)
+                        && !detail_controls(card)
+                            .iter()
+                            .any(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                });
+            if !is_provider_card {
+                self.provider_card_selected = false;
+            }
+        }
         let before = self.config.clone();
         let result = self.handle_mouse_inner(mouse, area);
         if before != self.config {
@@ -490,7 +508,10 @@ impl App {
                         mouse.column,
                         mouse.row,
                         if self.view_mode == ViewMode::Home {
-                            self.config.profiles.len().saturating_add(1)
+                            self.config
+                                .profiles
+                                .len()
+                                .saturating_add(self.home_prefix_count())
                         } else {
                             self.config.profiles.len()
                         },
@@ -658,20 +679,35 @@ impl App {
                         clicked_list_index(panel, mouse.column, mouse.row, self.profile_offset, 1)
                     };
                     let item_count = if self.view_mode == ViewMode::Home {
-                        self.config.profiles.len().saturating_add(1)
+                        self.config
+                            .profiles
+                            .len()
+                            .saturating_add(self.home_prefix_count())
                     } else {
                         self.config.profiles.len()
                     };
                     if let Some(index) = index.filter(|index| *index < item_count) {
                         self.focus = Focus::Profiles;
                         if self.view_mode == ViewMode::Home {
-                            if !pi && index > 0 && mouse.column < panel.x.saturating_add(5) {
+                            if !pi
+                                && self.codex_ui.enabled
+                                && index == 0
+                                && mouse.column < panel.x.saturating_add(5)
+                            {
+                                self.select_home_index(index);
+                                self.toggle_codex_subscription();
+                                return Ok(MouseAction::None);
+                            }
+                            if !pi
+                                && index >= self.home_prefix_count()
+                                && mouse.column < panel.x.saturating_add(5)
+                            {
                                 self.select_home_index(index);
                                 self.toggle_selected_provider()?;
                                 return Ok(MouseAction::None);
                             }
                             if self.home_selected_index() == index {
-                                if index == 0 {
+                                if index < self.home_prefix_count() {
                                     self.enter_all_enabled_view();
                                 } else {
                                     self.enter_provider_view();
@@ -779,16 +815,27 @@ impl App {
                                     }
                                 }
                             }
-                        } else if contains(provider_card, mouse.column, mouse.row)
-                            && let Some((control, _)) = detail_controls(provider_card)
+                        } else if contains(provider_card, mouse.column, mouse.row) {
+                            if let Some((control, _)) = detail_controls(provider_card)
                                 .into_iter()
                                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
-                        {
-                            match control {
-                                DetailControl::Delete => self.modal = Some(Modal::DeleteProfile),
-                                DetailControl::Edit => {
-                                    self.edit_profile();
+                            {
+                                self.provider_card_selected = false;
+                                match control {
+                                    DetailControl::Delete => {
+                                        self.modal = Some(Modal::DeleteProfile)
+                                    }
+                                    DetailControl::Edit => self.edit_profile(),
                                 }
+                                return Ok(MouseAction::None);
+                            }
+                            if self.provider_card_selected {
+                                self.provider_card_selected = false;
+                                self.edit_profile();
+                            } else {
+                                self.provider_card_selected = true;
+                                self.status_error = false;
+                                self.status = "Provider selected · click again to edit".into();
                             }
                             return Ok(MouseAction::None);
                         }

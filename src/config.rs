@@ -437,8 +437,33 @@ pub fn load(path: &Path) -> Result<Config> {
             .validate()
             .with_context(|| format!("invalid profile {id}"))?;
     }
+    suspend_codex_api_providers(&mut config);
     config.claude.validate()?;
     Ok(config)
+}
+
+/// A ChatGPT subscription and API providers are mutually exclusive for Codex.
+/// Keep the original provider flags so disabling the subscription can restore them.
+fn suspend_codex_api_providers(config: &mut Config) {
+    if !matches!(
+        config.codex.active,
+        Some(crate::codex::Selection::Account { .. })
+    ) {
+        return;
+    }
+    if config.codex.suspended_providers.is_none() {
+        config.codex.suspended_providers = Some(
+            config
+                .codex
+                .profiles
+                .iter()
+                .map(|(id, profile)| (id.clone(), profile.enabled))
+                .collect(),
+        );
+    }
+    for profile in config.codex.profiles.values_mut() {
+        profile.enabled = false;
+    }
 }
 
 fn migrate_v1(raw: &mut toml::Value) -> Result<()> {
@@ -513,6 +538,7 @@ fn update_locked(
     }
     let mut latest = load(path)?;
     edit(&mut latest)?;
+    suspend_codex_api_providers(&mut latest);
     latest.version = CONFIG_VERSION;
     for (id, profile) in latest
         .profiles
@@ -644,6 +670,11 @@ pub fn update_client(
         swap_scope(config, client);
         let result = edit(config);
         swap_scope(config, client);
+        if config.codex.suspended_providers.is_some() {
+            for profile in config.codex.profiles.values_mut() {
+                profile.enabled = false;
+            }
+        }
         result
     })?;
     swap_scope(&mut config, client);

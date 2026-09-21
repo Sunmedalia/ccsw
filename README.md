@@ -138,6 +138,7 @@ ccsw import --yes
 | `x` | 删除模型；网关模型不能删除 |
 | `e` | 编辑当前模型的完整配置；模型列表和详情面板均可使用 |
 | `E`（`Shift+e`） | 编辑当前厂商配置 |
+| 鼠标点击 Provider 状态行 | 首次选中厂商，再次点击打开编辑表单 |
 | `p` / `P` | 同步 / 代理 |
 
 ### Forms · 表单
@@ -254,14 +255,17 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 1. 在 Codex 的 API Providers 页面添加或选择厂商。
 2. 进入厂商页面选中模型；`e` 编辑模型、`E` 编辑厂商，`g` 设置推理强度。
-3. 按 `p` 应用。CCSW 启动本地代理，并将 `model`、专属 `model_providers.ccsw` 等字段写入 Codex 配置。
-4. 重启 Codex CLI / ChatGPT App，打开新会话确认模型和请求地址。已有会话不会迁移到新模型。
+3. 按 `p` / **Apply Codex**，同步 Codex 配置中所有已启用厂商的已启用模型，并将所选模型设为启动默认值。CCSW 启动独立的聚合代理，并写入 `model`、`model_catalog_json` 和专属 `model_providers.ccsw`。
+4. 首次接入后重启 Codex CLI。在同一会话中使用原生 `/model` 选择已登记模型，可跨厂商切换，无需再次重启；请求由代理转发到所选厂商。模型列表使用 `厂商ID::模型ID` 区分同名模型，并附带“厂商名 · 模型名”。
+5. 新增或修改模型后，再按 `p` 并重启 Codex CLI 加载新目录。Codex 的目录仅在启动时加载；禁用或删除模型后，代理立即拒绝新请求，但旧进程的列表可能仍显示它。
+
+CCSW 显示的是磁盘启动默认值，不代表运行中会话正在使用的模型。按 `p` 不会改变已有会话的选择；请在 Codex 中通过 `/model` 切换。ChatGPT 订阅账号继续独立管理，不会加入 API 模型列表；桌面端仍需在目标版本验证。
 
 支持 OpenAI Responses、Chat Completions 和 Anthropic 厂商。Responses 上游直接转发；另外两种格式转换文本、图片（取决于上游能力）、函数工具、命名空间工具、自定义编辑工具与流式输出。无法转换的内容返回明确错误，包括跨协议的加密推理历史、`previous_response_id` 和托管工具；转换型厂商默认关闭 Codex 托管网页搜索。远程 `/responses/compact` 只转发给 Responses 上游，其他上游需客户端本地压缩。
 
-应用时为所选厂商生成 `model_catalog_json`，登记自定义模型 ID，避免 Codex 提示模型元数据缺失。目录使用明确配置的上下文容量；未配置时暂用 128K，`[1m]` 使用 1M。默认只声明文本与基本工具能力，不假定第三方模型支持 Codex 托管工具或原生推理参数。切换订阅及断开管理时恢复原目录设置。
+应用时为所有已启用的 Codex API 模型生成 `model_catalog_json`，避免 Codex 提示模型元数据缺失。每个模型保留各自的上下文容量；未配置时暂用 128K，`[1m]` 使用 1M。不写入固定的全局上下文或压缩阈值覆盖，让 Codex 按当前模型的目录元数据处理。默认只声明文本与基本工具能力，不假定第三方模型支持 Codex 托管工具或原生推理参数；目录中包含 Chat Completions 或 Anthropic 厂商时关闭托管网页搜索。切换订阅及断开管理时恢复原目录设置。
 
-模型 ID 写入时移除 Claude 专用 `[1m]` 后缀。`Max output tokens` 在代理侧限制实际输出，`Context window` 写入 Codex 上下文设置，并将自动压缩阈值设为容量的 90%。推理强度仍需所选上游模型支持。
+发往上游时，代理去除厂商命名空间和 Claude 专用 `[1m]` 后缀，使用真实模型 ID。`Max output tokens` 在代理侧限制实际输出；`Context window` 写入每个模型的目录元数据。推理强度仍需所选上游模型支持；转为 Chat Completions 时，目录默认的 `none` 不作为 `reasoning_effort` 发送，而是使用上游默认行为，并不保证关闭上游推理。上游返回结构化错误时，代理显示参数和具体原因，并过滤本地及上游认证凭据。跨协议切换保留已有兼容性检查：无法转换的历史会明确报错，不会静默丢弃。
 
 ```sh
 ccsw codex apply --profile my-provider --model my-model --reasoning high
@@ -269,9 +273,27 @@ ccsw codex status
 ccsw codex disconnect
 ```
 
+可用本地模拟供应商验证真实 CLI 的 `/model` 切换（无 API 凭据，隔离配置，POSIX 环境）：
+
+```sh
+cargo build
+python3 tests/fixtures/codex_model_switch.py
+```
+
+该检查验证同一进程、同一会话跨供应商切换，保留对话历史，并确认新增模型需同步和重启后出现。可用 `CCSW_CODEX_BIN` 指定 Codex CLI。
+
 ### Codex 订阅账号
 
-Codex 的首页标题与 Claude Code 一致，显示 `CCSW Providers · F2 <下一个 Agent> · N providers`。提供商列表首项为 **ChatGPT Account**：单击选中，再次点击或按 Enter 进入账号页。首页选中 Account 后按 `p` / **Apply Codex** 直接应用已选账号；没有保存账号时提示先导入。账号列表中方向键或鼠标移动光标，空格选中账号，再按 `p` / **Apply Codex**，使用 ChatGPT 提供商；回到提供商列表选择 API 厂商并按 `p`，使用该厂商的地址和模型。两种模式只有一个当前选择，账号列表以 `[●]` 标记空格选中的账号，以 `[Applied]` 标记当前已应用账号。切换账号时不继承第三方模型目录和上下文参数。
+Codex 首页依次显示 **ChatGPT Account**、**All Models** 和 API 提供商。**All Models** 汇总所有已启用厂商的已启用模型；单击选中，再次点击或按 Enter 打开所属厂商，按 `p` 同步目录并设置选中模型为启动默认值。
+
+选中首页的 **ChatGPT Account**，按 **Space** 启用或禁用订阅配置，弹窗确认后生效（Enter / y 确认，Esc / n 取消，也可点击按钮）。首次启用前先 Enter 进入账号页，导入账号并用 Space 选中；之后会记住已使用的账号。
+
+- **启用订阅**：保存所有 API 厂商当前的启用状态，自动关闭它们并应用所选 ChatGPT 账号；TUI 标记订阅 Enabled、原先开启的厂商 Paused by ChatGPT，All Models 显示订阅的默认模型信息。
+- **关闭订阅**：恢复被自动关闭的厂商及其模型；原本手动关闭的厂商继续关闭。优先恢复先前使用的 API 模型；该模型已不可用时选择一个恢复启用的模型；没有可用 API 模型时断开 CCSW 管理并恢复原配置。
+- 切换订阅账号不会覆盖保存的 API 启用状态。订阅期间 API 厂商保持关闭；先禁用订阅再启用 API 厂商。新增厂商不会被自动恢复为开启。
+- 普通 API 厂商和模型的启用/禁用不弹窗；订阅的启用/禁用必须确认，包括通过 Apply 从 API 模式切入订阅。账号列表的 Space 仍仅选择账号，按 `p` 才应用。
+
+订阅与 API 模式之间切换后需重启 Codex。API 模式内已加载的模型仍可通过原生 `/model` 切换，无需重启。CLI 可用 `ccsw codex accounts disable` 关闭订阅并恢复 API 配置。
 
 账号页只提供导入与切换，不进行额度查询或浏览器登录：
 
@@ -421,7 +443,7 @@ ccsw proxy uninstall
 
 ### Provider 用量统计
 
-日期显示在 `‹ / ›` 之间。`1 day / 1 week / 1 month / All time` 分别统计所选日期当天、截至该日最近 7 天、最近 30 天和全部记录；快捷键为 `d / w / m / y`。摘要及各表格按所选范围汇总，累计列保留全部记录。All time 时日期切换禁用。
+日期显示在 `‹ / ›` 之间。`1 day / 1 week / 1 month / All time` 分别统计所选日期当天、截至该日最近 7 天、最近 30 天和全部记录；快捷键为 `d / w / m / y`。摘要以并排指标区突出所选范围和全部累计：调用数为主值，附带 tokens 与已完成请求成功率；各表格的累计列仍保留全部记录。All time 时日期切换禁用。
 
 点击 **Chart 5** 或按 `5` 查看时间用量柱状图，`Calls c / Tokens v` 切换调用次数和 tokens。1 day 按小时，其他范围按天；窗口较窄或数据较长时自动合并相邻时段，并标注每柱跨度，始终展示完整范围。无调用时段标记为 `0`，缺失 token 用量标记为 `?`。图表遵循当前客户端和 provider 筛选以及账本固定时区，旧记录也可按小时查看。Usage 按钮统一使用对称内边距和固定间隔，窄屏自动压缩。
 
@@ -563,7 +585,7 @@ Anthropic 转发保留原生 Tool Search 内容。OpenAI Chat / Responses 使用
 
 ### 模型最小测试
 
-在模型详情页点击 **F5 Test model**，或按 **F5**，向所选模型所属的 Provider 发送一次简短的 `Reply OK.` 请求。支持 Anthropic、OpenAI Chat 和 Responses，最多请求 64 个输出 token，30 秒超时。收到实际模型输出（包括推理输出）即通过，不要求必须回复 OK。状态栏显示模型名称、响应耗时或失败原因；HTTP 成功但没有输出不会被判定为通过。
+在模型详情页点击 **F5 Test model**，或按 **F5**，向所选模型所属的 Provider 发送一次简短的 `Reply OK.` 请求。支持 Anthropic、OpenAI Chat 和 Responses，最多请求 64 个输出 token，30 秒超时。收到实际模型输出（包括推理输出）即通过，不要求必须回复 OK。状态栏显示模型名称、响应耗时或失败原因；HTTP 成功但没有输出不会被判定为通过。此测试仅验证基础文本推理，不覆盖 Codex 的工具调用、流式响应、推理参数或已有对话兼容性。
 
 测试在后台执行，不改变模型选择、Provider 配置或同步状态；测试的是上游模型响应，不依赖本地转发是否启动。环境变量配置继续从底部 **Settings** 或 **F4** 进入，主页面右上角不再单独放置入口。
 

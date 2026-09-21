@@ -71,6 +71,78 @@ fn auth(subject: &str, workspace: &str, refresh: &str) -> Value {
     let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
     json!({"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":format!("e30.{payload}.sig"),"access_token":"test-access-secret","refresh_token":refresh,"account_id":workspace},"last_refresh":"2026-01-01T00:00:00Z"})
 }
+
+#[test]
+fn subscription_pauses_and_restores_only_previously_enabled_providers() {
+    let s = Sandbox::new();
+    let path = s.root.path().join("config.toml");
+    let aid = s.add("A", &auth("a", "workspace", "refresh-a"));
+    let bid = s.add("B", &auth("b", "workspace", "refresh-b"));
+    let mut config: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut disabled = config["codex"]["profiles"]["local"].clone();
+    disabled
+        .as_table_mut()
+        .unwrap()
+        .insert("enabled".into(), toml::Value::Boolean(false));
+    config["codex"]["profiles"]
+        .as_table_mut()
+        .unwrap()
+        .insert("disabled".into(), disabled);
+    fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    s.ok(&["proxy", "start", "--listen", &address]);
+    struct Stop<'a>(&'a Sandbox);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.command(&["proxy", "stop"]);
+        }
+    }
+    let _stop = Stop(&s);
+    let read = || -> toml::Value { toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap() };
+    s.ok(&["codex", "apply", "--profile", "local"]);
+    let before = read();
+    s.ok(&["codex", "accounts", "use", &aid]);
+    let enabled = read();
+    assert_eq!(
+        enabled["codex"]["profiles"]["local"]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        enabled["codex"]["suspended_providers"]["local"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        enabled["codex"]["suspended_providers"]["disabled"].as_bool(),
+        Some(false)
+    );
+    // Switching accounts must not replace the original API snapshot with all-false flags.
+    s.ok(&["codex", "accounts", "use", &bid]);
+    assert_eq!(
+        read()["codex"]["suspended_providers"],
+        enabled["codex"]["suspended_providers"]
+    );
+    s.ok(&["codex", "accounts", "disable"]);
+    let restored = read();
+    assert_eq!(restored["codex"]["profiles"], before["codex"]["profiles"]);
+    assert_eq!(restored["profiles"], before["profiles"]);
+    assert_eq!(
+        restored["codex"]["active"]["profile"].as_str(),
+        Some("local")
+    );
+    assert!(restored["codex"].get("suspended_providers").is_none());
+    // A second cycle and a failed activation must not lose the saved state.
+    assert!(
+        !s.command(&["codex", "accounts", "use", "missing"])
+            .status
+            .success()
+    );
+    assert_eq!(read(), restored);
+    s.ok(&["codex", "accounts", "use", &aid]);
+    s.ok(&["codex", "disconnect"]);
+    assert_eq!(read()["codex"]["profiles"], before["codex"]["profiles"]);
+}
 #[test]
 fn account_switches_preserve_latest_tokens_and_external_configuration() {
     let s = Sandbox::new();
@@ -191,7 +263,7 @@ fn api_and_subscription_modes_restore_models_without_touching_claude() {
     ]);
     let api: toml::Value =
         toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
-    assert_eq!(api["model"].as_str(), Some("test-model"));
+    assert_eq!(api["model"].as_str(), Some("local::test-model"));
     assert_eq!(api["model_provider"].as_str(), Some("ccsw"));
     assert!(
         api["model_providers"]["ccsw"]["base_url"]
@@ -208,7 +280,7 @@ fn api_and_subscription_modes_restore_models_without_touching_claude() {
     fs::write(&path, changed.to_string()).unwrap();
     s.ok(&["codex", "apply", "--profile", "local"]);
     let reapplied: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(reapplied["model"].as_str(), Some("test-model"));
+    assert_eq!(reapplied["model"].as_str(), Some("local::test-model"));
 
     s.ok(&["codex", "accounts", "use", &aid]);
     let sub: toml::Value =
@@ -357,12 +429,12 @@ fn codex_api_uses_its_own_catalog_and_restores_metadata_on_subscription() {
         s.ok(&["codex", "apply", "--profile", "local"]);
         let applied: toml::Value =
             toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
-        assert_eq!(applied["model"].as_str(), Some("deepseek-v4-flash"));
+        assert_eq!(applied["model"].as_str(), Some("local::deepseek-v4-flash"));
         let catalog: Value = serde_json::from_slice(
             &fs::read(applied["model_catalog_json"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(catalog["models"][0]["slug"], "deepseek-v4-flash");
+        assert_eq!(catalog["models"][0]["slug"], "local::deepseek-v4-flash");
         assert!(!catalog.to_string().contains("claude-only"));
         s.ok(&["codex", "accounts", "use", &aid]);
         let restored: toml::Value =
@@ -374,6 +446,112 @@ fn codex_api_uses_its_own_catalog_and_restores_metadata_on_subscription() {
     });
     s.ok(&["proxy", "stop"]);
     result.unwrap();
+}
+
+#[test]
+fn aggregate_catalog_uses_distinct_models_and_live_enabled_state() {
+    let s = Sandbox::new();
+    let path = s.root.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"version=5
+[codex.profiles.alpha]
+name='Alpha'
+base_url='https://alpha.invalid'
+api_format='openai-responses'
+default_model='shared[1m]'
+disabled_models=['hidden']
+[[codex.profiles.alpha.models]]
+id='hidden'
+[codex.profiles.beta]
+name='Beta'
+base_url='https://beta.invalid'
+api_format='openai-chat'
+default_model='shared'
+[[codex.profiles.beta.models]]
+id='shared'
+context_window=64000
+[codex.profiles.off]
+name='Disabled'
+enabled=false
+base_url='https://off.invalid'
+default_model='off'
+"#,
+    )
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    s.ok(&["proxy", "start", "--listen", &address]);
+    struct Stop<'a>(&'a Sandbox);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.command(&["proxy", "stop"]);
+        }
+    }
+    let _stop = Stop(&s);
+    let read = || -> toml::Value {
+        toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap()
+    };
+    s.ok(&["codex", "apply", "--profile", "alpha"]);
+    let initial = read();
+    assert_eq!(initial["model"].as_str(), Some("alpha::shared"));
+    assert!(initial.get("model_context_window").is_none());
+    assert!(initial.get("model_auto_compact_token_limit").is_none());
+    assert_eq!(initial["web_search"].as_str(), Some("disabled"));
+    let catalog: Value =
+        serde_json::from_slice(&fs::read(initial["model_catalog_json"].as_str().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+    assert_eq!(catalog["models"][0]["slug"], "alpha::shared");
+    assert_eq!(catalog["models"][0]["context_window"], 1_000_000);
+    assert_eq!(catalog["models"][1]["slug"], "beta::shared");
+    assert_eq!(catalog["models"][1]["display_name"], "Beta · shared");
+    assert_eq!(catalog["models"][1]["context_window"], 64_000);
+    s.ok(&["codex", "apply", "--profile", "beta"]);
+    let updated = read();
+    assert_eq!(updated["model"].as_str(), Some("beta::shared"));
+    assert_eq!(initial["model_providers"], updated["model_providers"]);
+    assert_eq!(initial["model_catalog_json"], updated["model_catalog_json"]);
+
+    let provider = &updated["model_providers"]["ccsw"];
+    let url = provider["base_url"].as_str().unwrap();
+    let token = provider["experimental_bearer_token"].as_str().unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap();
+    let visible = || -> Value {
+        client
+            .get(format!("{url}/models"))
+            .bearer_auth(token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    assert_eq!(visible()["data"].as_array().unwrap().len(), 2);
+    // No apply or daemon restart: stale catalogs cannot bypass current enablement.
+    let config = fs::read_to_string(&path).unwrap().replace(
+        "name = \"Beta\"",
+        "name = \"Beta\"\ndisabled_models = [\"shared\"]",
+    );
+    fs::write(&path, config).unwrap();
+    assert_eq!(visible()["data"].as_array().unwrap().len(), 1);
+    let rejected = client
+        .post(format!("{url}/responses"))
+        .bearer_auth(token)
+        .json(&json!({"model":"beta::shared","input":[]}))
+        .send()
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+    assert!(rejected.text().unwrap().contains("disabled"));
+    assert!(
+        !s.command(&["codex", "apply", "--profile", "off"])
+            .status
+            .success()
+    );
+    assert_eq!(read()["model"], updated["model"]);
 }
 
 #[test]

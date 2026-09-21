@@ -332,8 +332,9 @@ impl App {
                     match result {
                         Ok(ms) => {
                             self.status_error = false;
-                            self.status =
-                                format!("Model test passed · {name} responded in {ms} ms");
+                            self.status = format!(
+                                "Basic text test passed · {name} · {ms} ms · tools/streaming not tested"
+                            );
                         }
                         Err(error) => {
                             self.set_error(format!("Model test failed · {name}: {error:#}"))
