@@ -12,15 +12,15 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.8。新增 provider 模板、模型选择与角色转发映射，并改进上游兼容性和键盘导航。
+> 本文对应 v0.1.13。新增 Herdr Pulse 常驻用量监控，展示请求健康度、缓存命中率和输出速度；Release 提供 macOS、Linux 与 Windows x64 版本。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
 ### 下载 Release
 
-当前 v0.1.8 Release 提供 macOS Apple Silicon 与 Linux x86_64 二进制。Windows 二进制暂不随本次 Release 构建，可从源码安装。
+v0.1.13 Release 提供 macOS Apple Silicon、Linux x86_64 和 Windows x64 安装包。Windows ZIP 附带 SHA-256 校验文件。
 
 ```sh
 # macOS Apple Silicon
@@ -33,15 +33,20 @@ chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
 ```
 
-### Windows（从源码安装）
+### Windows（x64 ZIP）
 
 ```powershell
-git clone https://github.com/Sunmedalia/ccsw.git
-cd ccsw
-cargo install --path .
+$release = 'https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip'
+Invoke-WebRequest "$release" -OutFile '.\ccsw-windows-x86_64.zip'
+Invoke-WebRequest "${release}.sha256" -OutFile '.\ccsw-windows-x86_64.zip.sha256'
+$expected = ((Get-Content '.\ccsw-windows-x86_64.zip.sha256' -Raw) -split '\s+')[0]
+$actual = (Get-FileHash '.\ccsw-windows-x86_64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA-256 校验失败' }
+Expand-Archive '.\ccsw-windows-x86_64.zip' "$env:LOCALAPPDATA\Programs\ccsw" -Force
+& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe" --version
 ```
 
-Windows 二进制构建将在后续 Release 恢复；Windows 配置路径仍为 `%APPDATA%\ccsw\config.toml`。
+无需管理员权限；CCSW 不需要 Node、Git Bash 或单独安装 Visual C++ 运行库。完整安装、更新和环境变量说明见 [Windows 使用说明](README-Windows.md)。
 
 配置默认位于 `%APPDATA%\ccsw\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\ccsw\state`、`cache`；`CCSW_CONFIG` 和 XDG 路径覆盖仍然有效。Claude 设置默认使用 `%USERPROFILE%\.claude\settings.json`，优先遵循 `CLAUDE_CONFIG_DIR`。
 
@@ -467,6 +472,44 @@ Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当
 
 为防止误删，卸载拒绝 HOME 外的自定义路径、符号链接、Windows reparse point、Unix 硬链接、跨用户文件、共享状态、损坏的配置和无法确认归属的自启项。此时会报错并要求先处理这些路径，不会扩大删除范围。`--yes` 不会绕过这些检查。旧版代理若不支持认证停止接口，需要先用旧版 `ccsw proxy stop` 停止。自启管理器失败或运行中的代理无法停止时保留配置；中途磁盘 I/O 失败会明确报告未完成，可修复后重试。
 
+## Herdr Pulse 常驻监控
+
+Herdr Pulse 是 CCSW 的独立只读用量面板，不会替换 CCSW 主 TUI。显示今日 Token 和请求数、成功率、24 小时趋势、缓存命中率、输出速度及服务商/模型调用明细；快捷键可在 Claude、Codex 和 All 统计间切换。插件目前支持 macOS / Linux，需要 Herdr 0.7.0 或更新版本。
+
+### 安装插件
+
+在 Herdr 中执行以下命令安装 v0.1.13 插件（插件会从该 Release tag 获取，并构建所需的 CCSW 二进制）：
+
+```sh
+herdr plugin install Sunmedalia/ccsw --ref v0.1.13
+```
+
+将快捷键配置合并到 Herdr 的 `config.toml` 中；若已有 `prefix+u` 绑定，请替换原绑定，避免冲突：
+
+```toml
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "ccsw.open"
+description = "Toggle CCSW Pulse usage monitor"
+```
+
+保存后重新加载 Herdr 配置，并确认插件已安装：
+
+```sh
+herdr server reload-config
+herdr plugin list
+```
+
+在 Claude Code pane 按 **Ctrl+B，再按 u**，会在当前标签页打开右侧常驻面板；在 Codex pane 触发时默认显示 Codex 用量，未识别 agent 时显示 All。再次按下会关闭面板。`e` / `↗ Edit` 会新开标签页并切换到完整 CCSW 编辑器；`d` 展开模型明细，`r` 刷新，`q` 关闭。监控面板统计经过本地 CCSW 网关的流量，不代表 Claude 会话用量或订阅剩余额度；直连 API 和订阅流量不计入。
+
+若要从本地 CCSW 源码目录链接开发版，进入含 `herdr-plugin.toml` 的仓库目录后执行：
+
+```sh
+cargo build --release --bin ccsw
+herdr plugin link --enabled "$PWD"
+```
+
 ## 开发
 
 ```sh
@@ -476,7 +519,7 @@ cargo test --locked --all-targets
 cargo build --locked --release
 ```
 
-CI 在 Pull Request、版本标签推送或手动触发时运行：在 Ubuntu 与 macOS 上执行检查并生成对应平台二进制，同时执行依赖安全审计和 Docker 安全回归。Windows Release 构建暂时停用。版本标签通过全部发布门禁后生成 Release；普通 main 推送不会自动运行当前工作流。
+CI 在 main/dev 分支推送、Pull Request、版本标签推送或手动触发时运行：Ubuntu、macOS 与 Windows 均执行测试，Windows 另验证 MSRV、启动器与 ZIP 包。版本标签通过测试、依赖安全审计、卸载安全回归和各平台构建后自动发布 Release，包含 Windows x64 ZIP 及 SHA-256 校验文件。
 
 Codex 的自动测试使用隔离 HOME、模拟登录凭据和本地上游，不读取真实账号。可另行安装 Codex CLI 后运行真实进程冒烟测试（无 API 调用费用）：
 
