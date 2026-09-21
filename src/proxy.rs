@@ -688,6 +688,7 @@ struct ServerState {
     shutdown: std::sync::Arc<tokio::sync::Notify>,
     registry: PathBuf,
     client: Client,
+    usage: crate::usage::Writer,
 }
 
 pub async fn serve(registry_path: PathBuf) -> Result<()> {
@@ -707,7 +708,12 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     singleton
         .try_lock_exclusive()
         .context("another CCSW proxy is already running")?;
-    if crate::usage::recover(&registry_path.with_file_name(crate::usage::FILE)).is_err() {
+    let usage = crate::usage::Writer::new(registry_path.with_file_name(crate::usage::FILE));
+    let recovery = usage.clone();
+    if tokio::task::spawn_blocking(move || recovery.recover())
+        .await?
+        .is_err()
+    {
         eprintln!("CCSW usage: database unavailable; request statistics may be incomplete");
     }
     let registry = load_registry(&proxy_paths)?;
@@ -725,6 +731,7 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
         sessions: Default::default(),
         shutdown: shutdown.clone(),
         registry: registry_path,
+        usage,
         client: Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()?,
@@ -766,7 +773,7 @@ async fn shutdown_signal() {
 }
 
 async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Response {
-    let registry = match registry_from_path(&state.registry) {
+    let registry = match read_registry(&state.registry).await {
         Ok(registry) => registry,
         Err(error) => return anthropic_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
@@ -796,12 +803,17 @@ fn registry_from_path(path: &Path) -> Result<Registry> {
         .with_context(|| format!("failed to load proxy registry {}", path.display()))
 }
 
-fn authenticated_target(
+async fn read_registry(path: &Path) -> Result<Registry> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || registry_from_path(&path)).await?
+}
+
+async fn authenticated_target(
     state: &ServerState,
     route: &str,
     headers: &HeaderMap,
 ) -> Result<(RouteTarget, Registry)> {
-    let registry = registry_from_path(&state.registry)?;
+    let registry = read_registry(&state.registry).await?;
     let expected = format!("Bearer {}", registry.local_token);
     let actual = headers
         .get(header::AUTHORIZATION)
@@ -877,18 +889,35 @@ fn role_target<'a>(
     })
 }
 
-fn resolve_profile(
+async fn route_config(target: &RouteTarget) -> Result<config::Config> {
+    let path = target.config_path.clone();
+    let codex = target.codex;
+    tokio::task::spawn_blocking(move || {
+        config::load_client(
+            &path,
+            if codex {
+                config::Client::Codex
+            } else {
+                config::Client::Claude
+            },
+        )
+    })
+    .await?
+}
+
+async fn resolve_profile(
     target: &RouteTarget,
     requested_model: Option<&str>,
 ) -> Result<(Profile, String, String)> {
-    let config = config::load_client(
-        &target.config_path,
-        if target.codex {
-            config::Client::Codex
-        } else {
-            config::Client::Claude
-        },
-    )?;
+    let config = route_config(target).await?;
+    resolve_profile_from_config(target, &config, requested_model)
+}
+
+fn resolve_profile_from_config(
+    target: &RouteTarget,
+    config: &config::Config,
+    requested_model: Option<&str>,
+) -> Result<(Profile, String, String)> {
     let (profile_id, model_id) = if let Some(profile_id) = &target.profile_id {
         (profile_id.as_str(), requested_model.unwrap_or_default())
     } else {
@@ -904,7 +933,7 @@ fn resolve_profile(
                     .find(|(exposed, _)| strip_1m(exposed) == canonical)
                     .map(|(_, mapped)| mapped)
             })
-            .or_else(|| role_target(target, &config, requested))
+            .or_else(|| role_target(target, config, requested))
             .with_context(|| format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p"))?;
         (mapped.profile_id.as_str(), mapped.model_id.as_str())
     };
@@ -954,6 +983,7 @@ impl SessionProviders {
         &mut self,
         route: &str,
         target: &RouteTarget,
+        config: &config::Config,
         body: &Value,
         remember: bool,
     ) -> Result<(Profile, String, String)> {
@@ -967,7 +997,7 @@ impl SessionProviders {
             *used = now;
         }
         let requested = body.get("model").and_then(Value::as_str);
-        let resolved = resolve_profile(&effective, requested)?;
+        let resolved = resolve_profile_from_config(&effective, config, requested)?;
         if remember
             && !target.codex
             && target.profile_id.is_none()
@@ -996,15 +1026,25 @@ impl SessionProviders {
     }
 }
 
-fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
-    let config = config::load_client(
-        &target.config_path,
-        if target.codex {
-            config::Client::Codex
-        } else {
-            config::Client::Claude
-        },
-    )?;
+// Read a fresh configuration before taking the session lock. Only in-memory
+// selection and session updates are serialized; disk IO cannot block sessions.
+async fn resolve_request(
+    state: &ServerState,
+    route: &str,
+    target: &RouteTarget,
+    body: &Value,
+    remember: bool,
+) -> Result<(Profile, String, String)> {
+    let config = route_config(target).await?;
+    state
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .resolve(route, target, &config, body, remember)
+}
+
+async fn visible_route_models(target: &RouteTarget) -> Result<Vec<String>> {
+    let config = route_config(target).await?;
     let active: BTreeMap<_, std::collections::BTreeSet<String>> = config
         .profiles
         .iter()
@@ -1041,9 +1081,9 @@ async fn models(
     AxumPath(route): AxumPath<String>,
     headers: HeaderMap,
 ) -> Response {
-    match authenticated_target(&state, &route, &headers) {
+    match authenticated_target(&state, &route, &headers).await {
         Ok((target, _)) => {
-            let ids = match visible_route_models(&target) {
+            let ids = match visible_route_models(&target).await {
                 Ok(ids) => ids,
                 Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
             };
@@ -1062,16 +1102,12 @@ async fn count_tokens(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let target = match authenticated_target(&state, &route, &headers) {
+    let target = match authenticated_target(&state, &route, &headers).await {
         Ok((target, _)) => target,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
     if target.profile_id.is_none()
-        && let Err(error) = state
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .resolve(&route, &target, &body, false)
+        && let Err(error) = resolve_request(&state, &route, &target, &body, false).await
     {
         return anthropic_error(StatusCode::BAD_REQUEST, error);
     }
@@ -1087,19 +1123,15 @@ async fn messages(
     headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
-    let (target, _) = match authenticated_target(&state, &route, &headers) {
+    let (target, _) = match authenticated_target(&state, &route, &headers).await {
         Ok(value) => value,
         Err(error) => return anthropic_error(StatusCode::UNAUTHORIZED, error),
     };
-    let (profile, upstream_model, profile_id) = match state
-        .sessions
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .resolve(&route, &target, &body, true)
-    {
-        Ok(value) => value,
-        Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
-    };
+    let (profile, upstream_model, profile_id) =
+        match resolve_request(&state, &route, &target, &body, true).await {
+            Ok(value) => value,
+            Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
+        };
     if target.profile_id.is_none() {
         body["model"] = Value::String(strip_1m(&upstream_model).to_owned());
     }
@@ -2345,8 +2377,8 @@ mod tests {
         assert!(!super::health_matches_build(&old));
     }
 
-    #[test]
-    fn roles_follow_models_per_session_and_never_cross_routes() {
+    #[tokio::test]
+    async fn roles_follow_models_per_session_and_never_cross_routes() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         config::update(&path, |config| {
@@ -2380,52 +2412,64 @@ mod tests {
         let body = |session: &str, model: &str| json!({"model":model,"metadata":{"user_id":json!({"session_id":session}).to_string()}});
         let mut sessions = SessionProviders::default();
         sessions
-            .resolve("route", &target, &body(&first, "b::x"), true)
+            .resolve("route", &target, &config, &body(&first, "b::x"), true)
             .unwrap();
         assert_eq!(
             sessions
-                .resolve("route", &target, &body(&first, "ccsw-role::sonnet"), true)
+                .resolve(
+                    "route",
+                    &target,
+                    &config,
+                    &body(&first, "ccsw-role::sonnet"),
+                    true
+                )
                 .unwrap()
                 .1,
             "b-sonnet"
         );
         assert_eq!(
             sessions
-                .resolve("route", &target, &body(&second, "ccsw-role::opus"), true)
+                .resolve(
+                    "route",
+                    &target,
+                    &config,
+                    &body(&second, "ccsw-role::opus"),
+                    true
+                )
                 .unwrap()
                 .1,
             "a-opus"
         );
         assert_eq!(
             sessions
-                .resolve("other", &target, &body(&first, "sonnet5"), true)
+                .resolve("other", &target, &config, &body(&first, "sonnet5"), true)
                 .unwrap()
                 .1,
             "a-sonnet"
         );
         sessions
-            .resolve("route", &target, &body(&first, "a::x"), false)
+            .resolve("route", &target, &config, &body(&first, "a::x"), false)
             .unwrap();
         assert_eq!(
             sessions
-                .resolve("route", &target, &body(&first, "opus"), true)
+                .resolve("route", &target, &config, &body(&first, "opus"), true)
                 .unwrap()
                 .1,
             "b-opus"
         );
         sessions
-            .resolve("route", &target, &body(&first, "a::x"), true)
+            .resolve("route", &target, &config, &body(&first, "a::x"), true)
             .unwrap();
         assert_eq!(
             sessions
-                .resolve("route", &target, &body(&first, "opus"), true)
+                .resolve("route", &target, &config, &body(&first, "opus"), true)
                 .unwrap()
                 .1,
             "a-opus"
         );
         assert_eq!(
             sessions
-                .resolve("route", &target, &json!({"model":"sonnet"}), true)
+                .resolve("route", &target, &config, &json!({"model":"sonnet"}), true)
                 .unwrap()
                 .1,
             "a-sonnet"
@@ -2434,9 +2478,33 @@ mod tests {
             request_session(
                 &json!({"metadata":{"user_id":format!("user_test_account_test_session_{first}")}})
             ),
-            Some(first)
+            Some(first.clone())
         );
         assert!(request_session(&json!({"metadata":{"user_id":"shared-user"}})).is_none());
+        let state = ServerState {
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(sessions)),
+            shutdown: Default::default(),
+            registry: temp.path().join("proxy.json"),
+            client: Client::new(),
+            usage: crate::usage::Writer::new(temp.path().join(crate::usage::FILE)),
+        };
+        assert_eq!(
+            resolve_request(&state, "route", &target, &body(&first, "opus"), true)
+                .await
+                .unwrap()
+                .1,
+            "a-opus"
+        );
+        config::update(&path, |config| {
+            config.profiles.get_mut("a").unwrap().enabled = false;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            resolve_request(&state, "route", &target, &body(&first, "opus"), true)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -2510,8 +2578,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn role_routes_respect_exact_matches_and_live_model_state() {
+    #[tokio::test]
+    async fn role_routes_respect_exact_matches_and_live_model_state() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         config::update(&path, |config| {
@@ -2537,13 +2605,23 @@ mod tests {
                 })
                 .collect(),
         };
-        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "a");
         assert_eq!(
-            resolve_profile(&target, Some("claude-opus-4-6")).unwrap().1,
+            resolve_profile(&target, Some("sonnet5")).await.unwrap().1,
+            "a"
+        );
+        assert_eq!(
+            resolve_profile(&target, Some("claude-opus-4-6"))
+                .await
+                .unwrap()
+                .1,
             "b"
         );
-        assert!(resolve_profile(&target, Some("haiku")).is_err());
-        assert!(resolve_profile(&target, Some("other::sonnet5")).is_err());
+        assert!(resolve_profile(&target, Some("haiku")).await.is_err());
+        assert!(
+            resolve_profile(&target, Some("other::sonnet5"))
+                .await
+                .is_err()
+        );
         target.models.insert(
             "sonnet5".into(),
             AggregateModelTarget {
@@ -2551,7 +2629,10 @@ mod tests {
                 model_id: "b".into(),
             },
         );
-        assert_eq!(resolve_profile(&target, Some("sonnet5")).unwrap().1, "b");
+        assert_eq!(
+            resolve_profile(&target, Some("sonnet5")).await.unwrap().1,
+            "b"
+        );
         config::update(&path, |config| {
             config
                 .profiles
@@ -2562,12 +2643,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("sonnet")).is_err());
+        assert!(resolve_profile(&target, Some("sonnet")).await.is_err());
         target.default_profile_id = None;
-        assert!(resolve_profile(&target, Some("opus")).is_err());
+        assert!(resolve_profile(&target, Some("opus")).await.is_err());
         target.default_profile_id = Some("one".into());
         target.models.clear();
-        assert!(resolve_profile(&target, Some("opus")).is_err());
+        assert!(resolve_profile(&target, Some("opus")).await.is_err());
     }
 
     #[test]
@@ -3190,8 +3271,8 @@ mod tests {
         server.abort();
         upstream_task.join().unwrap();
     }
-    #[test]
-    fn stale_registry_cannot_expose_or_resolve_disabled_models() {
+    #[tokio::test]
+    async fn stale_registry_cannot_expose_or_resolve_disabled_models() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         fs::write(
@@ -3223,7 +3304,7 @@ enabled_models = ["b"]
                 })
                 .collect(),
         };
-        assert_eq!(visible_route_models(&target).unwrap().len(), 2);
+        assert_eq!(visible_route_models(&target).await.unwrap().len(), 2);
         config::update(&path, |config| {
             let profile = config.profiles.get_mut("one").unwrap();
             profile.enabled_models.clear();
@@ -3231,15 +3312,15 @@ enabled_models = ["b"]
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("one::b")).is_err());
-        assert_eq!(visible_route_models(&target).unwrap(), ["one::a"]);
+        assert!(resolve_profile(&target, Some("one::b")).await.is_err());
+        assert_eq!(visible_route_models(&target).await.unwrap(), ["one::a"]);
         config::update(&path, |config| {
             config.profiles.get_mut("one").unwrap().enabled = false;
             Ok(())
         })
         .unwrap();
-        assert!(resolve_profile(&target, Some("one::a")).is_err());
-        assert!(visible_route_models(&target).unwrap().is_empty());
+        assert!(resolve_profile(&target, Some("one::a")).await.is_err());
+        assert!(visible_route_models(&target).await.unwrap().is_empty());
     }
     #[test]
     fn port_configuration_checks_availability_and_preserves_registry_on_failure() {

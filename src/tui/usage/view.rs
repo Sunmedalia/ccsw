@@ -583,6 +583,15 @@ impl App {
             })
             .unwrap_or_else(|| "All providers".into());
         frame.render_widget(panel(&format!(" Usage · {scope} "), true), area);
+        if self.usage.query.is_some() && self.usage.updated.is_none() {
+            frame.render_widget(
+                Paragraph::new("Loading usage…").style(Style::default().fg(MUTED)),
+                a.summary,
+            );
+            page.limit.set(0);
+            page.table_area.set(Rect::default());
+            return;
+        }
         let daily = page.range_total(
             snapshot,
             page.client(),

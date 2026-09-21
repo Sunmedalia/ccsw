@@ -9,11 +9,17 @@ pub(super) fn page_area(screen: Rect) -> Rect {
         screen.height.saturating_sub(1),
     )
 }
-use crate::usage::{Snapshot, Totals};
+use crate::usage::{Query, Reader, Snapshot, Totals};
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+
+struct UsageRead {
+    reader: Reader,
+    query: Query,
+    result: Result<Option<Snapshot>, String>,
+}
 
 #[derive(Default)]
 pub(super) struct UsageUi {
@@ -21,7 +27,9 @@ pub(super) struct UsageUi {
     pub page: Option<UsagePage>,
     pub snapshot: Snapshot,
     pub updated: Option<Instant>,
-    receiver: Option<mpsc::Receiver<Result<Snapshot, String>>>,
+    receiver: Option<mpsc::Receiver<UsageRead>>,
+    reader: Option<Reader>,
+    query: Option<Query>,
     error: Option<String>,
 }
 
@@ -154,26 +162,66 @@ impl UsagePage {
 }
 
 impl App {
+    fn usage_query(&self) -> Query {
+        if self.usage.active
+            && let Some(page) = &self.usage.page
+        {
+            match page.start_day() {
+                Some(start) => Query::Range {
+                    start,
+                    end: page.day.clone(),
+                },
+                None => Query::All,
+            }
+        } else {
+            Query::Summary
+        }
+    }
+
+    fn accept_usage(&mut self, query: Query, result: Result<Option<Snapshot>, String>) -> bool {
+        // A date/range switch can happen while the old reader is still working.
+        if self.usage.query.as_ref() != Some(&query) {
+            return false;
+        }
+        // A fast A → B → A switch may return "unchanged" for a snapshot
+        // cleared during B. Ask a fresh reader rather than displaying zeros.
+        if matches!(result, Ok(None)) && self.usage.updated.is_none() {
+            self.usage.reader = None;
+            return false;
+        }
+        match result {
+            Ok(snapshot) => {
+                if let Some(snapshot) = snapshot {
+                    self.usage.snapshot = snapshot;
+                }
+                self.usage.error = None;
+            }
+            Err(error) => self.usage.error = Some(error),
+        }
+        self.usage.updated = Some(Instant::now());
+        true
+    }
+
     pub(super) fn poll_usage(&mut self) -> bool {
-        let mut changed = false;
+        if let Some(page) = &mut self.usage.page
+            && page.follow_today
+        {
+            page.day = self.usage.snapshot.today();
+        }
+        let query = self.usage_query();
+        let mut changed = self.usage.query.as_ref() != Some(&query);
+        if changed {
+            self.usage.query = Some(query.clone());
+            self.usage.snapshot.rows.clear();
+            self.usage.updated = None;
+            self.usage.error = None;
+        }
         if let Some(receiver) = &self.usage.receiver {
             match receiver.try_recv() {
-                Ok(result) => {
-                    match result {
-                        Ok(snapshot) => {
-                            if let Some(page) = &mut self.usage.page
-                                && page.follow_today
-                            {
-                                page.day = snapshot.today();
-                            }
-                            self.usage.snapshot = snapshot;
-                            self.usage.error = None;
-                        }
-                        Err(error) => self.usage.error = Some(error),
-                    }
+                Ok(completed) => {
                     self.usage.receiver = None;
-                    self.usage.updated = Some(Instant::now());
-                    changed = true;
+                    self.usage.reader = Some(completed.reader);
+                    changed |= self.accept_usage(completed.query, completed.result);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.usage.receiver = None;
@@ -193,10 +241,20 @@ impl App {
             let (sender, receiver) = mpsc::channel();
             let path = self.paths.state_dir.join(crate::usage::FILE);
             let config = self.paths.config.clone();
+            let mut reader = self
+                .usage
+                .reader
+                .take()
+                .unwrap_or_else(|| Reader::new(path, config));
             std::thread::spawn(move || {
-                let _ = sender.send(crate::usage::snapshot(&path, &config).map_err(|_| {
+                let result = reader.read(&query).map_err(|_| {
                     "Usage database unavailable; check permissions or disk space".into()
-                }));
+                });
+                let _ = sender.send(UsageRead {
+                    reader,
+                    query,
+                    result,
+                });
             });
             self.usage.receiver = Some(receiver);
         }
@@ -287,5 +345,41 @@ impl App {
         } else {
             format!("{} today / {} total · F6", daily.calls, total.calls)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_switches_reject_old_results_and_refresh_immediately() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        assert_eq!(app.usage_query(), Query::Summary);
+        app.open_usage();
+        let daily = app.usage_query();
+        assert!(matches!(daily, Query::Range { .. }));
+        app.usage.page.as_mut().unwrap().range = 3;
+        let all = app.usage_query();
+        assert_eq!(all, Query::All);
+        app.usage.query = Some(all.clone());
+        assert!(!app.accept_usage(daily, Err("stale error".into())));
+        assert!(app.usage.error.is_none());
+        assert!(app.usage.updated.is_none());
+        assert!(app.accept_usage(all, Ok(Some(Snapshot::default()))));
+        assert!(app.usage.updated.is_some());
+        app.usage.active = false;
+        assert_eq!(app.usage_query(), Query::Summary);
+        assert!(app.poll_usage());
+        assert!(app.usage.updated.is_none());
+        assert!(app.usage.receiver.is_some());
+    }
+    #[test]
+    fn unchanged_result_cannot_reuse_a_cleared_snapshot() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        app.usage.query = Some(Query::Summary);
+        assert!(!app.accept_usage(Query::Summary, Ok(None)));
+        assert!(app.usage.updated.is_none());
+        assert!(app.usage.reader.is_none());
     }
 }

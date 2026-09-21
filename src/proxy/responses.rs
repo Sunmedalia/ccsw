@@ -32,7 +32,7 @@ async fn serve(
     mut body: Value,
     compact: bool,
 ) -> Response {
-    let (target, _) = match authenticated_target(&state, &route, &headers) {
+    let (target, _) = match authenticated_target(&state, &route, &headers).await {
         Ok(v) => v,
         Err(_) => {
             return error(
@@ -51,7 +51,8 @@ async fn serve(
     {
         return error(StatusCode::BAD_REQUEST, "A configured model is required");
     }
-    let (profile, model, profile_id) = match resolve_profile(&target, body["model"].as_str()) {
+    let (profile, model, profile_id) = match resolve_profile(&target, body["model"].as_str()).await
+    {
         Ok(v) => v,
         Err(e) => return error(StatusCode::BAD_REQUEST, e),
     };
@@ -950,6 +951,7 @@ mod tests {
             let state = ServerState {
                 sessions: Default::default(),
                 shutdown: Default::default(),
+                usage: crate::usage::Writer::new(registry.with_file_name(crate::usage::FILE)),
                 registry,
                 client: Client::new(),
             };

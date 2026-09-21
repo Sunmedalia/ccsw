@@ -493,11 +493,14 @@ Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当
 ```sh
 cargo fmt -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 cargo build --locked --release
+
+# 可选：十万/百万条统计记录的查询与无变化刷新基准（使用临时数据库）
+cargo test --locked --bin ccsw large_ledger_query_benchmark -- --ignored --nocapture
 ```
 
-CI 在 Pull Request、版本标签推送或手动触发时运行：Ubuntu、macOS 与 Windows 执行检查，Windows 额外验证 Rust 1.88、npm 启动器、MSVC 静态运行库及解压后的 ZIP。版本标签通过跨平台测试、依赖安全审计和 Docker 安全回归后生成 Release；普通 main 推送不自动运行当前工作流。Windows ZIP 附带 SHA-256 校验文件。
+CI 在 main/dev 分支推送、Pull Request、版本标签推送或手动触发时运行：Ubuntu、macOS 与 Windows 执行检查，Windows 额外验证 Rust 1.88、npm 启动器、MSVC 静态运行库及解压后的 ZIP。版本标签通过跨平台测试、依赖安全审计和 Docker 安全回归后生成 Release。Windows ZIP 附带 SHA-256 校验文件。
 
 Codex 的自动测试使用隔离 HOME、模拟登录凭据和本地上游，不读取真实账号。可另行安装 Codex CLI 后运行真实进程冒烟测试（无 API 调用费用）：
 
