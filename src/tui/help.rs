@@ -251,7 +251,7 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
         frame.render_widget(
             Paragraph::new(if help.codex {
                 if help.section == HelpSection::AllEnabled && !help.codex_accounts {
-                    vec![Line::raw("All Models · enabled models across API providers"), Line::raw("↑↓ select · Enter open provider · Space disable model"), Line::raw("p sync catalog and set startup default · Esc back"), Line::raw("ChatGPT enabled: API models pause; the subscription selection is shown here."), Line::raw("Home → ChatGPT Account → Space: confirm enable or disable and restore API models.")]
+                    vec![Line::raw("All Models · enabled models across API providers"), Line::raw("↑↓ select · Enter open provider · Space disable model"), Line::raw("p sync catalog and set startup default · Esc back"), Line::raw("ChatGPT enabled: API models pause; the ChatGPT Account card shows the subscription state."), Line::raw("Home → ChatGPT Account → Space: confirm enable or disable and restore API models.")]
                 } else { codex_help_content(help.section) }
             } else if help.pi {
                 pi_help_content(help.section)

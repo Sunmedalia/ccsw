@@ -38,32 +38,13 @@ impl App {
     }
 
     pub(super) fn all_models_home_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if self.subscription_enabled() {
-            let mut lines = wrap_styled_segments(
-                vec![(
-                    " All Models · ChatGPT subscription".into(),
-                    Style::default().fg(CONNECTED),
-                )],
-                width,
-            );
-            lines.extend(wrap_styled_segments(
-                vec![(
-                    "     API models paused · Enter to view".into(),
-                    Style::default().fg(MUTED),
-                )],
-                width,
-            ));
-            lines.push(Line::raw(""));
-            lines
-        } else {
-            all_enabled_lines(
-                self.config.profiles.values().filter(|p| p.enabled).count(),
-                self.all_enabled_model_count(),
-                self.all_managed_models().len(),
-                width,
-                self.pi_enabled,
-            )
-        }
+        all_enabled_lines(
+            self.config.profiles.values().filter(|p| p.enabled).count(),
+            self.all_enabled_model_count(),
+            self.all_managed_models().len(),
+            width,
+            self.pi_enabled,
+        )
     }
 
     pub(super) fn provider_home_lines(&self, id: &str, width: u16) -> Vec<Line<'static>> {

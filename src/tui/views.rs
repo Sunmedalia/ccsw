@@ -202,26 +202,6 @@ impl App {
     }
 
     pub(super) fn draw_models(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        if self.view_mode == ViewMode::AllEnabled && self.subscription_enabled() {
-            let model = self
-                .config
-                .codex
-                .subscription_model
-                .as_deref()
-                .unwrap_or("Codex default (choose with /model)");
-            let mut lines = self.chatgpt_provider_lines(area.width.saturating_sub(2));
-            lines.push(Line::raw(format!("Model: {model}")));
-            lines.push(Line::raw(
-                "API models are paused. Disable ChatGPT Account to restore them.",
-            ));
-            frame.render_widget(
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .block(panel(" All Models · ChatGPT subscription ", true)),
-                area,
-            );
-            return;
-        }
         if self.view_mode == ViewMode::AllEnabled {
             let models = self.all_managed_models();
             let enabled_count = models.iter().filter(|entry| entry.enabled).count();

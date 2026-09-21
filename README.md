@@ -288,7 +288,7 @@ Codex 首页依次显示 **All Models**、**ChatGPT Account** 和 API 提供商�
 
 选中首页的 **ChatGPT Account**，按 **Space** 启用或禁用订阅配置，弹窗确认后生效（Enter / y 确认，Esc / n 取消，也可点击按钮）。首次启用前先 Enter 进入账号页，导入账号并用 Space 选中；之后会记住已使用的账号。
 
-- **启用订阅**：保存所有 API 厂商当前的启用状态，自动关闭它们并应用所选 ChatGPT 账号；TUI 标记订阅 Enabled、原先开启的厂商 Paused by ChatGPT，All Models 显示订阅的默认模型信息。
+- **启用订阅**：保存所有 API 厂商当前的启用状态，自动关闭它们并应用所选 ChatGPT 账号；TUI 在 ChatGPT Account 卡片标记订阅 Enabled、原先开启的厂商标记 Paused by ChatGPT。All Models 保持与 Claude 相同的 API 模型汇总视图，此时为空。
 - **关闭订阅**：恢复被自动关闭的厂商及其模型；原本手动关闭的厂商继续关闭。优先恢复先前使用的 API 模型；该模型已不可用时选择一个恢复启用的模型；没有可用 API 模型时断开 CCSW 管理并恢复原配置。
 - 切换订阅账号不会覆盖保存的 API 启用状态。订阅期间 API 厂商保持关闭；先禁用订阅再启用 API 厂商。新增厂商不会被自动恢复为开启。
 - 普通 API 厂商和模型的启用/禁用不弹窗；订阅的启用/禁用必须确认，包括通过 Apply 从 API 模式切入订阅。账号列表的 Space 仍仅选择账号，按 `p` 才应用。
