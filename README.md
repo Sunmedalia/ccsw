@@ -14,7 +14,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 > 本文对应 v0.1.13。新增 Herdr Pulse 常驻用量监控，支持请求健康度、缓存命中率与输出速度统计；保留 macOS、Linux 与 Windows x64 发布包。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
@@ -35,11 +35,17 @@ sudo install ccsw /usr/local/bin/ccsw
 
 ### Windows（x64 ZIP）
 
-从包含 Windows 产物的 Release 或 CI 构建产物中取得 `ccsw-windows-x86_64.zip`：
+从 [最新 Release 下载 Windows x64 ZIP](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip)，并下载旁边的 [SHA-256 文件](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip.sha256) 校验：
 
 ```powershell
-Expand-Archive -LiteralPath '.\ccsw-windows-x86_64.zip' -DestinationPath "$env:LOCALAPPDATA\Programs\ccsw" -Force
-& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe"
+$release = 'https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip'
+Invoke-WebRequest "$release" -OutFile '.\ccsw-windows-x86_64.zip'
+Invoke-WebRequest "${release}.sha256" -OutFile '.\ccsw-windows-x86_64.zip.sha256'
+$expected = ((Get-Content '.\ccsw-windows-x86_64.zip.sha256' -Raw) -split '\s+')[0]
+$actual = (Get-FileHash '.\ccsw-windows-x86_64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA-256 校验失败' }
+Expand-Archive '.\ccsw-windows-x86_64.zip' "$env:LOCALAPPDATA\Programs\ccsw" -Force
+& "$env:LOCALAPPDATA\Programs\ccsw\ccsw.exe" --version
 ```
 
 无需管理员权限，CCSW 自身无需 Node、Git Bash 或 Visual C++ 运行库。完整的 PowerShell/CMD 示例、目录覆盖优先级、字符转义、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
@@ -606,9 +612,13 @@ Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、�
 以及服务商/模型的调用数和失败数。蓝灰底色、三行大号数字和独立的文字层级用于常驻侧栏；
 字体家族继承终端，不修改其他 pane 的字体。面板使用完整高度，短屏可滚动，最低 32 × 12。
 
-执行 `cargo build --release --bin ccsw` 和 `herdr plugin link "$PWD"`，
-把以下配置加入 Herdr `config.toml`（替换已有的 `prefix+u`），
-然后执行 `herdr server reload-config`：
+Herdr Pulse 插件目前支持 macOS / Linux，需要 Herdr 0.7.0 或更新版本。在 Herdr 中执行以下命令安装 v0.1.13 插件；它会从该 Release tag 获取插件并构建所需的 CCSW 二进制：
+
+```sh
+herdr plugin install Sunmedalia/ccsw --ref v0.1.13
+```
+
+将快捷键配置合并到 Herdr 的 `config.toml` 中；若已有 `prefix+u` 绑定，请替换原绑定，避免冲突：
 
 ```toml
 [[keys.command]]
@@ -616,6 +626,13 @@ key = "prefix+u"
 type = "plugin_action"
 command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
+```
+
+保存后重新加载 Herdr 配置，并确认插件已安装：
+
+```sh
+herdr server reload-config
+herdr plugin list
 ```
 
 **Ctrl+B，再按 u** 在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
@@ -644,3 +661,10 @@ Token 缺失时显示未知提示，不当作零用量。插件支持 macOS / Li
 缓存写入不算命中。输出速度是今日成功流式生成请求的输出 Token 总数除以对应输出阶段总秒数，
 从首次内容输出计到流完成，排除首 Token 等待，包含网络传输时间。无有效样本时显示 `—`。
 旧记录保留，不回填未知计时；新版网关启动后采集新请求，面板重开即可展示。
+
+从本地 CCSW 源码目录链接开发版时，进入含 `herdr-plugin.toml` 的仓库目录后执行：
+
+```sh
+cargo build --release --bin ccsw
+herdr plugin link --enabled "$PWD"
+```
