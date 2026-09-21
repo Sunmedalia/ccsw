@@ -142,13 +142,13 @@ impl App {
         let mut items = Vec::with_capacity(ids.len().saturating_add(1));
         if is_home {
             let lines = self.all_models_home_lines(content_width);
+            item_heights.push(lines.len());
+            items.push(ListItem::new(lines));
             if self.codex_ui.enabled {
                 let account = self.chatgpt_provider_lines(content_width);
                 item_heights.push(account.len());
                 items.push(ListItem::new(account));
             }
-            item_heights.push(lines.len());
-            items.push(ListItem::new(lines));
         }
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];

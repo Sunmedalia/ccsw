@@ -284,7 +284,7 @@ python3 tests/fixtures/codex_model_switch.py
 
 ### Codex 订阅账号
 
-Codex 首页依次显示 **ChatGPT Account**、**All Models** 和 API 提供商。**All Models** 汇总所有已启用厂商的已启用模型；单击选中，再次点击或按 Enter 打开所属厂商，按 `p` 同步目录并设置选中模型为启动默认值。
+Codex 首页依次显示 **All Models**、**ChatGPT Account** 和 API 提供商。**All Models** 汇总所有已启用厂商的已启用模型；单击选中，再次点击或按 Enter 打开所属厂商，按 `p` 同步目录并设置选中模型为启动默认值。
 
 选中首页的 **ChatGPT Account**，按 **Space** 启用或禁用订阅配置，弹窗确认后生效（Enter / y 确认，Esc / n 取消，也可点击按钮）。首次启用前先 Enter 进入账号页，导入账号并用 Space 选中；之后会记住已使用的账号。
 

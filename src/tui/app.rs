@@ -25,8 +25,7 @@ impl App {
                 .len(),
         ];
         if self.codex_ui.enabled {
-            heights.insert(
-                0,
+            heights.push(
                 self.chatgpt_provider_lines(panel.width.saturating_sub(2))
                     .len(),
             );
@@ -109,14 +108,14 @@ impl App {
 
     pub(super) fn home_selected_index(&self) -> usize {
         if self.home_all_selected || self.config.profiles.is_empty() {
-            usize::from(self.codex_ui.enabled && self.codex_ui.home_models)
+            usize::from(self.codex_ui.enabled && !self.codex_ui.home_models)
         } else {
             self.profile_idx.saturating_add(self.home_prefix_count())
         }
     }
 
     pub(super) fn select_home_index(&mut self, index: usize) {
-        self.codex_ui.home_models = self.codex_ui.enabled && index == 1;
+        self.codex_ui.home_models = self.codex_ui.enabled && index == 0;
         if index < self.home_prefix_count() {
             self.home_all_selected = true;
             self.model_idx = 0;

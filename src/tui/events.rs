@@ -691,7 +691,7 @@ impl App {
                         if self.view_mode == ViewMode::Home {
                             if !pi
                                 && self.codex_ui.enabled
-                                && index == 0
+                                && index == 1
                                 && mouse.column < panel.x.saturating_add(5)
                             {
                                 self.select_home_index(index);

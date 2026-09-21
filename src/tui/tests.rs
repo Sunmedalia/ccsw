@@ -2518,16 +2518,19 @@ fn codex_account_provider_and_help_use_shared_navigation() {
     assert!(text.contains("ChatGPT Account"));
     assert!(text.contains("Providers · F2 Pi"));
     app.home_all_selected = false;
+    let area = Rect::new(0, 0, 120, 36);
+    let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
+    let account_row = panel_inner(panel).y + app.home_profile_item_heights(panel)[0] as u16;
     let mouse = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 8,
-        row: 4,
+        row: account_row,
         modifiers: KeyModifiers::NONE,
     };
-    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
+    app.handle_mouse(mouse, area).unwrap();
     assert!(!app.codex_ui.accounts);
     assert!(app.home_all_selected);
-    app.handle_mouse(mouse, Rect::new(0, 0, 120, 36)).unwrap();
+    app.handle_mouse(mouse, area).unwrap();
     assert!(app.codex_ui.accounts);
     app.open_help();
     assert!(matches!(app.modal, Some(Modal::Help(_))));
@@ -2556,7 +2559,7 @@ fn codex_account_provider_and_help_use_shared_navigation() {
 fn codex_account_apply_without_login_stays_on_provider_home() {
     let (_temp, mut app) = persisted_app();
     app.select_client_tab(ClientTab::Codex);
-    app.home_all_selected = true;
+    app.select_home_index(1);
     app.apply_codex();
     assert!(!app.codex_ui.accounts);
     assert!(app.status_error);
@@ -2586,9 +2589,9 @@ fn codex_all_models_has_separate_home_row_and_only_enabled_models() {
     })
     .unwrap();
     app.select_client_tab(ClientTab::Codex);
-    app.select_home_index(1);
+    app.select_home_index(0);
     assert!(app.codex_ui.home_models);
-    assert_eq!(app.home_selected_index(), 1);
+    assert_eq!(app.home_selected_index(), 0);
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .unwrap();
     assert_eq!(app.view_mode, ViewMode::AllEnabled);
@@ -2598,7 +2601,7 @@ fn codex_all_models_has_separate_home_row_and_only_enabled_models() {
     assert!(app.all_managed_models().iter().all(|m| m.enabled));
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
-    app.select_home_index(0);
+    app.select_home_index(1);
     assert!(app.home_account_selected());
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .unwrap();
@@ -2622,7 +2625,7 @@ fn subscription_toggle_requires_confirmation_and_cancel_preserves_config() {
         .unwrap();
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
-    app.select_home_index(0);
+    app.select_home_index(1);
     let before = app.config.clone();
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
         .unwrap();
