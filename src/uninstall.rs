@@ -10,6 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
+use toml_edit::{DocumentMut, Item};
 
 const STATE_FILES: &[&str] = &[
     "proxy.json",
@@ -44,8 +45,18 @@ pub fn checked(path: &Path) -> Result<PathBuf> {
         use std::os::unix::fs::MetadataExt;
         let meta = fs::metadata(&home)?;
         // SAFETY: geteuid has no preconditions.
-        if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o022 != 0 {
-            bail!("unsafe user home ownership or permissions");
+        if meta.uid() != unsafe { libc::geteuid() } {
+            bail!(
+                "refusing uninstall: user home is owned by another user: {}",
+                home.display()
+            );
+        }
+        if meta.mode() & 0o022 != 0 {
+            bail!(
+                "refusing uninstall: user home {} is group/world-writable (mode {:o}); remove group/world write permission before retrying",
+                home.display(),
+                meta.mode() & 0o777
+            );
         }
     }
     if home.parent().is_none() {
@@ -198,6 +209,120 @@ struct Plan {
     settings: Vec<Settings>,
     service: Option<Snapshot>,
     paths: AppPaths,
+}
+
+struct HerdrPlan {
+    config: Option<Snapshot>,
+    replacement: Option<String>,
+    linked: bool,
+}
+
+fn herdr_command(args: &[&str]) -> Result<std::process::Output> {
+    let output = std::process::Command::new("herdr")
+        .args(args)
+        .output()
+        .context("Cannot run Herdr CLI")?;
+    if !output.status.success() {
+        bail!(
+            "Herdr command failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output)
+}
+
+fn plan_herdr() -> Result<HerdrPlan> {
+    ensure_herdr_session()?;
+    let response: Value = serde_json::from_slice(
+        &herdr_command(&["plugin", "list", "--plugin", "ccsw", "--json"])?.stdout,
+    )?;
+    let plugins = response
+        .pointer("/result/plugins")
+        .and_then(Value::as_array)
+        .context("Cannot read Herdr plugin list")?;
+    if plugins.len() > 1 {
+        bail!("Herdr returned multiple CCSW plugin entries; refusing to unlink");
+    }
+    let linked = if let Some(plugin) = plugins.first() {
+        if plugin["plugin_id"].as_str() != Some("ccsw") {
+            bail!("Herdr returned an unrelated plugin; refusing to unlink");
+        }
+        if plugin["source"]["kind"].as_str() != Some("local") {
+            bail!("CCSW Herdr plugin is not a local link; unlink it manually");
+        }
+        let root = plugin["plugin_root"]
+            .as_str()
+            .context("Missing Herdr plugin root")?;
+        let manifest: toml::Value =
+            fs::read_to_string(Path::new(root).join("herdr-plugin.toml"))?.parse()?;
+        if manifest.get("id").and_then(toml::Value::as_str) != Some("ccsw") {
+            bail!("Herdr plugin root is not a CCSW checkout");
+        }
+        true
+    } else {
+        false
+    };
+    let path = crate::platform::override_path("HERDR_CONFIG_PATH", || {
+        Ok(crate::platform::home()?.join(".config/herdr/config.toml"))
+    })?;
+    let config = Snapshot::read(&path)?;
+    let replacement = if let Some(config) = &config {
+        let original = std::str::from_utf8(&config.bytes)?;
+        strip_herdr_shortcut(original)?
+    } else {
+        None
+    };
+    Ok(HerdrPlan {
+        config,
+        replacement,
+        linked,
+    })
+}
+
+fn strip_herdr_shortcut(original: &str) -> Result<Option<String>> {
+    let mut doc: DocumentMut = original.parse().context("Cannot parse Herdr config")?;
+    if let Some(item) = doc.get_mut("keys").and_then(|item| item.get_mut("command")) {
+        let commands = item
+            .as_array_of_tables_mut()
+            .context("Herdr keys.command is not an array of tables")?;
+        for index in (0..commands.len()).rev() {
+            let entry = commands.get(index).unwrap();
+            if entry.get("type").and_then(Item::as_str) == Some("plugin_action")
+                && entry.get("command").and_then(Item::as_str) == Some("ccsw.open")
+            {
+                commands.remove(index);
+            }
+        }
+    }
+    let changed = doc.to_string();
+    Ok((changed != original).then_some(changed))
+}
+
+fn ensure_herdr_session() -> Result<()> {
+    if std::env::var("HERDR_ENV").as_deref() != Ok("1") {
+        bail!("Run --herdr in a Herdr terminal");
+    }
+    Ok(())
+}
+
+fn execute_herdr(plan: &HerdrPlan) -> Result<()> {
+    if let Some(config) = &plan.config {
+        config.verify()?;
+    }
+    if plan.linked {
+        herdr_command(&["plugin", "unlink", "ccsw"])?;
+    }
+    if let (Some(config), Some(replacement)) = (&plan.config, &plan.replacement) {
+        config.verify()?;
+        let mut temp = tempfile::NamedTempFile::new_in(config.path.parent().unwrap())?;
+        temp.write_all(replacement.as_bytes())?;
+        temp.as_file()
+            .set_permissions(fs::metadata(&config.path)?.permissions())?;
+        temp.as_file().sync_all()?;
+        temp.persist(&config.path).map_err(|e| e.error)?;
+        herdr_command(&["server", "reload-config"])?;
+    }
+    Ok(())
 }
 
 fn json(bytes: &[u8], label: &str) -> Result<Value> {
@@ -477,8 +602,9 @@ fn validate_service(service: &Snapshot, paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
-pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
+pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     let mut plan = plan(paths)?;
+    let herdr_plan = if herdr { Some(plan_herdr()?) } else { None };
     // Release the session coordination pathname last, after all data removals.
     plan.files
         .sort_by_key(|f| f.path.file_name().is_some_and(|n| n == "session.lock"));
@@ -507,6 +633,19 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     }
     if let Some(service) = &plan.service {
         println!("Disable and remove startup: {}", service.path.display());
+    }
+    if let Some(herdr) = &herdr_plan {
+        if herdr.linked {
+            println!("Unlink local CCSW Herdr plugin");
+        }
+        if let Some(config) = &herdr.config
+            && herdr.replacement.is_some()
+        {
+            println!(
+                "Remove CCSW shortcut from Herdr config: {}",
+                config.path.display()
+            );
+        }
     }
     if !execute {
         println!(
@@ -554,6 +693,9 @@ pub fn run(paths: &AppPaths, execute: bool) -> Result<()> {
     }
     for settings in &plan.settings {
         settings.original.verify()?;
+    }
+    if let Some(herdr) = &herdr_plan {
+        execute_herdr(herdr)?;
     }
     if let Some(service) = &plan.service {
         service.verify()?;
@@ -695,4 +837,20 @@ fn disable_service(service: &Snapshot) -> Result<()> {
     }
     let _ = service;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_herdr_shortcut;
+
+    #[test]
+    fn herdr_cleanup_removes_only_ccsw_action() {
+        let original = "# keep this comment\n[keys]\nfoo = 'prefix+f'\n[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n";
+        let changed = strip_herdr_shortcut(original).unwrap().unwrap();
+        assert!(changed.contains("# keep this comment"));
+        assert!(changed.contains("foo = 'prefix+f'"));
+        assert!(changed.contains("files.open"));
+        assert!(!changed.contains("ccsw.open"));
+        assert!(strip_herdr_shortcut(&changed).unwrap().is_none());
+    }
 }

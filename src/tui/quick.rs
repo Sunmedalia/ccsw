@@ -2699,8 +2699,8 @@ mod tests {
         assert!(home.contains("SESSION / ALL TIME"));
         assert!(home.find("TOKENS").unwrap() < home.find("SESSION / ALL TIME").unwrap());
         assert!(home.contains(&digits("1000")[0]));
-        assert!(home.contains("800 / 200"));
-        assert!(home.contains("300 / 100"));
+        assert!(home.contains("↑ Input 800  ·  ↓ Output 200"));
+        assert!(home.contains("↺ Read 300  ·  Write 100"));
         assert!(home.contains("37.5%"));
         assert!(home.starts_with("TOKENS"));
         assert!(home.contains("Reading gateway usage"));
@@ -2912,7 +2912,7 @@ mod tests {
             "1.2%",
             "R 1536 W 0",
             "39.2 tok/s",
-            "2 streams",
+            "2 measured streams",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }

@@ -1,6 +1,6 @@
 id = "ccsw"
 name = "CCSW Pulse"
-version = "0.1.13"
+version = "0.1.14"
 description = "Persistent side-pane monitor for Claude usage, request health and traffic"
 min_herdr_version = "0.7.0"
 platforms = ["macos", "linux"]

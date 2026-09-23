@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.13。新增 Herdr Pulse 常驻用量监控，支持请求健康度、缓存命中率与输出速度统计；保留 macOS、Linux 与 Windows x64 发布包。
+> 本文对应 v0.1.14。新增在线更新与更安全的卸载流程；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -22,7 +22,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ### 下载 Release
 
-v0.1.13 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.14 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -30,6 +30,9 @@ curl -L https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-macos-a
 
 # Linux x86_64
 curl -L https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-linux-x86_64.tar.gz | tar -xz
+
+# Linux ARM64
+curl -L https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-linux-arm64.tar.gz | tar -xz
 
 chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
@@ -518,13 +521,25 @@ ccsw apply --profile local # 换成自己的厂商 ID；启动代理并更新 Cl
 ```sh
 ccsw uninstall --dry-run  # 只查看清理清单，不修改文件；不带参数也是预览
 ccsw uninstall --yes      # 停止当前用户代理、禁用自启并清理已确认归属的配置
+ccsw uninstall --dry-run --herdr  # 在 Herdr 中预览插件链接和快捷键的清理
+ccsw uninstall --yes --herdr      # 同时解绑本地 CCSW Herdr 插件和其快捷键
 ```
 
-执行前先关闭其他 CCSW 窗口。卸载逐项清理当前路径对应的配置、缓存、代理注册表、日志、PID、同步状态和锁文件；只移除空的应用目录，不递归删除目录，也不扫描其他用户。程序文件保留，可在配置清理成功后手动删除安装位置的 `ccsw` / `ccsw.exe`。
+执行前先关闭其他 CCSW 窗口及 Pulse pane。卸载逐项清理当前路径对应的配置、缓存、代理注册表、日志、PID、同步状态和锁文件；只移除空的应用目录，不递归删除目录，也不扫描其他用户。`--herdr` 只处理经确认的本地 CCSW 插件链接和 `ccsw.open` 快捷键，保留其他 Herdr 配置。程序文件和源码 checkout 保留，可在配置清理成功后手动删除安装位置的 `ccsw` / `ccsw.exe`。
 
 Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当 Claude 的地址和 token 仍能确认属于本 CCSW 配置时，才清理对应备份，并按同步快照逐字段移除仍与上次写入一致的受管设置；已经切换到其他服务的 Claude 设置及备份原样保留。历史同步记录中登记的设置路径也会检查。没有快照的旧连接仅清除可确认归属的地址和 Token，保留未验证的模型字段。
 
 为防止误删，卸载拒绝 HOME 外的自定义路径、符号链接、Windows reparse point、Unix 硬链接、跨用户文件、共享状态、损坏的配置和无法确认归属的自启项。此时会报错并要求先处理这些路径，不会扩大删除范围。`--yes` 不会绕过这些检查。旧版代理若不支持认证停止接口，需要先用旧版 `ccsw proxy stop` 停止。自启管理器失败或运行中的代理无法停止时保留配置；中途磁盘 I/O 失败会明确报告未完成，可修复后重试。
+
+## 在线更新
+
+```sh
+ccsw update --check             # 查看 GitHub 最新 Release
+ccsw update                     # 下载对应平台的发布包、校验 SHA-256 后更新程序
+ccsw update --source .          # 在 Herdr 终端中快进更新当前源码并重新安装插件
+```
+
+Release 更新仅在版本号更新时执行，下载包必须带 GitHub 发布资产的 SHA-256 摘要；校验失败不会替换程序。源码更新要求当前分支没有未提交的已跟踪文件，并使用 `git pull --ff-only`，不会合并或覆盖本地提交。使用源码链接的 Herdr 插件请选择 `--source`；更新后重新打开 CCSW/Pulse pane，代理可在请求空闲时重启以加载新程序。Windows 若锁定正在运行的 EXE，已校验的新文件会留在原目录，关闭 CCSW 后按命令输出的路径替换。
 
 ## 开发
 
@@ -718,4 +733,4 @@ command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
 ```
 
-也可以安装固定的已发布版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.13`。这会安装该 tag 的代码，不包含本地尚未发布的修复；仍需手动配置快捷键。
+也可以安装固定的已发布版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.14`。这会安装该 tag 的代码；仍需手动配置快捷键。

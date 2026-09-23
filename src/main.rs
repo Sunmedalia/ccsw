@@ -13,6 +13,7 @@ mod sessions;
 mod sync;
 mod tui;
 mod uninstall;
+mod update;
 mod usage;
 #[cfg(windows)]
 mod windows;
@@ -73,6 +74,18 @@ enum Commands {
         /// Preview cleanup without changing files (the default)
         #[arg(long)]
         dry_run: bool,
+        /// Also unlink the locally installed CCSW Herdr plugin and shortcut
+        #[arg(long)]
+        herdr: bool,
+    },
+    /// Check GitHub Releases and install a verified newer version
+    Update {
+        /// Show the available version without installing it
+        #[arg(long)]
+        check: bool,
+        /// Update a Herdr source checkout with a fast-forward pull and rebuild
+        #[arg(long, value_name = "CHECKOUT")]
+        source: Option<PathBuf>,
     },
     /// Diagnose Claude, configuration, and gateway connectivity
     Doctor,
@@ -170,13 +183,17 @@ fn main() -> Result<()> {
         }
         paths
     };
-    if let Some(Commands::Uninstall { yes, .. }) = &cli.command {
-        return uninstall::run(&paths, *yes);
+    if let Some(Commands::Uninstall { yes, herdr, .. }) = &cli.command {
+        return uninstall::run(&paths, *yes, *herdr);
+    }
+    if let Some(Commands::Update { check, source }) = &cli.command {
+        return update::run(*check, source.as_deref());
     }
     let _session = uninstall::session(&paths)?;
     match cli.command {
         Some(Commands::Quick { open }) => tui::run_quick(paths, open),
         Some(Commands::Uninstall { .. }) => unreachable!(),
+        Some(Commands::Update { .. }) => unreachable!(),
         Some(Commands::HerdrInstall { .. }) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;
