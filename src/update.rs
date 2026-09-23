@@ -197,7 +197,7 @@ fn install_binary(binary: &[u8]) -> Result<()> {
                 );
             }
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {
