@@ -792,7 +792,14 @@ pub(crate) mod tests {
     pub async fn settled_for(path: &Path, config: &Path, calls: i64) -> Snapshot {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let snapshot = snapshot(path, config).unwrap();
+                let snapshot = match snapshot(path, config) {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        // The async writer may still hold SQLite's schema lock.
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                };
                 let count: i64 = snapshot.rows.iter().map(|r| r.totals.calls).sum();
                 if count == calls && snapshot.rows.iter().all(|r| r.totals.pending == 0) {
                     break snapshot;
