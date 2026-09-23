@@ -33,7 +33,7 @@ struct AgentSession {
 }
 
 fn agent_session(pane: &serde_json::Value) -> Option<AgentSession> {
-    let pane = &pane["result"]["pane"];
+    let pane = pane.get("result").map_or(pane, |result| &result["pane"]);
     let session = &pane["agent_session"];
     let client = match (pane["agent"].as_str()?, session["agent"].as_str()?) {
         ("codex", "codex") => "Codex",
@@ -50,6 +50,38 @@ fn agent_session(pane: &serde_json::Value) -> Option<AgentSession> {
         client,
         id: id.into(),
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FocusedAgent {
+    pane_id: String,
+    client: usize,
+    session: Option<AgentSession>,
+}
+
+fn focused_agent(panes: &serde_json::Value, tab_id: &str) -> Option<FocusedAgent> {
+    panes["result"]["panes"]
+        .as_array()?
+        .iter()
+        .find_map(|pane| {
+            if pane["focused"] != true || pane["tab_id"].as_str()? != tab_id {
+                return None;
+            }
+            let pane_id = pane["pane_id"].as_str()?;
+            let client = initial_client(pane["agent"].as_str());
+            (client != 2).then(|| FocusedAgent {
+                pane_id: pane_id.into(),
+                client,
+                session: agent_session(pane),
+            })
+        })
+}
+
+#[derive(Clone, Debug)]
+struct FocusUpdate {
+    pane_id: String,
+    client: usize,
+    session: Option<AgentSession>,
 }
 fn stable_agent_session(
     previous: &mut Option<AgentSession>,
@@ -83,6 +115,8 @@ struct Monitor {
     roomy_visual: bool,
     sessions_sort_tokens: bool,
     source_pane: Option<String>,
+    focused_pane: Option<String>,
+    focused_client: Option<usize>,
     active_session: Option<AgentSession>,
     client: usize,
     scroll: u16,
@@ -681,6 +715,27 @@ fn hourly_chart(hours: &[i64; 24], width: u16, color: Color) -> Vec<Line<'static
     lines
 }
 impl Monitor {
+    fn apply_focus(&mut self, update: FocusUpdate) {
+        let focus_changed = self.focused_pane.as_deref() != Some(update.pane_id.as_str());
+        let agent_changed = self.focused_client != Some(update.client);
+        let session_changed = self.active_session != update.session;
+        self.focused_pane = Some(update.pane_id);
+        self.focused_client = Some(update.client);
+        if (focus_changed || agent_changed) && self.sessions_mode {
+            self.client = update.client;
+        } else if let Some(active) = &update.session
+            && self.client != 2
+            && self.client() != Some(active.client)
+        {
+            self.client = update.client;
+        }
+        if focus_changed || agent_changed || session_changed {
+            self.active_session = update.session;
+            if self.sessions_mode {
+                self.scroll = 0;
+            }
+        }
+    }
     fn mini_content(&self, width: u16) -> Vec<Line<'static>> {
         if self.help {
             let mut out = vec![
@@ -1147,7 +1202,7 @@ impl Monitor {
         }
         let Some(current) = &self.active_session else {
             out.push(line("◌ Waiting for agent session ID", SOFT));
-            out.push(line("Open or resume a session in this pane", SOFT));
+            out.push(line("Open or resume a session in the focused pane", SOFT));
             return out;
         };
         let Some(s) = self.active_row() else {
@@ -1342,7 +1397,7 @@ impl Monitor {
         let Some(current) = &self.active_session else {
             out.push(line("◌ Waiting for agent session ID", SOFT));
             out.push(line(
-                clipped("Open or resume a session in this pane", width.into()),
+                clipped("Open or resume a session in the focused pane", width.into()),
                 SOFT,
             ));
             return out;
@@ -1446,7 +1501,7 @@ impl Monitor {
                 section("ABOUT THIS DATA", width),
                 Line::default(),
                 line("Current session: local log", INK),
-                line("for the attached agent pane.", INK),
+                line("for the focused agent pane.", INK),
                 Line::default(),
                 line("Today's gateway totals: only", SOFT),
                 line("this CCSW config's traffic.", SOFT),
@@ -1824,7 +1879,7 @@ impl Monitor {
         if self.help {
             return vec![
                 section("ABOUT SESSIONS", width),
-                line("Current: this agent pane.", INK),
+                line("Current: focused agent pane.", INK),
                 line("Local Claude / Codex logs.", INK),
                 line("Each row: whole session", SOFT),
                 line("tokens, not today's usage.", SOFT),
@@ -1833,7 +1888,7 @@ impl Monitor {
                 line("Writes are not cache hits.", SOFT),
                 line("Forks may include inherited", SOFT),
                 line("tokens; children are separate.", SOFT),
-                line("Current follows agent pane.", SOFT),
+                line("Current follows pane focus.", SOFT),
                 line("Visual I/O: blue input,", SOFT),
                 line("gold output; bars show share.", SOFT),
                 line("s: Usage / Sessions", BLUE),
@@ -2142,19 +2197,62 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let source_pane = std::env::var("CCSW_MONITOR_SOURCE_PANE")
         .ok()
         .filter(|id| !id.is_empty());
+    let workspace = std::env::var("CCSW_MONITOR_WORKSPACE").ok();
+    let tab = std::env::var("CCSW_MONITOR_TAB").ok();
     let theme_paths = paths.clone();
     let (active_send, active_updates) = mpsc::sync_channel(1);
     if let Some(source) = source_pane.clone() {
         std::thread::spawn(move || {
             let mut previous = None;
+            let mut previous_pane = None;
+            let mut previous_client = None;
             let mut missing = 0;
             loop {
-                if let Ok(pane) = herdr(&["pane", "get", &source])
-                    && let Some(update) =
-                        stable_agent_session(&mut previous, &mut missing, agent_session(&pane))
-                    && active_send.send(update).is_err()
-                {
-                    break;
+                let focused = match (&workspace, &tab) {
+                    (Some(workspace), Some(tab)) => {
+                        herdr(&["pane", "list", "--workspace", workspace])
+                            .ok()
+                            .and_then(|panes| focused_agent(&panes, tab))
+                    }
+                    _ => herdr(&["pane", "get", &source]).ok().and_then(|pane| {
+                        let client = initial_client(pane["result"]["pane"]["agent"].as_str());
+                        (client != 2).then(|| FocusedAgent {
+                            pane_id: source.clone(),
+                            client,
+                            session: agent_session(&pane),
+                        })
+                    }),
+                };
+                if let Some(focused) = focused {
+                    let changed_focus = previous_pane.as_deref() != Some(focused.pane_id.as_str())
+                        || previous_client != Some(focused.client);
+                    if changed_focus {
+                        previous_pane = Some(focused.pane_id.clone());
+                        previous_client = Some(focused.client);
+                        previous = focused.session.clone();
+                        missing = 0;
+                        if active_send
+                            .send(FocusUpdate {
+                                pane_id: focused.pane_id,
+                                client: focused.client,
+                                session: focused.session,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    } else if let Some(session) =
+                        stable_agent_session(&mut previous, &mut missing, focused.session)
+                        && active_send
+                            .send(FocusUpdate {
+                                pane_id: focused.pane_id,
+                                client: focused.client,
+                                session,
+                            })
+                            .is_err()
+                    {
+                        break;
+                    }
                 }
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -2202,19 +2300,8 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     }
     loop {
         monitor.pulse_theme = theme::PulseTheme::load(&theme_paths);
-        while let Ok(current) = active_updates.try_recv() {
-            if monitor.active_session != current {
-                if let Some(active) = &current
-                    && monitor.client != 2
-                    && monitor.client() != Some(active.client)
-                {
-                    monitor.client = initial_client(Some(active.client));
-                }
-                monitor.active_session = current;
-                if monitor.sessions_mode {
-                    monitor.scroll = 0;
-                }
-            }
+        while let Ok(update) = active_updates.try_recv() {
+            monitor.apply_focus(update);
         }
         while let Ok(snapshot) = session_updates.try_recv() {
             monitor.sessions = snapshot;
@@ -2388,6 +2475,11 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     monitor.chart_mode = false;
                     monitor.help = false;
                     monitor.scroll = 0;
+                    if monitor.sessions_mode
+                        && let Some(client) = monitor.focused_client
+                    {
+                        monitor.client = client;
+                    }
                     if monitor.sessions_mode && !session_reader_started {
                         session_reader_started = true;
                         let (session_send, session_requests) = session_worker.take().unwrap();
@@ -2462,6 +2554,8 @@ pub(super) fn open_pane() -> Result<()> {
     let tab = pane["tab_id"].as_str().context("Missing tab")?;
     let target = pane["pane_id"].as_str().context("Missing calling pane")?;
     let source_env = format!("CCSW_MONITOR_SOURCE_PANE={target}");
+    let workspace_env = format!("CCSW_MONITOR_WORKSPACE={workspace}");
+    let tab_env = format!("CCSW_MONITOR_TAB={tab}");
     let list = herdr(&["pane", "list", "--workspace", workspace])?;
     if let Some(existing) = list["result"]["panes"].as_array().and_then(|panes| {
         panes
@@ -2545,6 +2639,10 @@ pub(super) fn open_pane() -> Result<()> {
         &client_env,
         "--env",
         &source_env,
+        "--env",
+        &workspace_env,
+        "--env",
+        &tab_env,
         "--no-focus",
     ])?;
     let id = split["result"]["plugin_pane"]["pane"]["pane_id"]
@@ -2618,6 +2716,72 @@ mod tests {
         assert!(agent_session(&wrong).is_none());
         wrong["result"]["pane"]["agent_session"] = serde_json::Value::Null;
         assert!(agent_session(&wrong).is_none());
+    }
+
+    #[test]
+    fn focused_agent_tracks_the_active_pane_in_the_monitor_tab() {
+        let mut panes = json!({"result":{"panes":[
+            {"pane_id":"codex","tab_id":"tab-a","focused":true,"agent":"codex",
+             "agent_session":{"agent":"codex","kind":"id","value":"codex-one"}},
+            {"pane_id":"claude","tab_id":"tab-a","focused":false,"agent":"claude",
+             "agent_session":{"agent":"claude","kind":"id","value":"claude-one"}},
+            {"pane_id":"other","tab_id":"tab-b","focused":false,"agent":"claude"}
+        ]}});
+        let current = focused_agent(&panes, "tab-a").unwrap();
+        assert_eq!(current.client, 1);
+        assert_eq!(current.session.unwrap().id, "codex-one");
+
+        panes["result"]["panes"][0]["focused"] = json!(false);
+        panes["result"]["panes"][1]["focused"] = json!(true);
+        let current = focused_agent(&panes, "tab-a").unwrap();
+        assert_eq!(current.client, 0);
+        assert_eq!(current.session.unwrap().id, "claude-one");
+
+        panes["result"]["panes"][1]["agent_session"] = serde_json::Value::Null;
+        let current = focused_agent(&panes, "tab-a").unwrap();
+        assert_eq!(current.client, 0);
+        assert!(current.session.is_none());
+        assert!(focused_agent(&panes, "tab-b").is_none());
+    }
+
+    #[test]
+    fn sessions_filter_follows_focused_agent_even_when_session_id_is_missing() {
+        let mut monitor = Monitor {
+            sessions_mode: true,
+            client: 2,
+            ..Default::default()
+        };
+        monitor.sessions.rows = vec![
+            crate::sessions::Session {
+                id: "codex-one".into(),
+                client: "Codex",
+                ..Default::default()
+            },
+            crate::sessions::Session {
+                id: "claude-one".into(),
+                client: "Claude",
+                ..Default::default()
+            },
+        ];
+        monitor.apply_focus(FocusUpdate {
+            pane_id: "codex-pane".into(),
+            client: 1,
+            session: Some(AgentSession {
+                client: "Codex",
+                id: "codex-one".into(),
+            }),
+        });
+        assert_eq!(monitor.client(), Some("Codex"));
+        assert_eq!(monitor.session_rows().len(), 1);
+        monitor.client = 2; // A manual All selection lasts until focus changes.
+        monitor.apply_focus(FocusUpdate {
+            pane_id: "claude-pane".into(),
+            client: 0,
+            session: None,
+        });
+        assert_eq!(monitor.client(), Some("Claude"));
+        assert_eq!(monitor.session_rows()[0].id, "claude-one");
+        assert!(monitor.active_session.is_none());
     }
 
     #[test]
