@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 pub fn isolate(command: &mut Command, root: &Path) {
     fs::create_dir_all(root.join("tmp")).unwrap();
@@ -18,7 +18,11 @@ pub fn isolate(command: &mut Command, root: &Path) {
         }
         command.env(
             "PATH",
-            format!("{}:{}", bin.display(), env::var("PATH").unwrap_or_default()),
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
         );
     }
     for key in [
