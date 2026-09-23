@@ -26,6 +26,27 @@ fn initial_client(agent: Option<&str>) -> usize {
     }
 }
 
+fn rightmost_split_target(layout: &serde_json::Value) -> Option<(&str, u64)> {
+    let layout = &layout["result"]["layout"];
+    let edge = layout["area"]["x"].as_u64()? + layout["area"]["width"].as_u64()?;
+    layout["panes"]
+        .as_array()?
+        .iter()
+        .filter_map(|pane| {
+            let rect = &pane["rect"];
+            let x = rect["x"].as_u64()?;
+            let width = rect["width"].as_u64()?;
+            let height = rect["height"].as_u64()?;
+            if x + width == edge && width >= 76 {
+                Some((pane["pane_id"].as_str()?, width, height))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(_, width, height)| (*height, *width))
+        .map(|(id, width, _)| (id, width))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AgentSession {
     client: &'static str,
@@ -2604,15 +2625,9 @@ pub(super) fn open_pane() -> Result<()> {
     }
     let cwd = std::env::current_dir()?;
     let layout = herdr(&["pane", "layout", "--pane", target])?;
-    let width = layout["result"]["layout"]["panes"]
-        .as_array()
-        .and_then(|panes| panes.iter().find(|p| p["pane_id"] == target))
-        .and_then(|p| p["rect"]["width"].as_u64())
-        .context("Missing pane width")?;
-    anyhow::ensure!(
-        width >= 76,
-        "This pane is too narrow to split; expand it to at least 76 columns"
-    );
+    let (split_target, width) = rightmost_split_target(&layout).context(
+        "The right edge is too narrow for Pulse; widen a pane at the right edge to 76 columns",
+    )?;
     let monitor_width = 48u64.min(width / 2);
     let split = herdr(&[
         "plugin",
@@ -2625,7 +2640,7 @@ pub(super) fn open_pane() -> Result<()> {
         "--placement",
         "split",
         "--target-pane",
-        target,
+        split_target,
         "--direction",
         "right",
         "--cwd",
@@ -2645,14 +2660,14 @@ pub(super) fn open_pane() -> Result<()> {
         .context("Missing new pane")?;
     herdr(&["pane", "rename", id, LABEL])?;
     // Native plugin panes start directly (no shell echo), with a half-width split.
-    // Grow the source pane to retain the monitor's narrow footprint.
+    // Resize the right-edge target to retain the monitor's narrow footprint.
     let amount = 0.5 - monitor_width as f64 / width as f64;
     if amount > 0.001 {
         herdr(&[
             "pane",
             "resize",
             "--pane",
-            target,
+            split_target,
             "--direction",
             "right",
             "--amount",
@@ -2711,6 +2726,27 @@ mod tests {
         assert!(agent_session(&wrong).is_none());
         wrong["result"]["pane"]["agent_session"] = serde_json::Value::Null;
         assert!(agent_session(&wrong).is_none());
+    }
+
+    #[test]
+    fn pulse_split_uses_the_outer_right_edge_not_the_invoking_pane() {
+        let layout = json!({"result":{"layout":{
+            "area":{"x":0,"width":300},
+            "panes":[
+                {"pane_id":"caller","rect":{"x":0,"width":140,"height":40}},
+                {"pane_id":"middle","rect":{"x":140,"width":80,"height":40}},
+                {"pane_id":"right","rect":{"x":220,"width":80,"height":40}}
+            ]
+        }}});
+        assert_eq!(rightmost_split_target(&layout), Some(("right", 80)));
+        let narrow = json!({"result":{"layout":{
+            "area":{"x":0,"width":300},
+            "panes":[
+                {"pane_id":"caller","rect":{"x":0,"width":252,"height":40}},
+                {"pane_id":"right","rect":{"x":252,"width":48,"height":40}}
+            ]
+        }}});
+        assert_eq!(rightmost_split_target(&narrow), None);
     }
 
     #[test]

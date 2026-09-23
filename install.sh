@@ -120,7 +120,7 @@ command = ["./target/release/ccsw"]
 
 [[actions]]
 id = "open"
-title = "Toggle CCSW Pulse beside this pane"
+title = "Toggle CCSW Pulse at the right edge"
 command = ["./target/release/ccsw", "quick", "--open"]
 MANIFEST
             "$plugin_dir/target/release/ccsw" herdr-install --source "$plugin_dir" --key "$key"
