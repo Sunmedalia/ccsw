@@ -79,6 +79,7 @@ struct Monitor {
     sessions_mode: bool,
     chart_mode: bool,
     visual_mode: bool,
+    roomy_visual: bool,
     sessions_sort_tokens: bool,
     source_pane: Option<String>,
     active_session: Option<AgentSession>,
@@ -222,6 +223,101 @@ fn pair(label: &str, value: impl Into<String>, width: u16, color: Color) -> Line
         ),
     ])
 }
+fn duo_line(
+    width: u16,
+    left: (&str, &str, &str, Color),
+    right: (&str, &str, &str, Color),
+) -> Line<'static> {
+    let full = format!("{} {}  ·  {} {}", left.0, left.2, right.0, right.2);
+    let (left_label, right_label, separator) = if full.width() <= usize::from(width) {
+        (left.0, right.0, "  ·  ")
+    } else {
+        (left.1, right.1, " · ")
+    };
+    let compact = format!(
+        "{left_label} {}{separator}{right_label} {}",
+        left.2, right.2
+    );
+    if compact.width() > usize::from(width) {
+        return line(clipped(&compact, width.into()), SOFT);
+    }
+    Line::from(vec![
+        Span::styled(format!("{left_label} "), Style::default().fg(SOFT)),
+        Span::styled(
+            left.2.to_owned(),
+            Style::default().fg(left.3).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(separator, Style::default().fg(SOFT)),
+        Span::styled(format!("{right_label} "), Style::default().fg(SOFT)),
+        Span::styled(
+            right.2.to_owned(),
+            Style::default().fg(right.3).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+fn output_speed(t: &Totals) -> Option<f64> {
+    (t.speed_ms > 0).then(|| t.speed_output as f64 * 1000.0 / t.speed_ms as f64)
+}
+fn speed_color(speed: f64) -> Color {
+    if speed < 50.0 {
+        Color::Rgb(236, 104, 113)
+    } else if speed < 100.0 {
+        Color::Rgb(180, 133, 222)
+    } else if speed < 200.0 {
+        Color::Rgb(112, 171, 235)
+    } else {
+        Color::Rgb(133, 212, 162)
+    }
+}
+fn speed_spans(value: &str, speed: Option<f64>) -> Vec<Span<'static>> {
+    let style = |color| Style::default().fg(color).add_modifier(Modifier::BOLD);
+    match speed {
+        None => vec![Span::styled(value.to_owned(), style(SOFT))],
+        Some(speed) if speed >= 300.0 => {
+            let rainbow = [
+                (236, 104, 113),
+                (244, 164, 101),
+                (239, 214, 111),
+                (133, 212, 162),
+                (112, 201, 228),
+                (112, 171, 235),
+                (180, 133, 222),
+            ];
+            let chars: Vec<char> = value.chars().collect();
+            let last = chars.len().saturating_sub(1).max(1);
+            chars
+                .into_iter()
+                .enumerate()
+                .map(|(index, ch)| {
+                    let color = rainbow[index * (rainbow.len() - 1) / last];
+                    Span::styled(ch.to_string(), style(Color::Rgb(color.0, color.1, color.2)))
+                })
+                .collect()
+        }
+        Some(speed) => vec![Span::styled(value.to_owned(), style(speed_color(speed)))],
+    }
+}
+fn speed_pair(label: &str, totals: &Totals, width: u16) -> Line<'static> {
+    let speed = output_speed(totals);
+    let value = speed.map_or("—".into(), |n| format!("{n:.1} tok/s"));
+    let available = usize::from(width).saturating_sub(value.width() + 1);
+    let label = clipped(label, available);
+    let gap = usize::from(width).saturating_sub(label.width() + value.width());
+    let mut spans = vec![
+        Span::styled(label, Style::default().fg(SOFT)),
+        Span::raw(" ".repeat(gap)),
+    ];
+    spans.extend(speed_spans(&value, speed));
+    Line::from(spans)
+}
+fn mini_speed_line(totals: &Totals, width: u16) -> Line<'static> {
+    let speed = output_speed(totals);
+    let value = speed.map_or("—".into(), |n| format!("{n:.1} tok/s"));
+    let value = clipped(&value, usize::from(width.saturating_sub(2)));
+    let mut spans = vec![Span::styled("↓ ", Style::default().fg(SOFT))];
+    spans.extend(speed_spans(&value, speed));
+    Line::from(spans)
+}
 fn section(title: &str, width: u16) -> Line<'static> {
     line(
         format!(
@@ -235,11 +331,13 @@ fn section_action(title: &str, action: &str, width: u16) -> Line<'static> {
     let available = usize::from(width).saturating_sub(action.width() + 1);
     let title = clipped(title, available);
     let gap = usize::from(width).saturating_sub(title.width() + action.width());
+    let separator = if gap >= 2 {
+        format!(" {} ", "─".repeat(gap - 2))
+    } else {
+        " ".into()
+    };
     Line::from(vec![
-        Span::styled(
-            format!("{title}{}", "─".repeat(gap)),
-            Style::default().fg(SOFT),
-        ),
+        Span::styled(format!("{title}{separator}"), Style::default().fg(SOFT)),
         Span::styled(
             action.to_string(),
             Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
@@ -427,6 +525,71 @@ fn content_body(inner: Rect) -> Rect {
         inner.height.saturating_sub(7),
     )
 }
+fn mini_body(area: Rect) -> Rect {
+    Rect::new(
+        area.x,
+        area.y.saturating_add(2),
+        area.width,
+        area.height.saturating_sub(4),
+    )
+}
+fn mini_buttons(area: Rect) -> Vec<Rect> {
+    Layout::horizontal([Constraint::Ratio(1, 5); 5])
+        .split(Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            1,
+        ))
+        .to_vec()
+}
+fn mini_line(text: impl AsRef<str>, width: u16, color: Color) -> Line<'static> {
+    line(clipped(text.as_ref(), usize::from(width)), color)
+}
+fn mini_sparkline(hours: &[i64; 24]) -> String {
+    let buckets: Vec<i64> = hours.chunks(3).map(|hours| hours.iter().sum()).collect();
+    let peak = buckets.iter().copied().max().unwrap_or(0);
+    let bars = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '█'];
+    buckets
+        .into_iter()
+        .map(|count| {
+            if peak == 0 || count == 0 {
+                bars[0]
+            } else {
+                bars[((count as f64 / peak as f64 * 7.0).round() as usize).clamp(1, 7)]
+            }
+        })
+        .collect()
+}
+fn mini_hourly_rows(hours: &[i64; 24], width: u16, color: Color) -> Vec<Line<'static>> {
+    let peak = hours.iter().copied().max().unwrap_or(0);
+    let bar_width = usize::from(width.saturating_sub(12)).max(1);
+    hours
+        .iter()
+        .enumerate()
+        .map(|(hour, count)| {
+            let filled = if peak > 0 && *count > 0 {
+                ((*count as f64 / peak as f64 * bar_width as f64).round() as usize)
+                    .clamp(1, bar_width)
+            } else {
+                0
+            };
+            mini_line(
+                format!(
+                    "{hour:02} {:<bar_width$} {}",
+                    if filled == 0 {
+                        "·".into()
+                    } else {
+                        "█".repeat(filled)
+                    },
+                    short(*count),
+                ),
+                width,
+                color,
+            )
+        })
+        .collect()
+}
 fn scrollbar_target(body: Rect, rail_x: u16, column: u16, row: u16, limit: u16) -> Option<u16> {
     if limit == 0 || body.height < 2 || column != rail_x || row < body.y || row >= body.bottom() {
         return None;
@@ -476,6 +639,401 @@ fn hourly_chart(hours: &[i64; 24], width: u16, color: Color) -> Vec<Line<'static
     lines
 }
 impl Monitor {
+    fn mini_content(&self, width: u16) -> Vec<Line<'static>> {
+        if self.help {
+            let mut out = vec![
+                mini_line("↑ input  ↓ output", width, BLUE),
+                mini_line("↺ cache · R read · W write", width, SOFT),
+            ];
+            out.extend(
+                self.content(width)
+                    .into_iter()
+                    .map(|l| mini_line(l.to_string(), width, SOFT)),
+            );
+            return out;
+        }
+        if self.sessions_mode {
+            let mut out = vec![mini_line("SESSIONS / ALL TIME", width, BLUE)];
+            match (self.active_session.as_ref(), self.active_row()) {
+                (None, _) => out.push(mini_line("◌ Waiting for agent pane", width, SOFT)),
+                (Some(active), None) => out.push(mini_line(
+                    format!("● {} · loading log", active.client),
+                    width,
+                    GREEN,
+                )),
+                (_, Some(session)) => {
+                    let project = std::path::Path::new(&session.project)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    out.push(mini_line(
+                        format!("● {} / {}", session.client, project),
+                        width,
+                        GREEN,
+                    ));
+                    out.push(mini_line(
+                        format!(
+                            "{} tok{}",
+                            if session.tokens.known {
+                                short(session.tokens.total())
+                            } else {
+                                "?".into()
+                            },
+                            if session.incomplete { "+?" } else { "" }
+                        ),
+                        width,
+                        INK,
+                    ));
+                    if session.tokens.known {
+                        out.push(mini_line(
+                            format!(
+                                "↑ {}  ↓ {}",
+                                short(session.tokens.input),
+                                short(session.tokens.output)
+                            ),
+                            width,
+                            SOFT,
+                        ));
+                        out.push(mini_line(
+                            format!(
+                                "↺ R {}  W {}",
+                                short(session.tokens.read),
+                                short(session.tokens.write)
+                            ),
+                            width,
+                            SOFT,
+                        ));
+                    }
+                }
+            }
+            out.push(mini_line("HISTORY · t sort", width, BLUE));
+            let rows = self.session_rows();
+            if rows.is_empty() {
+                out.push(mini_line("No local sessions yet", width, SOFT));
+            }
+            for session in rows.into_iter().filter(|s| {
+                !self
+                    .active_session
+                    .as_ref()
+                    .is_some_and(|a| a.client == s.client && a.id == s.id)
+            }) {
+                let project = std::path::Path::new(&session.project)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                out.push(mini_line(
+                    format!(
+                        "{} {} · {} tok",
+                        session.client,
+                        project,
+                        if session.tokens.known {
+                            short(session.tokens.total())
+                        } else {
+                            "?".into()
+                        }
+                    ),
+                    width,
+                    INK,
+                ));
+                if session.tokens.known {
+                    out.push(mini_line(
+                        format!(
+                            "  ↑ {} · ↓ {}",
+                            short(session.tokens.input),
+                            short(session.tokens.output)
+                        ),
+                        width,
+                        SOFT,
+                    ));
+                }
+            }
+            return out;
+        }
+        if self.chart_mode {
+            let gateway = metrics(&self.snapshot, self.client());
+            let session = self.session_hours_today();
+            let mut out = vec![
+                mini_line("CHARTS / TODAY", width, BLUE),
+                mini_line(format!("Calls  {}", gateway.total.calls), width, INK),
+                mini_line(mini_sparkline(&gateway.hours), width, BLUE),
+                mini_line("00   06   12   18   24", width, SOFT),
+                mini_line(
+                    format!("Session  {} tok", short(session.iter().sum())),
+                    width,
+                    GREEN,
+                ),
+                mini_line(mini_sparkline(&session), width, GREEN),
+            ];
+            out.push(mini_line("GATEWAY / HOURLY CALLS", width, BLUE));
+            out.extend(mini_hourly_rows(&gateway.hours, width, BLUE));
+            out.push(mini_line("SESSION / HOURLY TOKENS", width, GREEN));
+            out.extend(mini_hourly_rows(&session, width, GREEN));
+            return out;
+        }
+        let m = metrics(&self.snapshot, self.client());
+        let t = &m.total;
+        let unknown = t.calls > 0 && t.unknown == t.calls;
+        let mut out = vec![
+            mini_line(format!("TODAY  {}", self.snapshot.today()), width, BLUE),
+            mini_line(
+                format!(
+                    "{} tok · {} calls",
+                    if self.refreshed.is_none() || unknown {
+                        "—".into()
+                    } else {
+                        short(t.input + t.output)
+                    },
+                    t.calls
+                ),
+                width,
+                INK,
+            ),
+            mini_line(
+                format!(
+                    "↑ {}  ↓ {}",
+                    if unknown { "?".into() } else { short(t.input) },
+                    if unknown { "?".into() } else { short(t.output) }
+                ),
+                width,
+                SOFT,
+            ),
+            mini_line(
+                format!(
+                    "OK {}  ×{}  !{}",
+                    rate(t).map_or("—".into(), |r| format!("{r:.0}%")),
+                    t.failed,
+                    t.interrupted
+                ),
+                width,
+                GREEN,
+            ),
+        ];
+        if let Some(active) = self.active_row() {
+            out.push(mini_line("CURRENT SESSION", width, GREEN));
+            out.push(mini_line(
+                format!("● {} session", active.client),
+                width,
+                GREEN,
+            ));
+            out.push(mini_line(
+                format!(
+                    "{} tok",
+                    if active.tokens.known {
+                        short(active.tokens.total())
+                    } else {
+                        "?".into()
+                    }
+                ),
+                width,
+                INK,
+            ));
+            if active.tokens.known {
+                out.push(mini_line(
+                    format!(
+                        "↑ {}  ↓ {}",
+                        short(active.tokens.input),
+                        short(active.tokens.output)
+                    ),
+                    width,
+                    SOFT,
+                ));
+                out.push(mini_line(
+                    format!(
+                        "↺ R {}  W {}",
+                        short(active.tokens.read),
+                        short(active.tokens.write)
+                    ),
+                    width,
+                    SOFT,
+                ));
+            }
+        }
+        let entries: Vec<(String, &Totals)> = if self.models {
+            m.models.iter().map(|(name, t)| (name.clone(), t)).collect()
+        } else {
+            m.providers
+                .values()
+                .map(|(name, t)| (name.clone(), t))
+                .collect()
+        };
+        out.push(mini_line(
+            if self.models {
+                "MODELS · m switch"
+            } else {
+                "PROVIDERS · m switch"
+            },
+            width,
+            BLUE,
+        ));
+        if entries.is_empty() {
+            out.push(mini_line("No tracked requests", width, SOFT));
+        }
+        for (name, totals) in entries {
+            out.push(mini_line(
+                format!("{}  {} calls", name, totals.calls),
+                width,
+                INK,
+            ));
+            out.push(mini_line(
+                format!(
+                    "  {} tok  ×{}",
+                    token_label(totals),
+                    totals.failed + totals.interrupted
+                ),
+                width,
+                SOFT,
+            ));
+        }
+        out.push(mini_line("GATEWAY / DETAIL", width, BLUE));
+        out.push(mini_line(
+            format!(
+                "↺ R {}  W {}",
+                if unknown {
+                    "?".into()
+                } else {
+                    short(t.cache_read)
+                },
+                if unknown {
+                    "?".into()
+                } else {
+                    short(t.cache_write)
+                }
+            ),
+            width,
+            SOFT,
+        ));
+        out.push(mini_line(
+            format!(
+                "↺ hit {}",
+                if t.cache_input > 0 {
+                    format!("{:.1}%", 100.0 * t.cache_hits as f64 / t.cache_input as f64)
+                } else {
+                    "—".into()
+                }
+            ),
+            width,
+            SOFT,
+        ));
+        out.push(mini_speed_line(t, width));
+        out.push(mini_line(
+            format!(
+                "✓{}  ×{}  !{}  ◌{}",
+                t.success, t.failed, t.interrupted, t.pending
+            ),
+            width,
+            GREEN,
+        ));
+        out.push(mini_line(format!("Compactions {}", m.compact), width, SOFT));
+        if t.unknown > 0 {
+            out.push(mini_line(
+                format!("Unknown tokens: {} calls", t.unknown),
+                width,
+                GOLD,
+            ));
+        }
+        out.push(mini_line("CALLS / EACH HOUR", width, BLUE));
+        out.extend(mini_hourly_rows(&m.hours, width, BLUE));
+        out
+    }
+    fn draw_mini(&mut self, f: &mut ratatui::Frame, area: Rect) {
+        if area.height < 4 {
+            f.render_widget(
+                Paragraph::new(clipped("◈ Pulse · q close", area.width.into()))
+                    .style(Style::default().fg(BLUE)),
+                area,
+            );
+            self.limit = 0;
+            self.scroll = 0;
+            return;
+        }
+        let title = if self.help {
+            "HELP"
+        } else if self.sessions_mode {
+            "SESSIONS"
+        } else if self.chart_mode {
+            "CHARTS"
+        } else {
+            "PULSE"
+        };
+        f.render_widget(
+            Paragraph::new(format!("◈ {title}"))
+                .style(Style::default().fg(BLUE).add_modifier(Modifier::BOLD)),
+            Rect::new(area.x, area.y, area.width.saturating_sub(5), 1),
+        );
+        if area.width >= 10 {
+            f.render_widget(
+                Paragraph::new("v ?").style(Style::default().fg(SOFT)),
+                Rect::new(area.right().saturating_sub(4), area.y, 4, 1),
+            );
+        }
+        let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            1,
+        ));
+        for (i, name) in ["Claude", "Codex", "All"].into_iter().enumerate() {
+            let label = if area.width < 21 {
+                ["Cl", "Cx", "All"][i]
+            } else {
+                name
+            };
+            f.render_widget(
+                Paragraph::new(label).alignment(Alignment::Center).style(
+                    Style::default()
+                        .fg(if self.client == i { BG } else { SOFT })
+                        .bg(if self.client == i { BLUE } else { RAIL }),
+                ),
+                tabs[i],
+            );
+        }
+        let body = mini_body(area);
+        let mut content = self.mini_content(body.width);
+        if self.visual_mode && !self.help && !self.sessions_mode && !self.chart_mode {
+            let totals = metrics(&self.snapshot, self.client()).total;
+            content.insert(4, health_meter(&totals, body.width));
+        }
+        self.limit = (content.len() as u16).saturating_sub(body.height);
+        self.scroll = self.scroll.min(self.limit);
+        f.render_widget(Paragraph::new(content).scroll((self.scroll, 0)), body);
+        if area.height >= 4 {
+            let status = if let Some(error) = &self.error {
+                format!("! {error}")
+            } else if let Some(notice) = &self.notice {
+                notice.clone()
+            } else if self.sessions_mode && self.sessions_refreshed.is_none() {
+                "◌ sessions".into()
+            } else if !self.sessions_mode && self.refreshed.is_none() {
+                "◌ loading".into()
+            } else if self.limit > 0 {
+                "↑↓ scroll".into()
+            } else {
+                "● live".into()
+            };
+            f.render_widget(
+                Paragraph::new(clipped(&status, area.width.into()))
+                    .style(Style::default().fg(if self.error.is_some() { RED } else { SOFT })),
+                Rect::new(area.x, area.bottom().saturating_sub(2), area.width, 1),
+            );
+        }
+        for (label, rect) in [
+            "e",
+            if self.sessions_mode { "t" } else { "c" },
+            "s",
+            "r",
+            "q",
+        ]
+        .into_iter()
+        .zip(mini_buttons(area))
+        {
+            f.render_widget(
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(BLUE).bg(RAIL)),
+                rect,
+            );
+        }
+    }
     fn client(&self) -> Option<&'static str> {
         [Some("Claude"), Some("Codex"), None][self.client]
     }
@@ -550,6 +1108,9 @@ impl Monitor {
             return vec![];
         }
         let mut out = vec![section("SESSION / ALL TIME", width)];
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         let Some(current) = &self.active_session else {
             out.push(line("◌ Waiting for agent session ID", SOFT));
             out.push(line("Open or resume a session in this pane", SOFT));
@@ -594,11 +1155,17 @@ impl Monitor {
             width,
             SOFT,
         ));
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         if !s.tokens.known {
             out.push(line("Token usage unavailable in local log", SOFT));
             return out;
         }
         out.extend(token_digits(&short(s.tokens.total()), GREEN));
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         if s.incomplete {
             out.push(line("+? partial token log", GOLD));
         }
@@ -616,6 +1183,9 @@ impl Monitor {
         let m = metrics(&self.snapshot, self.client());
         let t = &m.total;
         let mut out = vec![pair("TOKENS", self.snapshot.today(), width, SOFT)];
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         if self.refreshed.is_none() {
             out.push(line("◌ Reading gateway usage…", SOFT));
             let active = self.visual_active_content(width);
@@ -632,11 +1202,17 @@ impl Monitor {
             short(t.input + t.output)
         };
         out.extend(token_digits(&total, BLUE));
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         out.push(if unknown {
             line("I/O ░░░░░░░░░░ I ? O ?", SOFT)
         } else {
             compact_token_meter(t.input, t.output, width)
         });
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         out.push(pair(
             "● Calls / unknown",
             format!("{} / {}", t.calls, t.unknown),
@@ -644,27 +1220,13 @@ impl Monitor {
             INK,
         ));
         out.extend(gateway_cache_meter(t, unknown, width));
-        let speed = if t.speed_ms > 0 {
-            format!(
-                "{:.1} tok/s",
-                t.speed_output as f64 * 1000.0 / t.speed_ms as f64
-            )
-        } else {
-            "—".into()
-        };
-        out.push(pair(
-            &format!("↗ Rate {speed}"),
-            format!("{} streams", t.speed_samples),
-            width,
-            BLUE,
-        ));
-        let active = self.visual_active_content(width);
-        if !active.is_empty() {
-            out.push(Line::default());
-            out.extend(active);
-        }
+        out.push(speed_pair("↗ Rate", t, width));
+        out.push(line(format!("{} measured streams", t.speed_samples), SOFT));
         out.push(Line::default());
         out.push(section("CALL HEALTH", width));
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         let health = rate(t);
         out.push(health_meter(t, width));
         out.push(pair(
@@ -681,12 +1243,20 @@ impl Monitor {
             INK,
         ));
         out.push(pair("Compaction", m.compact.to_string(), width, SOFT));
+        let active = self.visual_active_content(width);
+        if !active.is_empty() {
+            out.push(Line::default());
+            out.extend(active);
+        }
         out.push(Line::default());
         out.push(if self.models {
             section_action("MODELS / TODAY", "[Providers m]", width)
         } else {
             section_action("PROVIDERS / TODAY", "[Models m]", width)
         });
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         let mut entries: Vec<(String, &Totals)> = if self.models {
             m.models
                 .iter()
@@ -712,7 +1282,10 @@ impl Monitor {
             out.push(line("No tracked requests today", SOFT));
             out.push(line("Waiting for gateway traffic…", SOFT));
         }
-        for (name, totals) in entries {
+        for (index, (name, totals)) in entries.into_iter().enumerate() {
+            if self.roomy_visual && index > 0 {
+                out.push(Line::default());
+            }
             out.push(pair(&name, format!("{} calls", totals.calls), width, INK));
             out.push(pair(
                 &format!("{} tok", token_label(totals)),
@@ -790,28 +1363,35 @@ impl Monitor {
             return out;
         }
         let suffix = if s.incomplete { "+?" } else { "" };
+        out.push(Line::default());
         out.extend(token_digits(&short(s.tokens.total()), GREEN));
         if !suffix.is_empty() {
             out.push(line("+? partial token log", GOLD));
         }
-        out.push(pair(
-            "Input / Output",
-            format!("{} / {}", short(s.tokens.input), short(s.tokens.output)),
+        let input = short(s.tokens.input);
+        let output = short(s.tokens.output);
+        out.push(duo_line(
             width,
-            INK,
+            ("↑ Input", "↑", &input, BLUE),
+            ("↓ Output", "↓", &output, GOLD),
+        ));
+        let read = if s.tokens.cache_known {
+            short(s.tokens.read)
+        } else {
+            "—".into()
+        };
+        let write = if s.tokens.cache_known {
+            short(s.tokens.write)
+        } else {
+            "—".into()
+        };
+        out.push(duo_line(
+            width,
+            ("↺ Read", "R", &read, GREEN),
+            ("Write", "W", &write, SOFT),
         ));
         out.push(pair(
-            "Cache read / write",
-            if s.tokens.cache_known {
-                format!("{} / {}", short(s.tokens.read), short(s.tokens.write))
-            } else {
-                "— / —".into()
-            },
-            width,
-            SOFT,
-        ));
-        out.push(pair(
-            "Session cache reuse",
+            "Cache reuse",
             s.tokens
                 .cache_reuse_percent()
                 .map_or("—".into(), |rate| format!("{rate:.1}%")),
@@ -856,6 +1436,9 @@ impl Monitor {
                 line("all input in measured", SOFT),
                 line("successful generation calls.", SOFT),
                 line("Cache writes are not hits.", SOFT),
+                line("Write uses upstream-reported", SOFT),
+                line("cache creation tokens;", SOFT),
+                line("cache misses aren't writes.", SOFT),
                 Line::default(),
                 line("Output rate: successful", SOFT),
                 line("streams, all output tokens /", SOFT),
@@ -865,6 +1448,10 @@ impl Monitor {
                 line("Weighted average today;", SOFT),
                 line("not pure model decode speed.", SOFT),
                 line("Old/unmeasured calls excluded.", SOFT),
+                line("Speed colors (tok/s):", SOFT),
+                line("<50 red · 50–99 purple", SOFT),
+                line("100–199 blue · 200–299 green", SOFT),
+                line("300+ rainbow", SOFT),
                 Line::default(),
                 line("? / Esc to return", BLUE),
                 line("v: text / visual view", BLUE),
@@ -898,22 +1485,31 @@ impl Monitor {
             Line::default(),
         ]);
         out.extend(token_digits(&value, BLUE));
-        out.push(line(
-            if unknown {
-                "Input —  ·  Output —".into()
-            } else {
-                format!("Input {}  ·  Output {}", short(t.input), short(t.output))
-            },
-            SOFT,
+        let input = if unknown {
+            "—".into()
+        } else {
+            short(t.input)
+        };
+        let output = if unknown {
+            "—".into()
+        } else {
+            short(t.output)
+        };
+        out.push(duo_line(
+            width,
+            ("↑ Input", "↑", &input, BLUE),
+            ("↓ Output", "↓", &output, GOLD),
         ));
-        out.push(line(
-            if t.unknown > 0 {
-                format!("{} calls: tokens unknown", t.unknown)
-            } else {
-                "Input + output · gateway usage".into()
-            },
-            SOFT,
-        ));
+        if t.unknown > 0 {
+            out.push(line(
+                format!(
+                    "! {} {} lack token data",
+                    t.unknown,
+                    if t.unknown == 1 { "call" } else { "calls" }
+                ),
+                GOLD,
+            ));
+        }
         out.push(Line::default());
         out.push(pair(
             "REQUESTS",
@@ -925,18 +1521,23 @@ impl Monitor {
             width,
             INK,
         ));
-        out.push(pair(
-            "Gateway cache read / write",
-            if unknown {
-                "— / —".into()
-            } else {
-                format!("{} / {}", short(t.cache_read), short(t.cache_write))
-            },
+        let read = if unknown {
+            "—".into()
+        } else {
+            short(t.cache_read)
+        };
+        let write = if unknown {
+            "—".into()
+        } else {
+            short(t.cache_write)
+        };
+        out.push(duo_line(
             width,
-            SOFT,
+            ("↺ Read", "R", &read, GREEN),
+            ("Write", "W", &write, SOFT),
         ));
         out.push(pair(
-            "Gateway cache hit",
+            "Cache hit",
             if t.cache_input > 0 {
                 format!("{:.1}%", 100.0 * t.cache_hits as f64 / t.cache_input as f64)
             } else {
@@ -945,28 +1546,11 @@ impl Monitor {
             width,
             BLUE,
         ));
-        out.push(pair(
-            "Output rate (E2E)",
-            if t.speed_ms > 0 {
-                format!(
-                    "{:.1} tok/s",
-                    t.speed_output as f64 * 1000.0 / t.speed_ms as f64
-                )
-            } else {
-                "—".into()
-            },
-            width,
-            BLUE,
-        ));
+        out.push(speed_pair("Output rate (E2E)", t, width));
         out.push(line(
-            format!("{} measured streams today", t.speed_samples),
+            format!("  ↳ {} measured streams", t.speed_samples),
             SOFT,
         ));
-        let active = self.active_content(width);
-        if !active.is_empty() {
-            out.push(Line::default());
-            out.extend(active);
-        }
         out.push(Line::default());
         out.push(section("CALL HEALTH", width));
         let health = rate(t);
@@ -1014,6 +1598,11 @@ impl Monitor {
         ));
         out.push(pair("◌ Pending", t.pending.to_string(), width, GOLD));
         out.push(pair("↘ Compaction", m.compact.to_string(), width, SOFT));
+        let active = self.active_content(width);
+        if !active.is_empty() {
+            out.push(Line::default());
+            out.extend(active);
+        }
         out.push(Line::default());
         out.push(if self.models {
             section_action("MODELS / TODAY", "[Providers m]", width)
@@ -1045,7 +1634,10 @@ impl Monitor {
             out.push(line("No tracked requests today", SOFT));
             out.push(line("Waiting for gateway traffic…", SOFT));
         }
-        for (name, t) in entries {
+        for (index, (name, t)) in entries.into_iter().enumerate() {
+            if index > 0 {
+                out.push(Line::default());
+            }
             out.push(line(name, INK));
             out.push(pair(
                 &format!("{} calls · {} tok", t.calls, token_label(t)),
@@ -1104,6 +1696,9 @@ impl Monitor {
             out.push(Line::default());
         }
         out.push(section("SESSION HISTORY", width));
+        if self.roomy_visual {
+            out.push(Line::default());
+        }
         out.push(pair(
             "Earlier sessions",
             history_count.to_string(),
@@ -1181,6 +1776,9 @@ impl Monitor {
             }
         }
         if self.sessions.warnings > 0 {
+            if history_count > 0 {
+                out.push(Line::default());
+            }
             out.push(line(
                 format!("! {} logs unavailable / partial", self.sessions.warnings),
                 GOLD,
@@ -1238,7 +1836,6 @@ impl Monitor {
                 },
                 SOFT,
             ),
-            Line::default(),
         ]);
         if self.sessions_refreshed.is_none() {
             out.push(line("Reading local session logs…", SOFT));
@@ -1264,6 +1861,7 @@ impl Monitor {
             {
                 continue;
             }
+            out.push(Line::default());
             let project = std::path::Path::new(&s.project)
                 .file_name()
                 .unwrap_or_default()
@@ -1304,9 +1902,11 @@ impl Monitor {
                 }
             );
             out.push(pair(&cache, time, width, SOFT));
-            out.push(Line::default());
         }
         if self.sessions.warnings > 0 {
+            if history_count > 0 {
+                out.push(Line::default());
+            }
             out.push(line(
                 format!("! {} logs unavailable / partial", self.sessions.warnings),
                 GOLD,
@@ -1321,13 +1921,10 @@ impl Monitor {
             area,
         );
         if area.width < 32 || area.height < 12 {
-            f.render_widget(
-                Paragraph::new("CCSW Pulse\nResize pane to 32 × 12\nq to close")
-                    .style(Style::default().fg(INK)),
-                area,
-            );
+            self.draw_mini(f, area);
             return;
         }
+        self.roomy_visual = area.height >= 32;
         let inner = area.inner(Margin::new(2, 0));
         let title = if self.help {
             "◈ CCSW / HELP"
@@ -1606,7 +2203,13 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
             Event::Key(k) if k.kind == event::KeyEventKind::Press => Some(k),
             Event::Mouse(m) => {
                 let size = terminal.size()?;
-                let area = Rect::new(0, 0, size.width, size.height).inner(Margin::new(2, 0));
+                let screen = Rect::new(0, 0, size.width, size.height);
+                let mini = screen.width < 32 || screen.height < 12;
+                let area = if mini {
+                    screen
+                } else {
+                    screen.inner(Margin::new(2, 0))
+                };
                 let body = content_body(area);
                 let dragging = matches!(
                     m.kind,
@@ -1614,16 +2217,19 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                         | MouseEventKind::Drag(MouseButton::Left)
                 );
                 let code = if dragging {
-                    if let Some(target) = scrollbar_target(
-                        body,
-                        area.right().saturating_sub(1),
-                        m.column,
-                        m.row,
-                        monitor.limit,
-                    ) {
+                    if !mini
+                        && let Some(target) = scrollbar_target(
+                            body,
+                            area.right().saturating_sub(1),
+                            m.column,
+                            m.row,
+                            monitor.limit,
+                        )
+                    {
                         monitor.scroll = target;
                         None
-                    } else if m.kind == MouseEventKind::Down(MouseButton::Left)
+                    } else if !mini
+                        && m.kind == MouseEventKind::Down(MouseButton::Left)
                         && monitor.provider_header_hit(body, m.column, m.row)
                     {
                         monitor.models = !monitor.models;
@@ -1631,18 +2237,35 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     } else {
                         match m.kind {
                             MouseEventKind::Down(MouseButton::Left)
-                                if m.row == 0 && m.column >= area.right().saturating_sub(4) =>
+                                if m.row == 0
+                                    && (!mini || area.width >= 10)
+                                    && m.column
+                                        >= area.right().saturating_sub(if mini {
+                                            2
+                                        } else {
+                                            4
+                                        }) =>
                             {
                                 Some(KeyCode::Char('?'))
                             }
                             MouseEventKind::Down(MouseButton::Left)
-                                if m.row == 0 && m.column >= area.right().saturating_sub(9) =>
+                                if m.row == 0
+                                    && (!mini || area.width >= 10)
+                                    && m.column
+                                        >= area.right().saturating_sub(if mini {
+                                            4
+                                        } else {
+                                            9
+                                        }) =>
                             {
                                 Some(KeyCode::Char('v'))
                             }
-                            MouseEventKind::Down(MouseButton::Left) if m.row == 2 => {
-                                let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3])
-                                    .split(Rect::new(area.x, 2, area.width, 1));
+                            MouseEventKind::Down(MouseButton::Left)
+                                if m.row == if mini { 1 } else { 2 } =>
+                            {
+                                let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(
+                                    Rect::new(area.x, if mini { 1 } else { 2 }, area.width, 1),
+                                );
                                 if let Some(i) =
                                     tabs.iter().position(|r| contains(*r, m.column, m.row))
                                 {
@@ -1651,22 +2274,22 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                                 }
                                 None
                             }
-                            MouseEventKind::Down(MouseButton::Left) => buttons(area)
-                                .iter()
-                                .position(|r| contains(*r, m.column, m.row))
-                                .map(|i| {
-                                    [
-                                        KeyCode::Char('e'),
-                                        KeyCode::Char(if monitor.sessions_mode {
-                                            't'
-                                        } else {
-                                            'c'
-                                        }),
-                                        KeyCode::Char('s'),
-                                        KeyCode::Char('r'),
-                                        KeyCode::Char('q'),
-                                    ][i]
-                                }),
+                            MouseEventKind::Down(MouseButton::Left) => (if mini {
+                                mini_buttons(area)
+                            } else {
+                                buttons(area)
+                            })
+                            .iter()
+                            .position(|r| contains(*r, m.column, m.row))
+                            .map(|i| {
+                                [
+                                    KeyCode::Char('e'),
+                                    KeyCode::Char(if monitor.sessions_mode { 't' } else { 'c' }),
+                                    KeyCode::Char('s'),
+                                    KeyCode::Char('r'),
+                                    KeyCode::Char('q'),
+                                ][i]
+                            }),
                             _ => None,
                         }
                     }
@@ -2474,7 +3097,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("99.8%"));
-        assert!(text.contains("Input 200  ·  Output 100"));
+        assert!(text.contains("↑ Input") && text.contains("↓ Output"));
         assert!(text.contains("Output rate (E2E)"));
         assert!(text.contains("25.0 tok/s"));
         assert!(text.contains("2 measured streams"));
@@ -2639,8 +3262,8 @@ mod tests {
             .map(|l| l.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(content.contains("4 calls: tokens unknown"));
-        assert!(content.contains("— / —"));
+        assert!(content.contains("4 calls lack token data"));
+        assert!(content.contains("↺ Read") && content.contains("Write"));
         assert!(!content.contains("0 tok"));
         assert!(content.contains("no samples"));
     }

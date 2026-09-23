@@ -249,7 +249,12 @@ impl Tokens {
                     .or_else(|| u.get("prompt_cache_hit_tokens"))
                     .or_else(|| u.get("cache_read_input_tokens")),
             ),
-            (&mut self.cache_write, u.get("cache_creation_input_tokens")),
+            (
+                &mut self.cache_write,
+                u.pointer("/input_tokens_details/cache_write_tokens")
+                    .or_else(|| u.pointer("/prompt_tokens_details/cache_write_tokens"))
+                    .or_else(|| u.get("cache_creation_input_tokens")),
+            ),
         ] {
             if let Some(n) = v.and_then(Value::as_i64).filter(|n| *n >= 0) {
                 *slot = Some(n);
