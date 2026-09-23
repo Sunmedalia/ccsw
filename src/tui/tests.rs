@@ -46,7 +46,14 @@ fn tui_theme_settings_mouse_and_keyboard_work_on_every_client() {
             .unwrap();
         assert!(matches!(app.modal, Some(Modal::Appearance(_))));
         let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
-        let row = theme::rows(area)[2].1;
+        let row = theme::rows(
+            area,
+            match app.modal.as_ref().unwrap() {
+                Modal::Appearance(form) => form,
+                _ => unreachable!(),
+            },
+        )[2]
+        .1;
         app.handle_mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -94,7 +101,7 @@ fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
 }
 
 #[test]
-fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
+fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
     let (_temp, mut app) = persisted_app();
     app.open_appearance();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -103,6 +110,7 @@ fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
         theme::Theme::Moss,
         theme::Theme::Sand,
         theme::Theme::Plum,
+        theme::Theme::Pulse,
         theme::Theme::Classic,
     ] {
         app.handle_key(key(KeyCode::Down)).unwrap();
@@ -110,7 +118,7 @@ fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
     }
     app.handle_key(key(KeyCode::Up)).unwrap();
     assert!(
-        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Pulse)
     );
     let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -121,11 +129,42 @@ fn all_five_themes_fit_small_settings_and_cycle_both_directions() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    for name in ["Classic", "Graphite", "Tundra", "Paper", "Nightfall"] {
+    for name in [
+        "Classic",
+        "Graphite",
+        "Tundra",
+        "Paper",
+        "Nightfall",
+        "Pulse",
+    ] {
         assert!(text.contains(name), "{name}: {text}");
     }
     app.handle_key(key(KeyCode::Enter)).unwrap();
-    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Plum);
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Pulse);
+}
+
+#[test]
+fn pulse_pane_theme_is_saved_independently_and_recolors_its_buffer() {
+    let (_temp, mut app) = persisted_app();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.open_appearance();
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.pulse_theme == theme::PulseTheme::Sand)
+    );
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.theme, theme::Theme::Classic);
+    assert_eq!(theme::PulseTheme::load(&app.paths), theme::PulseTheme::Sand);
+    let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+    buffer[(0, 0)].set_fg(quick::INK).set_bg(quick::BG);
+    buffer[(1, 0)].set_fg(quick::BG).set_bg(quick::BLUE);
+    theme::PulseTheme::load(&app.paths).apply(&mut buffer);
+    assert_eq!(buffer[(0, 0)].bg, Color::Rgb(240, 233, 217));
+    assert_eq!(buffer[(0, 0)].fg, Color::Rgb(39, 61, 80));
+    assert_eq!(buffer[(1, 0)].fg, Color::Rgb(255, 252, 244));
 }
 
 #[test]

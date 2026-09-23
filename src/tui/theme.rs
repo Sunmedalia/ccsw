@@ -9,15 +9,17 @@ pub(super) enum Theme {
     Moss,
     Sand,
     Plum,
+    Pulse,
 }
 
 impl Theme {
-    const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 6] = [
         Self::Classic,
         Self::Slate,
         Self::Moss,
         Self::Sand,
         Self::Plum,
+        Self::Pulse,
     ];
 
     fn name(self) -> &'static str {
@@ -27,6 +29,7 @@ impl Theme {
             Self::Moss => "Tundra / pine & brass",
             Self::Sand => "Paper / parchment & blue ink",
             Self::Plum => "Nightfall / navy & lilac",
+            Self::Pulse => "Pulse / blue gray & cyan",
         }
     }
 
@@ -94,8 +97,97 @@ impl Theme {
                 0x161f32, 0xb9cbed, 0xacaecd, 0x2e3b54, 0xd1b9e7, 0x1c2132, 0x8597b6, 0x94d1c7,
                 0xe4c58f, 0xf0abb7, 0xeac5ed,
             ],
+            // Match CCSW Pulse while keeping muted and error text readable on selection.
+            Self::Pulse => [
+                0x141e2a, 0xdfe9f0, 0x8ba1b5, 0x253747, 0x7bbeda, 0x141e2a, 0x304354, 0x93ccb2,
+                0xeac17e, 0xec8b83, 0xf1f5f7,
+            ],
         };
         Some(Palette::new(values))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PulseTheme {
+    #[default]
+    Pulse,
+    Slate,
+    Moss,
+    Sand,
+    Plum,
+}
+
+impl PulseTheme {
+    pub(super) const ALL: [Self; 5] =
+        [Self::Pulse, Self::Slate, Self::Moss, Self::Sand, Self::Plum];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pulse => "Pulse / blue gray & cyan",
+            Self::Slate => "Graphite / charcoal & ivory",
+            Self::Moss => "Tundra / pine & brass",
+            Self::Sand => "Paper / parchment & blue ink",
+            Self::Plum => "Nightfall / navy & lilac",
+        }
+    }
+
+    fn palette(self) -> Option<Palette> {
+        let theme = match self {
+            Self::Pulse => return None,
+            Self::Slate => Theme::Slate,
+            Self::Moss => Theme::Moss,
+            Self::Sand => Theme::Sand,
+            Self::Plum => Theme::Plum,
+        };
+        theme.palette()
+    }
+
+    pub(super) fn load(paths: &AppPaths) -> Self {
+        std::fs::read(paths.state_dir.join("pulse-theme.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(self, paths: &AppPaths) -> Result<()> {
+        crate::codex::atomic_write(
+            &paths.state_dir.join("pulse-theme.json"),
+            &serde_json::to_vec(&self)?,
+        )
+    }
+
+    pub(super) fn apply(self, buffer: &mut ratatui::buffer::Buffer) {
+        let Some(p) = self.palette() else { return };
+        for cell in &mut buffer.content {
+            cell.fg = match cell.fg {
+                quick::INK => p.text,
+                quick::SOFT => p.muted,
+                quick::BLUE => p.accent,
+                quick::GOLD => p.warning,
+                quick::RED => p.error,
+                quick::GREEN => p.success,
+                quick::RAIL => p.border,
+                quick::BG => p.background,
+                Color::Rgb(236, 104, 113) if self == Self::Sand => p.error,
+                Color::Rgb(180, 133, 222) if self == Self::Sand => Color::Rgb(106, 65, 138),
+                Color::Rgb(112, 171, 235) if self == Self::Sand => p.accent,
+                Color::Rgb(133, 212, 162) if self == Self::Sand => p.success,
+                Color::Rgb(244, 164, 101) if self == Self::Sand => Color::Rgb(139, 85, 31),
+                Color::Rgb(239, 214, 111) if self == Self::Sand => p.warning,
+                Color::Rgb(112, 201, 228) if self == Self::Sand => Color::Rgb(47, 99, 116),
+                color => color,
+            };
+            cell.bg = match cell.bg {
+                quick::BG => p.background,
+                quick::RAIL => p.selection,
+                quick::BLUE => p.accent,
+                color => color,
+            };
+            if cell.fg == p.background && cell.bg == p.accent {
+                cell.fg = p.on_accent;
+            }
+        }
     }
 }
 
@@ -183,7 +275,13 @@ mod tests {
 
     #[test]
     fn complete_palettes_have_readable_text_and_explicit_backgrounds() {
-        for theme in [Theme::Slate, Theme::Moss, Theme::Sand, Theme::Plum] {
+        for theme in [
+            Theme::Slate,
+            Theme::Moss,
+            Theme::Sand,
+            Theme::Plum,
+            Theme::Pulse,
+        ] {
             let p = theme.palette().unwrap();
             for bg in [p.background, p.selection] {
                 for fg in [
@@ -219,11 +317,17 @@ mod tests {
 #[derive(Clone)]
 pub(super) struct Appearance {
     pub theme: Theme,
+    pub pulse_theme: PulseTheme,
+    pub pulse_selected: bool,
 }
 
 impl App {
     pub(super) fn open_appearance(&mut self) {
-        self.modal = Some(Modal::Appearance(Appearance { theme: self.theme }));
+        self.modal = Some(Modal::Appearance(Appearance {
+            theme: self.theme,
+            pulse_theme: PulseTheme::load(&self.paths),
+            pulse_selected: false,
+        }));
     }
 
     pub(super) fn appearance_key(&mut self, form: &mut Appearance, key: KeyEvent) -> Result<bool> {
@@ -231,8 +335,9 @@ impl App {
             KeyCode::Esc => return Ok(true),
             KeyCode::Enter | KeyCode::Char('s') => {
                 form.theme.save(&self.paths)?;
+                form.pulse_theme.save(&self.paths)?;
                 self.theme = form.theme;
-                self.status = format!("TUI theme saved: {}", self.theme.name());
+                self.status = "CCSW and Pulse themes saved".into();
                 self.status_error = false;
                 return Ok(true);
             }
@@ -242,26 +347,44 @@ impl App {
                 self.open_preferences();
                 if let Some(Modal::Preferences(preferences)) = self.modal.as_mut() {
                     preferences.return_theme = Some(form.theme);
+                    preferences.return_pulse_theme = Some(form.pulse_theme);
+                    preferences.return_pulse_selected = form.pulse_selected;
                     return Ok(true);
                 }
             }
-            KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
-                let index = Theme::ALL
-                    .iter()
-                    .position(|t| *t == form.theme)
-                    .unwrap_or(0);
-                form.theme = Theme::ALL[(index + Theme::ALL.len() - 1) % Theme::ALL.len()];
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => {
+                form.pulse_selected = !form.pulse_selected;
             }
-            KeyCode::Down
-            | KeyCode::Right
-            | KeyCode::Char('j')
-            | KeyCode::Char('l')
-            | KeyCode::Tab => {
-                let index = Theme::ALL
-                    .iter()
-                    .position(|t| *t == form.theme)
-                    .unwrap_or(0);
-                form.theme = Theme::ALL[(index + 1) % Theme::ALL.len()];
+            KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
+                if form.pulse_selected {
+                    let index = PulseTheme::ALL
+                        .iter()
+                        .position(|t| *t == form.pulse_theme)
+                        .unwrap_or(0);
+                    form.pulse_theme = PulseTheme::ALL
+                        [(index + PulseTheme::ALL.len() - 1) % PulseTheme::ALL.len()];
+                } else {
+                    let index = Theme::ALL
+                        .iter()
+                        .position(|t| *t == form.theme)
+                        .unwrap_or(0);
+                    form.theme = Theme::ALL[(index + Theme::ALL.len() - 1) % Theme::ALL.len()];
+                }
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => {
+                if form.pulse_selected {
+                    let index = PulseTheme::ALL
+                        .iter()
+                        .position(|t| *t == form.pulse_theme)
+                        .unwrap_or(0);
+                    form.pulse_theme = PulseTheme::ALL[(index + 1) % PulseTheme::ALL.len()];
+                } else {
+                    let index = Theme::ALL
+                        .iter()
+                        .position(|t| *t == form.theme)
+                        .unwrap_or(0);
+                    form.theme = Theme::ALL[(index + 1) % Theme::ALL.len()];
+                }
             }
             _ => {}
         }
@@ -269,15 +392,23 @@ impl App {
     }
 }
 
-pub(super) fn rows(area: Rect) -> Vec<(Theme, Rect)> {
+pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
     let inner = panel_inner(area);
-    Theme::ALL
-        .into_iter()
-        .enumerate()
-        .map(|(index, theme)| {
+    let count = if form.pulse_selected {
+        PulseTheme::ALL.len()
+    } else {
+        Theme::ALL.len()
+    };
+    (0..count)
+        .map(|index| {
             (
-                theme,
-                Rect::new(inner.x, inner.y + 1 + index as u16, inner.width, 1),
+                index,
+                Rect::new(
+                    inner.x,
+                    inner.y + if area.height <= 10 { 1 } else { 2 } + index as u16,
+                    inner.width,
+                    1,
+                ),
             )
         })
         .collect()
@@ -287,27 +418,51 @@ pub(super) fn draw(frame: &mut ratatui::Frame, area: Rect, form: &Appearance, cl
     frame.render_widget(panel(" Settings · TUI appearance ", true), area);
     let inner = panel_inner(area);
     frame.render_widget(
-        Paragraph::new("Theme · arrows / j/k preview · Enter save"),
+        Paragraph::new(if form.pulse_selected {
+            "CCSW UI    [Pulse pane] · Tab"
+        } else {
+            "[CCSW UI]    Pulse pane · Tab"
+        })
+        .style(Style::default().fg(ROUTE).add_modifier(Modifier::BOLD)),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
-    for (theme, rect) in rows(area) {
+    if area.height > 10 {
         frame.render_widget(
-            Paragraph::new(format!(
-                " {} {}",
-                if theme == form.theme { "●" } else { "○" },
-                theme.name()
-            ))
-            .style(if theme == form.theme {
-                Style::default().fg(ROUTE).bg(SELECTION)
-            } else {
-                Style::default().fg(MUTED)
-            }),
+            Paragraph::new("Tab: switch target · ↑↓: select · Enter: save")
+                .style(Style::default().fg(MUTED)),
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        );
+    }
+    for (index, rect) in rows(area, form) {
+        let (selected, name) = if form.pulse_selected {
+            let theme = PulseTheme::ALL[index];
+            (theme == form.pulse_theme, theme.name())
+        } else {
+            let theme = Theme::ALL[index];
+            (theme == form.theme, theme.name())
+        };
+        frame.render_widget(
+            Paragraph::new(format!(" {} {}", if selected { "●" } else { "○" }, name)).style(
+                if selected {
+                    Style::default().fg(ROUTE).bg(SELECTION)
+                } else {
+                    Style::default().fg(MUTED)
+                },
+            ),
             rect,
         );
     }
-    frame.render_widget(Paragraph::new("Complete palettes: background, text, selection and status.\nSaved for all clients. Esc cancels the preview.")
-        .wrap(Wrap { trim: false }).style(Style::default().fg(MUTED)),
-        Rect::new(inner.x, inner.y + 7, inner.width, inner.height.saturating_sub(9)));
+    frame.render_widget(
+        Paragraph::new("Pulse pane updates after saving. Esc cancels the preview.")
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(MUTED)),
+        Rect::new(
+            inner.x,
+            inner.y + 9,
+            inner.width,
+            inner.height.saturating_sub(11),
+        ),
+    );
     draw_modal_buttons(
         frame,
         area,

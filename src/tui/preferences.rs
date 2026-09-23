@@ -4,6 +4,8 @@ use crate::claude_preferences::{PRESETS, Settings};
 #[derive(Clone)]
 pub(super) struct PreferencesForm {
     pub(super) return_theme: Option<theme::Theme>,
+    pub(super) return_pulse_theme: Option<theme::PulseTheme>,
+    pub(super) return_pulse_selected: bool,
     original: Settings,
     pub fields: Vec<FormField>,
     pub selected: usize,
@@ -48,6 +50,8 @@ impl PreferencesForm {
         }
         Self {
             return_theme: None,
+            return_pulse_theme: None,
+            return_pulse_selected: false,
             original: settings,
             fields,
             selected: 0,

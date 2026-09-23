@@ -366,13 +366,29 @@ impl App {
         if matches!(self.modal, Some(Modal::Appearance(_))) {
             let modal_area = modal_area_for(self.modal.as_ref().unwrap(), area);
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                if let Some((theme, _)) = theme::rows(modal_area)
-                    .into_iter()
-                    .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+                if let Some((index, _)) = theme::rows(
+                    modal_area,
+                    match self.modal.as_ref().unwrap() {
+                        Modal::Appearance(form) => form,
+                        _ => unreachable!(),
+                    },
+                )
+                .into_iter()
+                .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                 {
                     if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
-                        form.theme = theme;
+                        if form.pulse_selected {
+                            form.pulse_theme = theme::PulseTheme::ALL[index];
+                        } else {
+                            form.theme = theme::Theme::ALL[index];
+                        }
                     }
+                } else if let Some(Modal::Appearance(form)) = self.modal.as_mut()
+                    && mouse.row == panel_inner(modal_area).y
+                    && mouse.column >= panel_inner(modal_area).x
+                    && mouse.column < panel_inner(modal_area).right()
+                {
+                    form.pulse_selected = mouse.column >= panel_inner(modal_area).x + 11;
                 } else {
                     let claude = !self.pi_enabled && !self.codex_ui.enabled;
                     if let Some(index) = modal_button_rects(modal_area, if claude { 3 } else { 2 })
@@ -1248,7 +1264,11 @@ impl App {
             Modal::Preferences(form) => {
                 if self.preferences_key(form, key) {
                     if let Some(theme) = form.return_theme {
-                        self.modal = Some(Modal::Appearance(theme::Appearance { theme }));
+                        self.modal = Some(Modal::Appearance(theme::Appearance {
+                            theme,
+                            pulse_theme: form.return_pulse_theme.unwrap_or_default(),
+                            pulse_selected: form.return_pulse_selected,
+                        }));
                     }
                     return Ok(());
                 }

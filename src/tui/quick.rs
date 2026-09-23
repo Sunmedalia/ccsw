@@ -8,14 +8,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BG: Color = Color::Rgb(20, 30, 42);
-const INK: Color = Color::Rgb(223, 233, 240);
-const SOFT: Color = Color::Rgb(139, 161, 181);
-const BLUE: Color = Color::Rgb(123, 190, 218);
-const GOLD: Color = Color::Rgb(234, 193, 126);
-const RED: Color = Color::Rgb(236, 139, 131);
-const GREEN: Color = Color::Rgb(147, 204, 178);
-const RAIL: Color = Color::Rgb(48, 67, 84);
+pub(super) const BG: Color = Color::Rgb(20, 30, 42);
+pub(super) const INK: Color = Color::Rgb(223, 233, 240);
+pub(super) const SOFT: Color = Color::Rgb(139, 161, 181);
+pub(super) const BLUE: Color = Color::Rgb(123, 190, 218);
+pub(super) const GOLD: Color = Color::Rgb(234, 193, 126);
+pub(super) const RED: Color = Color::Rgb(236, 139, 131);
+pub(super) const GREEN: Color = Color::Rgb(147, 204, 178);
+pub(super) const RAIL: Color = Color::Rgb(48, 67, 84);
 const LABEL: &str = "CCSW Pulse";
 
 fn initial_client(agent: Option<&str>) -> usize {
@@ -73,6 +73,7 @@ fn stable_agent_session(
 
 #[derive(Default)]
 struct Monitor {
+    pulse_theme: theme::PulseTheme,
     snapshot: Snapshot,
     sessions: crate::sessions::Snapshot,
     sessions_refreshed: Option<Instant>,
@@ -2108,6 +2109,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let source_pane = std::env::var("CCSW_MONITOR_SOURCE_PANE")
         .ok()
         .filter(|id| !id.is_empty());
+    let theme_paths = paths.clone();
     let (active_send, active_updates) = mpsc::sync_channel(1);
     if let Some(source) = source_pane.clone() {
         std::thread::spawn(move || {
@@ -2155,6 +2157,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     });
     let (mut terminal, _guard) = setup_terminal()?;
     let mut monitor = Monitor {
+        pulse_theme: theme::PulseTheme::load(&theme_paths),
         client: initial_client(std::env::var("CCSW_MONITOR_CLIENT").ok().as_deref()),
         source_pane,
         ..Default::default()
@@ -2165,6 +2168,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
         spawn_session_reader(session_send, session_requests);
     }
     loop {
+        monitor.pulse_theme = theme::PulseTheme::load(&theme_paths);
         while let Ok(current) = active_updates.try_recv() {
             if monitor.active_session != current {
                 if let Some(active) = &current
@@ -2195,7 +2199,10 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                 Err(error) => monitor.error = Some(error),
             }
         }
-        terminal.draw(|f| monitor.draw(f))?;
+        terminal.draw(|f| {
+            monitor.draw(f);
+            monitor.pulse_theme.apply(f.buffer_mut());
+        })?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
