@@ -1,6 +1,7 @@
 *
 !Cargo.toml
 !Cargo.lock
+!herdr-plugin.toml
 !src/
 !src/**
 !tests/
