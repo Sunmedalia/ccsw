@@ -721,12 +721,7 @@ impl Monitor {
         let session_changed = self.active_session != update.session;
         self.focused_pane = Some(update.pane_id);
         self.focused_client = Some(update.client);
-        if (focus_changed || agent_changed) && self.sessions_mode {
-            self.client = update.client;
-        } else if let Some(active) = &update.session
-            && self.client != 2
-            && self.client() != Some(active.client)
-        {
+        if focus_changed || agent_changed {
             self.client = update.client;
         }
         if focus_changed || agent_changed || session_changed {
@@ -2782,6 +2777,36 @@ mod tests {
         assert_eq!(monitor.client(), Some("Claude"));
         assert_eq!(monitor.session_rows()[0].id, "claude-one");
         assert!(monitor.active_session.is_none());
+    }
+
+    #[test]
+    fn gateway_filter_follows_focus_and_keeps_manual_selection_until_focus_moves() {
+        let mut monitor = Monitor {
+            client: 2,
+            ..Default::default()
+        };
+        monitor.apply_focus(FocusUpdate {
+            pane_id: "codex-pane".into(),
+            client: 1,
+            session: None,
+        });
+        assert_eq!(monitor.client(), Some("Codex"));
+        monitor.client = 2;
+        monitor.apply_focus(FocusUpdate {
+            pane_id: "codex-pane".into(),
+            client: 1,
+            session: Some(AgentSession {
+                client: "Codex",
+                id: "another-session".into(),
+            }),
+        });
+        assert_eq!(monitor.client(), None);
+        monitor.apply_focus(FocusUpdate {
+            pane_id: "claude-pane".into(),
+            client: 0,
+            session: None,
+        });
+        assert_eq!(monitor.client(), Some("Claude"));
     }
 
     #[test]

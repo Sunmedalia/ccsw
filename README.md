@@ -729,7 +729,7 @@ herdr plugin list --plugin ccsw
 快捷键在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
 再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
 首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
-未识别到这两种 agent → All。打开后约每两秒跟随同一标签页当前聚焦的 Claude / Codex pane；聚焦侧栏或普通终端时保留上一次 agent。
+未识别到这两种 agent → All。打开后约每两秒跟随同一标签页当前聚焦的 Claude / Codex pane，Gateway、图表和 Sessions 均切换到对应客户端；聚焦侧栏或普通终端时保留上一次 agent。手动选择 Claude / Codex / All 后，下一次切换 agent 焦点时恢复自动跟随。
 直接运行 `ccsw quick` 默认展示 All。
 
 - `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
