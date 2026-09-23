@@ -610,7 +610,7 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 
 点击 **Settings** 或按 **F4** 打开 TUI 设置。在 Claude 标签页选择 **Claude settings**（或按 `c`）进入客户端设置。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
 
-TUI 设置提供五套完整主题：**Graphite（石墨）**采用炭黑背景与象牙白导航；**Tundra（苔原）**采用深松绿背景、羊皮纸文字和黄铜导航；**Paper（纸页）**采用浅纸色背景、深墨色文字和蓝墨导航；**Nightfall（夜航）**采用深海军蓝背景、淡紫导航与青绿成功状态；**Pulse** 与 Herdr 侧栏插件配色一致，采用蓝灰背景、青蓝导航和青绿状态色。每套主题统一背景、正文、选中块、边框和状态色；Classic 保留原有配色及终端背景。F4 设置页使用 `Tab`（或点击页签）切换 **CCSW UI** 与 **Pulse pane**，侧栏可独立选择 Pulse、Graphite、Tundra、Paper、Nightfall 五套主题。方向键或 `j/k` 切换当前页签的主题，`Enter` / Save 保存两项选择，`Esc` / Cancel 取消。运行中的侧栏会自动读取新配色。进入 Claude settings 后按 `Esc` 或点击 **Themes** 返回主题设置，保留之前的配色预览；有未保存的客户端设置时先确认放弃。主界面主题覆盖客户端页、模型表单、账号和用量图表。两项配色分别保存在状态目录的 `tui-theme.json` 和 `pulse-theme.json`，下次启动自动恢复；不会修改厂商配置或触发代理同步。所有客户端与用量页均可用 `F4` 打开。已有主题选择保留。
+TUI 默认使用 **Graphite（石墨）**，采用炭黑背景与象牙白导航。设置中还提供其他主题：**Tundra（苔原）**采用深松绿背景、羊皮纸文字和黄铜导航；**Paper（纸页）**采用浅纸色背景、深墨色文字和蓝墨导航；**Nightfall（夜航）**采用深海军蓝背景、淡紫导航与青绿成功状态；**Pulse** 与 Herdr 侧栏插件配色一致，采用蓝灰背景、青蓝导航和青绿状态色。每套主题统一背景、正文、选中块、边框和状态色；Classic 保留原有配色及终端背景。F4 设置页使用 `Tab`（或点击页签）切换 **CCSW UI** 与 **Pulse pane**，侧栏可独立选择 Pulse、Graphite、Tundra、Paper、Nightfall 五套主题。方向键或 `j/k` 切换当前页签的主题，`Enter` / Save 保存两项选择，`Esc` / Cancel 取消。运行中的侧栏会自动读取新配色。进入 Claude settings 后按 `Esc` 或点击 **Themes** 返回主题设置，保留之前的配色预览；有未保存的客户端设置时先确认放弃。主界面主题覆盖客户端页、模型表单、账号和用量图表。两项配色分别保存在状态目录的 `tui-theme.json` 和 `pulse-theme.json`，下次启动自动恢复；不会修改厂商配置或触发代理同步。所有客户端与用量页均可用 `F4` 打开。已有主题选择保留；默认值只影响尚未保存 TUI 主题的新用户。
 
 - 六项预设：AI 署名、Teammates、Tool Search、思考强度、禁用自动升级、禁用 Artifact。默认 `inherit` 表示不覆盖已有配置。
 - 点击 **Fill presets**（窄屏显示 **Presets**），或按 **Alt+P**，填入隐藏署名、开启 Teammates / Tool Search、`max` 思考、禁用自动升级和 Artifact；这只修改草稿。

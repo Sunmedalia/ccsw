@@ -3,8 +3,8 @@ use super::*;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Theme {
-    #[default]
     Classic,
+    #[default]
     Slate,
     Moss,
     Sand,

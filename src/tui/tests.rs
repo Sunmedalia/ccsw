@@ -16,16 +16,16 @@ fn tui_theme_preview_cancel_save_and_restart_do_not_touch_provider_config() {
             .buffer()
             .content
             .iter()
-            .any(|c| c.fg == Color::Rgb(226, 222, 210))
+            .any(|c| c.fg == Color::Rgb(216, 194, 142))
     );
-    assert_eq!(app.theme, theme::Theme::Classic);
+    assert_eq!(app.theme, theme::Theme::Slate);
     app.handle_key(key(KeyCode::Esc)).unwrap();
     assert!(!app.paths.state_dir.join("tui-theme.json").exists());
     app.handle_key(key(KeyCode::F(4))).unwrap();
     app.handle_key(key(KeyCode::Down)).unwrap();
     app.handle_key(key(KeyCode::Enter)).unwrap();
-    assert_eq!(app.theme, theme::Theme::Slate);
-    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Slate);
+    assert_eq!(app.theme, theme::Theme::Moss);
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Moss);
     assert_eq!(std::fs::read(&app.paths.config).unwrap(), before);
     assert!(!app.background.sync_running);
     assert!(app.background.queued_sync.is_none());
@@ -85,7 +85,7 @@ fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
     assert!(
         matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Plum)
     );
-    assert_eq!(app.theme, theme::Theme::Classic);
+    assert_eq!(app.theme, theme::Theme::Slate);
 
     form.fields[0].value = "hide".into();
     app.modal = Some(Modal::Preferences(form));
@@ -106,19 +106,19 @@ fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
     app.open_appearance();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     for expected in [
-        theme::Theme::Slate,
         theme::Theme::Moss,
         theme::Theme::Sand,
         theme::Theme::Plum,
         theme::Theme::Pulse,
         theme::Theme::Classic,
+        theme::Theme::Slate,
     ] {
         app.handle_key(key(KeyCode::Down)).unwrap();
         assert!(matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == expected));
     }
     app.handle_key(key(KeyCode::Up)).unwrap();
     assert!(
-        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Pulse)
+        matches!(app.modal, Some(Modal::Appearance(ref form)) if form.theme == theme::Theme::Classic)
     );
     let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -140,7 +140,7 @@ fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
         assert!(text.contains(name), "{name}: {text}");
     }
     app.handle_key(key(KeyCode::Enter)).unwrap();
-    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Pulse);
+    assert_eq!(theme::Theme::load(&app.paths), theme::Theme::Classic);
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn pulse_pane_theme_is_saved_independently_and_recolors_its_buffer() {
         matches!(app.modal, Some(Modal::Appearance(ref form)) if form.pulse_theme == theme::PulseTheme::Sand)
     );
     app.handle_key(key(KeyCode::Enter)).unwrap();
-    assert_eq!(app.theme, theme::Theme::Classic);
+    assert_eq!(app.theme, theme::Theme::Slate);
     assert_eq!(theme::PulseTheme::load(&app.paths), theme::PulseTheme::Sand);
     let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
     buffer[(0, 0)].set_fg(quick::INK).set_bg(quick::BG);
