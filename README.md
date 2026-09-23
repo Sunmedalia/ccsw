@@ -547,12 +547,11 @@ ccsw apply --profile local # 换成自己的厂商 ID；启动代理并更新 Cl
 
 ```sh
 ccsw uninstall --dry-run  # 只查看清理清单，不修改文件；不带参数也是预览
-ccsw uninstall --yes      # 停止当前用户代理、禁用自启并清理已确认归属的配置
-ccsw uninstall --dry-run --herdr  # 在 Herdr 中预览插件链接和快捷键的清理
-ccsw uninstall --yes --herdr      # 同时解绑本地 CCSW Herdr 插件和其快捷键
+ccsw uninstall --yes      # 停止代理、清理配置，并自动解绑本地 CCSW Herdr 插件
+ccsw uninstall --yes --herdr  # 要求 Herdr 检查成功；检查失败则中止卸载
 ```
 
-执行前先关闭其他 CCSW 窗口及 Pulse pane。卸载逐项清理当前路径对应的配置、缓存、代理注册表、日志、PID、同步状态和锁文件；只移除空的应用目录，不递归删除目录，也不扫描其他用户。`--herdr` 只处理经确认的本地 CCSW 插件链接和 `ccsw.open` 快捷键，保留其他 Herdr 配置。程序文件和源码 checkout 保留，可在配置清理成功后手动删除安装位置的 `ccsw` / `ccsw.exe`。
+执行前先关闭其他 CCSW 窗口及 Pulse pane。卸载逐项清理当前路径对应的配置、缓存、代理注册表、日志、PID、同步状态和锁文件；只移除空的应用目录，不递归删除目录，也不扫描其他用户。如已安装 Herdr，普通卸载会检测并解绑经确认的本地 CCSW 插件链接，同时移除 `ccsw.open` 快捷键；GitHub 托管的插件保留，需使用 `herdr plugin uninstall ccsw` 卸载。`--herdr` 要求 Herdr 检查成功，检查失败则中止卸载。其他 Herdr 配置保持不变。程序文件和源码 checkout 保留，可在配置清理成功后手动删除安装位置的 `ccsw` / `ccsw.exe`。
 
 Claude 的 `settings.json`、聊天记录及其他应用文件保留。只有当 Claude 的地址和 token 仍能确认属于本 CCSW 配置时，才清理对应备份，并按同步快照逐字段移除仍与上次写入一致的受管设置；已经切换到其他服务的 Claude 设置及备份原样保留。历史同步记录中登记的设置路径也会检查。没有快照的旧连接仅清除可确认归属的地址和 Token，保留未验证的模型字段。
 

@@ -231,11 +231,20 @@ fn herdr_command(args: &[&str]) -> Result<std::process::Output> {
     Ok(output)
 }
 
-fn plan_herdr() -> Result<HerdrPlan> {
-    ensure_herdr_session()?;
-    let response: Value = serde_json::from_slice(
-        &herdr_command(&["plugin", "list", "--plugin", "ccsw", "--json"])?.stdout,
-    )?;
+fn plan_herdr(explicit: bool) -> Result<Option<HerdrPlan>> {
+    let list = match herdr_command(&["plugin", "list", "--plugin", "ccsw", "--json"]) {
+        Ok(output) => output,
+        Err(error)
+            if !explicit
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let response: Value = serde_json::from_slice(&list.stdout)?;
     let plugins = response
         .pointer("/result/plugins")
         .and_then(Value::as_array)
@@ -248,7 +257,10 @@ fn plan_herdr() -> Result<HerdrPlan> {
             bail!("Herdr returned an unrelated plugin; refusing to unlink");
         }
         if plugin["source"]["kind"].as_str() != Some("local") {
-            bail!("CCSW Herdr plugin is not a local link; unlink it manually");
+            if explicit {
+                bail!("CCSW Herdr plugin is managed by GitHub; use herdr plugin uninstall ccsw");
+            }
+            return Ok(None);
         }
         let root = plugin["plugin_root"]
             .as_str()
@@ -272,11 +284,11 @@ fn plan_herdr() -> Result<HerdrPlan> {
     } else {
         None
     };
-    Ok(HerdrPlan {
+    Ok(Some(HerdrPlan {
         config,
         replacement,
         linked,
-    })
+    }))
 }
 
 fn strip_herdr_shortcut(original: &str) -> Result<Option<String>> {
@@ -296,13 +308,6 @@ fn strip_herdr_shortcut(original: &str) -> Result<Option<String>> {
     }
     let changed = doc.to_string();
     Ok((changed != original).then_some(changed))
-}
-
-fn ensure_herdr_session() -> Result<()> {
-    if std::env::var("HERDR_ENV").as_deref() != Ok("1") {
-        bail!("Run --herdr in a Herdr terminal");
-    }
-    Ok(())
 }
 
 fn execute_herdr(plan: &HerdrPlan) -> Result<()> {
@@ -604,7 +609,7 @@ fn validate_service(service: &Snapshot, paths: &AppPaths) -> Result<()> {
 
 pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     let mut plan = plan(paths)?;
-    let herdr_plan = if herdr { Some(plan_herdr()?) } else { None };
+    let herdr_plan = plan_herdr(herdr)?;
     // Release the session coordination pathname last, after all data removals.
     plan.files
         .sort_by_key(|f| f.path.file_name().is_some_and(|n| n == "session.lock"));

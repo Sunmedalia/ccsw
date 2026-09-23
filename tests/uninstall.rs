@@ -9,11 +9,34 @@ impl Sandbox {
         let sandbox = Self {
             root: tempfile::tempdir().unwrap(),
         };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let bin = sandbox.root.path().join("bin");
+            fs::create_dir(&bin).unwrap();
+            let fake = bin.join("herdr");
+            fs::write(
+                &fake,
+                "#!/bin/sh\nprintf '{\"result\":{\"plugins\":[]}}\\n'\n",
+            )
+            .unwrap();
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         fs::write(sandbox.root.path().join("config.toml"), "version = 2\n[profiles.local]\nname='Local'\nbase_url='https://example.invalid'\ndefault_model='model'\n").unwrap();
         sandbox
     }
     fn command(&self, args: &[&str]) -> Output {
-        support::command(self.root.path())
+        let mut command = support::command(self.root.path());
+        #[cfg(unix)]
+        command.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                self.root.path().join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        );
+        command
             .args(args)
             .env("HOME", self.root.path())
             .env("USERPROFILE", self.root.path())
@@ -112,13 +135,14 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
     let sandbox = Sandbox::new();
     let root = sandbox.root.path();
     let bin = root.join("bin");
-    fs::create_dir(&bin).unwrap();
+    fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("herdr");
-    fs::write(&fake, "#!/bin/sh\nif [ \"$1 $2\" = 'plugin list' ]; then cat \"$HERDR_LIST_FIXTURE\"; fi\nexit 0\n").unwrap();
+    fs::write(&fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_COMMAND_LOG\"\nif [ \"$1 $2\" = 'plugin list' ]; then cat \"$HERDR_LIST_FIXTURE\"; fi\nexit 0\n").unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
     let list = root.join("plugin-list.json");
     fs::write(&list, serde_json::json!({"result":{"plugins":[{"plugin_id":"ccsw","plugin_root":env!("CARGO_MANIFEST_DIR"),"source":{"kind":"local"}}]}}).to_string()).unwrap();
     let herdr_config = root.join("herdr.toml");
+    let herdr_log = root.join("herdr-commands.log");
     fs::write(&herdr_config, "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n").unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let run = |args: &[&str]| {
@@ -132,11 +156,12 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
             .env("HERDR_ENV", "1")
             .env("HERDR_CONFIG_PATH", &herdr_config)
             .env("HERDR_LIST_FIXTURE", &list)
+            .env("HERDR_COMMAND_LOG", &herdr_log)
             .env("PATH", &path)
             .output()
             .unwrap()
     };
-    let preview = run(&["uninstall", "--dry-run", "--herdr"]);
+    let preview = run(&["uninstall", "--dry-run"]);
     assert!(
         preview.status.success(),
         "{}",
@@ -148,7 +173,7 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
             .unwrap()
             .contains("ccsw.open")
     );
-    let result = run(&["uninstall", "--yes", "--herdr"]);
+    let result = run(&["uninstall", "--yes"]);
     assert!(
         result.status.success(),
         "{}",
@@ -157,4 +182,66 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
     let after = fs::read_to_string(&herdr_config).unwrap();
     assert!(!after.contains("ccsw.open"));
     assert!(after.contains("files.open"));
+    assert!(
+        fs::read_to_string(&herdr_log)
+            .unwrap()
+            .contains("plugin unlink ccsw")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn uninstall_preserves_github_managed_herdr_plugin() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let root = sandbox.root.path();
+    let fake = root.join("bin/herdr");
+    fs::write(
+        &fake,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_COMMAND_LOG\"\nif [ \"$1 $2\" = 'plugin list' ]; then cat \"$HERDR_LIST_FIXTURE\"; fi\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let list = root.join("plugin-list.json");
+    fs::write(
+        &list,
+        serde_json::json!({"result":{"plugins":[{"plugin_id":"ccsw","source":{"kind":"github"}}]}})
+            .to_string(),
+    )
+    .unwrap();
+    let herdr_config = root.join("herdr.toml");
+    let original = "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n";
+    fs::write(&herdr_config, original).unwrap();
+    let herdr_log = root.join("herdr-commands.log");
+    let result = support::command(root)
+        .args(["uninstall", "--yes"])
+        .env("HOME", root)
+        .env("CCSW_CONFIG", root.join("config.toml"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("CLAUDE_CONFIG_DIR", root.join("claude"))
+        .env("HERDR_CONFIG_PATH", &herdr_config)
+        .env("HERDR_LIST_FIXTURE", &list)
+        .env("HERDR_COMMAND_LOG", &herdr_log)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fs::read_to_string(&herdr_config).unwrap(), original);
+    assert!(
+        !fs::read_to_string(&herdr_log)
+            .unwrap()
+            .contains("plugin unlink")
+    );
 }

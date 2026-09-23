@@ -74,7 +74,7 @@ enum Commands {
         /// Preview cleanup without changing files (the default)
         #[arg(long)]
         dry_run: bool,
-        /// Also unlink the locally installed CCSW Herdr plugin and shortcut
+        /// Require Herdr plugin cleanup (normally detected automatically)
         #[arg(long)]
         herdr: bool,
     },
