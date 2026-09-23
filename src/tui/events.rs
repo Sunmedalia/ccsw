@@ -537,6 +537,22 @@ impl App {
                             panel.width,
                             panel.height.saturating_sub(3),
                         );
+                        if let Some(editor) = self.ensure_provider_editor() {
+                            let count = editor.filtered_indices().len();
+                            if let Some(index) = scrollbar_index(
+                                list_area,
+                                mouse.column,
+                                mouse.row,
+                                count,
+                                usize::from(list_area.height.saturating_sub(2)),
+                            ) {
+                                editor.selected = index.min(count.saturating_sub(1));
+                                editor.search_active = false;
+                                self.model_idx = editor.selected;
+                                self.focus = Focus::Models;
+                                return Ok(MouseAction::None);
+                            }
+                        }
                         if let Some(btn_rect) = catalog_add_button_rect(search_area)
                             && contains(btn_rect, mouse.column, mouse.row)
                         {
@@ -924,6 +940,37 @@ impl App {
         }
         if !contains(area, mouse.column, mouse.row) {
             return Ok(());
+        }
+
+        if let Some(Modal::Model(form)) = self.modal.as_mut() {
+            let inner = panel_inner(area);
+            let content = Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                inner.height.saturating_sub(2),
+            );
+            let (_, api_area) = model_form_areas(content, form.focus_api_search);
+            let api_inner = panel_inner(api_area);
+            let list_area = Rect::new(
+                api_inner.x,
+                api_inner.y.saturating_add(2),
+                api_inner.width,
+                api_inner.height.saturating_sub(2),
+            );
+            let count = form.filtered_api_models().len();
+            if let Some(index) = scrollbar_index(
+                list_area,
+                mouse.column,
+                mouse.row,
+                count,
+                usize::from(list_area.height),
+            ) {
+                form.api_scroll = index.min(count.saturating_sub(usize::from(list_area.height)));
+                form.api_selected = form.api_scroll;
+                form.focus_api_search = true;
+                return Ok(());
+            }
         }
 
         if matches!(self.modal, Some(Modal::Proxy(_))) {

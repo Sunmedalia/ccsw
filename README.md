@@ -18,6 +18,8 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ## 安装
 
+如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件一键安装](#herdr-插件一键安装)，不需要先手工安装 CCSW 或编辑快捷键。
+
 ### 下载 Release
 
 v0.1.13 提供 macOS Apple Silicon、Linux x86_64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
@@ -455,7 +457,15 @@ ccsw proxy uninstall
 
 在 Usage 页点击 **Models 4** 或按 `4` 查看具体调用模型：按客户端、provider、模型分别展示当日/累计调用次数与 tokens，沿用当前日期和 provider 筛选。选中行下方显示模型及 provider 标识，窄屏也可查看 tokens。已有账本记录可以直接显示，无需重新开始统计；这里展示的是路由选择的上游模型，不是供应商内部实际执行模型的验证结果。
 
-Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude Code / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4` 切换 Provider、历史、指标、模型；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。统计每两秒自动刷新。
+Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude Code / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4/5/6` 切换 Provider、历史、指标、模型、图表、Sessions；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。统计每两秒自动刷新。
+
+**Sessions（`6`）** 读取本机 Claude Code 和 Codex 会话日志，展示 session、项目、客户端、累计 tokens；较宽终端还显示输入、输出、缓存读取和最后活动时间。选中行后，下方显示完整 session ID、项目路径、模型列表及精确用量。`s` 或 Sort 按钮切换最近活动 / tokens 排序；`y` / All time 查看全部历史会话。
+
+- 数据来源：`~/.claude/projects/`、`~/.codex/sessions/` 和 `~/.codex/archived_sessions/`，支持 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`。只统计这些目录中仍存在的日志，包含有本地日志的直连会话；Pi 暂不支持。
+- 日期范围筛选**最后活动时间**，每行 tokens 为**整个会话累计值**，不代表该日期范围内新增消耗。时间沿用 Usage 账本时区。进入 Sessions 会清除 provider 筛选；本地会话数据不与代理账本相加，也不回填代理请求记录。
+- 输入统一包含缓存读取和写入，合计为输入 + 输出；缓存只作细分展示，不重复相加。Claude 按消息 ID 去重，Codex 取最新有效累计用量，不累加重复累计事件。模型列表表示日志中出现的模型，不提供按模型分摊的估算。
+- 子会话独立列出，不自动并入父会话。Codex fork 标记 `*`，其累计值可能包含继承的历史，因此不提供跨会话总和。缺失用量显示 `?`，损坏或跳过的日志记录标记为部分数据。统计是本地日志报告值，不是账单或订阅额度。
+- 打开 Sessions 时在后台扫描，每两秒检查更新并只解析新增内容；统计缓存仅保留在内存中，不修改客户端日志，不保存对话正文。首次打开或重启后会重新扫描历史；删除日志后对应会话不再展示。
 
 - 覆盖经过 CCSW 本地代理的 Claude Code 和 Codex API 请求，按实际路由的 provider ID 和客户端分别归属。一条对话可能产生多次请求；每次向上游发起请求计一次，包括失败请求。成功、失败、中断、进行中分别显示。
 - 每日按请求开始时间归属；首次创建用量库时保存本机 UTC 偏移，此后固定使用该偏移，界面显示具体时区。累计为启用记录以来的总数，不回填历史数据。改名保留历史；删除 provider 不删除账本，复用同一 ID 会接续原有累计。
@@ -612,13 +622,93 @@ Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、�
 以及服务商/模型的调用数和失败数。蓝灰底色、三行大号数字和独立的文字层级用于常驻侧栏；
 字体家族继承终端，不修改其他 pane 的字体。面板使用完整高度，短屏可滚动，最低 32 × 12。
 
-Herdr Pulse 插件目前支持 macOS / Linux，需要 Herdr 0.7.0 或更新版本。在 Herdr 中执行以下命令安装 v0.1.13 插件；它会从该 Release tag 获取插件并构建所需的 CCSW 二进制：
+### Herdr 插件一键安装
+
+支持 macOS / Linux，需要支持 `herdr plugin` 的 Herdr（0.7.0+）和 Rust 1.88+ / Cargo。**在 Herdr 的普通终端中**，进入本项目目录，执行：
 
 ```sh
-herdr plugin install Sunmedalia/ccsw --ref v0.1.13
+bash scripts/install-herdr.sh
 ```
 
-将快捷键配置合并到 Herdr 的 `config.toml` 中；若已有 `prefix+u` 绑定，请替换原绑定，避免冲突：
+这一条命令会依次：
+
+- 构建当前源码的 release 程序，包括尚未发布的本地修改。
+- 更新 `~/.local/bin/ccsw`，替换前备份旧程序，不需要 sudo。
+- 把 Herdr 的 `ccsw` 插件链接到**当前项目目录**并启用，替换之前链接的旧目录。
+- 自动合并 `prefix+u` 快捷键并重载 Herdr 配置；已有的 CCSW 快捷键会保留，不重复添加。配置改动前会输出备份位置，其他插件和快捷键保持原样。
+
+安装完成后，默认按 **Ctrl+B，再按 u** 打开 / 关闭侧栏。侧栏直接按 **`s` / Sessions** 查看会话用量；按 `s` 返回今日用量。也可以按 `e` 打开完整 CCSW，在 **Usage → `6` Sessions** 查看更详细的列表。如果你修改过 Herdr 的 prefix，使用自己的 prefix。
+
+项目目录是插件的运行位置，安装后请保留它。**更新时，在同一目录更新源码，再运行同一条安装命令即可。** 已打开的 CCSW 窗口仍是旧进程，需要退出后重新打开。脚本不会关闭工作中的 agent、重启 Herdr，或自动中断代理请求。
+
+尚未下载源码时，先执行 `git clone https://github.com/Sunmedalia/ccsw.git && cd ccsw`，然后运行上面的脚本。脚本安装的是当前 checkout；旧 Release tag 可能尚未包含该脚本及 Sessions 功能。
+
+如果 `prefix+u` 已被其他功能占用，安装器会说明冲突，不覆盖它；改用一个空闲键：
+
+```sh
+bash scripts/install-herdr.sh --key prefix+shift+u
+```
+
+**更新缓存 / 速度采集逻辑后**，旧代理也需要更新。在没有正在进行的 API 请求时执行（如果代理本来没启动，只执行 start）：
+
+```sh
+"$HOME/.local/bin/ccsw" proxy stop
+"$HOME/.local/bin/ccsw" proxy start
+```
+
+代理保留已有监听地址和路由；不会同步或改写 Claude / Codex 的模型配置。新指标从新版代理采集的新请求开始显示。
+
+确认安装结果：
+
+```sh
+herdr plugin list --plugin ccsw
+"$HOME/.local/bin/ccsw" --version
+```
+
+### 使用侧栏
+
+快捷键在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
+再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
+首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
+未识别到这两种 agent → All。识别仅针对触发 pane，不受其他 pane 的 agent 影响。
+直接运行 `ccsw quick` 默认展示 All。
+
+- `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
+- 每两秒读取本地用量库；`r` 立即刷新。读取失败保留旧数据并标记 STALE。
+- 首页在 `PROVIDERS / TODAY` 标题右侧点击 `[Models m]`（或按 `m`）切换服务商与模型明细；不再使用 `d`。滚轮、方向键、PgUp/PgDn、鼠标点击或拖动滚动条均可滚动，Esc/Home 回到顶部。
+- 侧栏首页首屏先显示**今日 CCSW 网关用量**，再显示启动它的 Claude / Codex pane 的**当前 session 累计 token**；两者均用大数字展示，互不相加，各自保留输入/输出、缓存读写和缓存率。session 缓存复用率 = 缓存读取 ÷ 总输入（不含输出；缓存写入不算命中）。当前会话来自本地日志，约每 2 秒更新；Codex 恢复同一 session 时会合并多份日志的累计计数，避免新日志尚未写入 token 事件时用量暂时消失。`s` / `Sessions` 打开会话页，顶部保留当前会话摘要，下方显示其他本地会话；沿用 Claude / Codex / All 筛选。agent 切换 session 时侧栏随之同步。若 Herdr 尚未提供 session ID，会显示等待识别，不会把最近的日志误标为当前会话。会话页按 `t` 切换最近活动 / token 排序，`r` 刷新，`?` 查看统计说明。Fork 会话标记 `*`，可能包含继承用量。
+- `c` / `Chart` 切换首页与图表页：上方为今日网关每小时请求数，下方为当前 session 今日每小时 token 增量（输入+输出，来自本地日志）；两组图分别缩放，不应直接比较柱高。
+- `v`（或点击右上角 `V(v)` / `T(v)`）在文字版和简洁图形版之间切换，当前页面、客户端筛选和排序保持不变。简洁版仍保留网关与当前 session 的大 Token 数字；网关指标改为输入/输出双色条、请求/未知计数、缓存命中条（内含 R/W 读写量）及速率/测量流数的紧凑读数，保留各项数值而减少重复标签。健康条按已完成请求分为绿色成功、红色失败、金色中断，待完成请求不计入比例。图表页原本就是图形展示，切换后图表数据不变。
+- `e` / `↗ Edit` 新开 Herdr 标签页运行完整 CCSW，并立即切换到新标签页和编辑 pane；监控 pane 继续常驻。
+- 监控与 Edit 均由 Herdr 原生插件直接启动，终端不再显示 `exec` 或启动命令。
+- `q` / `×` 退出监控。
+- 操作按钮直接标注 `(e)`、`(c)`、`(s)`、`(r)`、`(q)`；会话页把 `(c)` 换为排序 `(t)`。
+- 两组 24 小时趋势使用铺满内容宽度的六行柱状图，标出小时刻度；零用量不画虚假柱。
+- `?` 或右上角帮助按钮查看统计范围，`Esc` 返回，首页不再常驻显示范围说明。
+
+统计范围为当前 CCSW 配置经过本地网关的请求，**不是当前 Claude 会话统计或订阅剩余额度**。
+直连 API 和 ChatGPT/Claude 订阅流量不包含在内。成功率 = 成功 /（成功 + 失败 + 中断），
+待完成请求不计入分母；没有已完成请求时显示“无样本”。请求计数包含单独标注的压缩请求，
+Token 缺失时显示未知提示，不当作零用量。插件支持 macOS / Linux。
+
+监控首页在 `TOKENS / TODAY` 大数字下紧接显示请求数、网关缓存读写、`Cache hit`、`Output rate (E2E)` 和测量流数，然后才进入当前 Session 区块。缓存命中率按有完整缓存计数的成功生成请求计算，
+分母统一为包含缓存读取/写入的全部输入 Token（OpenAI 输入本身已包含缓存，Anthropic 需相加），
+缓存写入不算命中。协议取实际路由的上游格式，OpenAI 兼容网关即使返回 Anthropic 风格缓存字段，也不重复加到输入分母；支持 DeepSeek `prompt_cache_hit_tokens`，cache miss 不当作缓存写入。缺失 Anthropic 缓存写入计数时不猜测完整分母。
+端到端输出速率是今日成功流式生成请求的输出 Token 总数除以对应请求耗时总秒数，
+从发出上游请求计到流完成，包含首 Token 等待、隐藏推理和网络传输时间，不等于模型纯解码速度。页面显示测量样本数；无有效样本时显示 `—`。
+旧记录保留，不回填未知协议或计时，也不将旧版缓存分母和输出阶段计时混入新指标；新版网关启动后采集新请求，面板重开即可展示。
+
+### 手动安装（可选）
+
+推荐使用上面的一键脚本。需要自己管理程序和快捷键时，可以仅构建并链接源码：
+
+```sh
+cargo build --locked --release --bin ccsw
+herdr plugin link "$PWD"
+herdr plugin enable ccsw
+```
+
+当前 Herdr 的 `plugin link` 默认启用，不接受旧示例中的 `--enabled`。手动安装需自行将下面的绑定合并到 Herdr `config.toml`（遵循 `HERDR_CONFIG_PATH`，默认 `~/.config/herdr/config.toml`），然后执行 `herdr server reload-config`：
 
 ```toml
 [[keys.command]]
@@ -628,43 +718,4 @@ command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
 ```
 
-保存后重新加载 Herdr 配置，并确认插件已安装：
-
-```sh
-herdr server reload-config
-herdr plugin list
-```
-
-**Ctrl+B，再按 u** 在当前 pane 右侧打开常驻监控，保留原 pane 的焦点；
-再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
-首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
-未识别到这两种 agent → All。识别仅针对触发 pane，不受其他 pane 的 agent 影响。
-直接运行 `ccsw quick` 默认展示 All。
-
-- `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
-- 每两秒读取本地用量库；`r` 立即刷新。读取失败保留旧数据并标记 STALE。
-- `d` / `≡ Models` 切换服务商与模型明细；滚轮、方向键、PgUp/PgDn 滚动，Esc/Home 回到顶部。
-- `e` / `↗ Edit` 新开 Herdr 标签页运行完整 CCSW，并立即切换到新标签页和编辑 pane；监控 pane 继续常驻。
-- 监控与 Edit 均由 Herdr 原生插件直接启动，终端不再显示 `exec` 或启动命令。
-- `q` / `×` 退出监控。
-- 操作按钮直接标注 `(e)`、`(d)`、`(r)`、`(q)`，不再额外占用一行快捷键提示。
-- 24 小时趋势使用铺满内容宽度的六行柱状图，标出小时刻度与峰值；零请求不画虚假柱。
-- `?` 或右上角帮助按钮查看统计范围，`Esc` 返回，首页不再常驻显示范围说明。
-
-统计范围为当前 CCSW 配置经过本地网关的请求，**不是当前 Claude 会话统计或订阅剩余额度**。
-直连 API 和 ChatGPT/Claude 订阅流量不包含在内。成功率 = 成功 /（成功 + 失败 + 中断），
-待完成请求不计入分母；没有已完成请求时显示“无样本”。请求计数包含单独标注的压缩请求，
-Token 缺失时显示未知提示，不当作零用量。插件支持 macOS / Linux。
-
-监控首页另显示 `Cache hit` 和 `Output speed`：缓存命中率按有完整缓存计数的请求计算，
-分母统一为包含缓存读取/写入的全部输入 Token（OpenAI 输入本身已包含缓存，Anthropic 需相加），
-缓存写入不算命中。输出速度是今日成功流式生成请求的输出 Token 总数除以对应输出阶段总秒数，
-从首次内容输出计到流完成，排除首 Token 等待，包含网络传输时间。无有效样本时显示 `—`。
-旧记录保留，不回填未知计时；新版网关启动后采集新请求，面板重开即可展示。
-
-从本地 CCSW 源码目录链接开发版时，进入含 `herdr-plugin.toml` 的仓库目录后执行：
-
-```sh
-cargo build --release --bin ccsw
-herdr plugin link --enabled "$PWD"
-```
+也可以安装固定的已发布版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.13`。这会安装该 tag 的代码，不包含本地尚未发布的修复；仍需手动配置快捷键。

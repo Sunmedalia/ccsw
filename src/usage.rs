@@ -84,10 +84,13 @@ fn open(path: &Path) -> Result<Connection> {
     // Additive migration; old rows remain unknown rather than inventing timings.
     let tx = db.unchecked_transaction()?;
     let columns = request_columns(&tx)?;
-    for column in ["cache_input", "output_ms"] {
+    for column in ["cache_input", "output_ms", "request_ms"] {
         if !columns.contains(column) {
             tx.execute_batch(&format!("ALTER TABLE requests ADD COLUMN {column} INTEGER"))?;
         }
+    }
+    if !columns.contains("upstream_format") {
+        tx.execute_batch("ALTER TABLE requests ADD COLUMN upstream_format TEXT")?;
     }
     tx.commit()?;
     Ok(db)
@@ -108,6 +111,7 @@ pub struct Request {
     pub name: String,
     pub model: String,
     pub kind: &'static str,
+    pub api_format: crate::config::ApiFormat,
 }
 
 pub struct Ticket {
@@ -116,34 +120,38 @@ pub struct Ticket {
     pub outcome: &'static str,
     pub tokens: Tokens,
     cache_input: Option<i64>,
-    cache_exclusive: bool,
-    output_started: Option<Instant>,
-    output_ms: Option<i64>,
+    api_format: crate::config::ApiFormat,
+    request_started: Instant,
+    request_ms: Option<i64>,
 }
 
 impl Ticket {
     pub async fn begin(writer: Writer, request: Request) -> Option<Self> {
         let id = uuid::Uuid::new_v4().to_string();
-        let ticket = Self {
+        let mut ticket = Self {
             writer: writer.clone(),
             id: id.clone(),
             outcome: "failed",
             tokens: Tokens::default(),
             cache_input: None,
-            cache_exclusive: false,
-            output_started: None,
-            output_ms: None,
+            api_format: request.api_format,
+            request_started: Instant::now(),
+            request_ms: None,
         };
         let now = Utc::now();
         let result = tokio::task::spawn_blocking(move || writer.with_connection(|db| {
             let offset: i32 = db.query_row("SELECT value FROM settings WHERE key='offset'", [], |r| r.get(0))?;
             let day = now.with_timezone(&FixedOffset::east_opt(offset).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())).format("%Y-%m-%d").to_string();
-            db.prepare_cached("INSERT INTO requests (id,config,client,provider,name,model,kind,started,day,outcome) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')")?.execute(
-                params![id, request.config.to_string_lossy(), request.client, request.provider, request.name, request.model, request.kind, now.timestamp(), day])?;
+            db.prepare_cached("INSERT INTO requests (id,config,client,provider,name,model,kind,started,day,outcome,upstream_format) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10)")?.execute(
+                params![id, request.config.to_string_lossy(), request.client, request.provider, request.name, request.model, request.kind, now.timestamp(), day, request.api_format.label()])?;
             Ok(())
         })).await;
         match result {
-            Ok(Ok(())) => Some(ticket),
+            Ok(Ok(())) => {
+                // Start immediately before the caller sends the upstream request, excluding DB work.
+                ticket.request_started = Instant::now();
+                Some(ticket)
+            }
             _ => {
                 eprintln!(
                     "CCSW usage: could not record request; check usage database permissions or disk space"
@@ -155,40 +163,29 @@ impl Ticket {
 
     pub fn observe_usage(&mut self, value: &Value) {
         self.tokens.observe(value);
-        if let Some(u) = value
-            .get("usage")
-            .or_else(|| value.pointer("/message/usage"))
-            .or_else(|| value.pointer("/response/usage"))
-        {
-            // Anthropic input excludes read/write cache; OpenAI input includes it.
-            if u.get("cache_read_input_tokens").is_some()
-                || u.get("cache_creation_input_tokens").is_some()
-            {
-                self.cache_exclusive = true;
-            }
-        }
+        // The upstream protocol determines input semantics. OpenAI-compatible gateways
+        // can return Anthropic-named cache fields without changing their input total.
         self.cache_input =
             self.tokens
                 .input
                 .zip(self.tokens.cache_read)
                 .and_then(|(input, read)| {
-                    let total = if self.cache_exclusive {
+                    let total = if self.api_format == crate::config::ApiFormat::Anthropic {
                         input
                             .checked_add(read)?
-                            .checked_add(self.tokens.cache_write.unwrap_or(0))?
+                            .checked_add(self.tokens.cache_write?)?
                     } else {
                         input
                     };
                     (total >= read).then_some(total)
                 });
     }
-    pub fn output_delta(&mut self) {
-        self.output_started.get_or_insert_with(Instant::now);
-    }
     pub fn output_finished(&mut self) {
-        self.output_ms = self
-            .output_started
-            .map(|start| start.elapsed().as_millis().min(i64::MAX as u128) as i64)
+        // Full output usage includes hidden reasoning. Measuring only visible deltas
+        // can divide thousands of tokens by a buffered final burst of a few ms.
+        // This is end-to-end request throughput, not model decode speed.
+        self.request_ms = i64::try_from(self.request_started.elapsed().as_millis())
+            .ok()
             .filter(|ms| *ms > 0);
     }
 }
@@ -202,12 +199,12 @@ impl Drop for Ticket {
             self.outcome,
             self.tokens.clone(),
             self.cache_input,
-            self.output_ms,
+            self.request_ms,
         );
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn_blocking(move || {
                 if saved.0.with_connection(|db| {
-                    db.prepare_cached("UPDATE requests SET outcome=?2,input=?3,output=?4,cache_read=?5,cache_write=?6,cache_input=?7,output_ms=?8 WHERE id=?1")?.execute(
+                    db.prepare_cached("UPDATE requests SET outcome=?2,input=?3,output=?4,cache_read=?5,cache_write=?6,cache_input=?7,request_ms=?8 WHERE id=?1")?.execute(
                         params![saved.1, saved.2, saved.3.input, saved.3.output, saved.3.cache_read, saved.3.cache_write, saved.4, saved.5])?;
                     Ok(())
                 }).is_err() {
@@ -247,9 +244,10 @@ impl Tokens {
             ),
             (
                 &mut self.cache_read,
-                u.get("cache_read_input_tokens")
-                    .or_else(|| u.pointer("/input_tokens_details/cached_tokens"))
-                    .or_else(|| u.pointer("/prompt_tokens_details/cached_tokens")),
+                u.pointer("/input_tokens_details/cached_tokens")
+                    .or_else(|| u.pointer("/prompt_tokens_details/cached_tokens"))
+                    .or_else(|| u.get("prompt_cache_hit_tokens"))
+                    .or_else(|| u.get("cache_read_input_tokens")),
             ),
             (&mut self.cache_write, u.get("cache_creation_input_tokens")),
         ] {
@@ -385,11 +383,11 @@ pub fn snapshot(path: &Path, config: &Path) -> Result<Snapshot> {
 
 fn aggregate_sql(day: &str, model: &str, hour: &str, filter: &str, extended: bool) -> String {
     let extras = if extended {
-        "COALESCE(SUM(CASE WHEN cache_input>0 AND cache_read IS NOT NULL THEN cache_input ELSE 0 END),0),
-         COALESCE(SUM(CASE WHEN cache_input>0 AND cache_read IS NOT NULL THEN cache_read ELSE 0 END),0),
-         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND output_ms>0 AND output>0 THEN output ELSE 0 END),0),
-         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND output_ms>0 AND output>0 THEN output_ms ELSE 0 END),0),
-         COALESCE(SUM(outcome='success' AND kind='generation' AND output_ms>0 AND output>0),0)"
+        "COALESCE(SUM(CASE WHEN upstream_format IS NOT NULL AND outcome='success' AND kind='generation' AND cache_input>0 AND cache_read BETWEEN 0 AND cache_input THEN cache_input ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN upstream_format IS NOT NULL AND outcome='success' AND kind='generation' AND cache_input>0 AND cache_read BETWEEN 0 AND cache_input THEN cache_read ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND request_ms>0 AND output>0 THEN output ELSE 0 END),0),
+         COALESCE(SUM(CASE WHEN outcome='success' AND kind='generation' AND request_ms>0 AND output>0 THEN request_ms ELSE 0 END),0),
+         COALESCE(SUM(outcome='success' AND kind='generation' AND request_ms>0 AND output>0),0)"
     } else {
         "0,0,0,0,0"
     };
@@ -528,7 +526,9 @@ fn snapshot_from(
     let mut parameters = vec![rusqlite::types::Value::Text(config.into_owned())];
     let hour = "CAST(strftime('%H', started + ?2, 'unixepoch') AS INTEGER)";
     let columns = request_columns(&db)?;
-    let extended = columns.contains("cache_input") && columns.contains("output_ms");
+    let extended = ["cache_input", "request_ms", "upstream_format"]
+        .iter()
+        .all(|c| columns.contains(*c));
     let sql = match query {
         Query::Summary => {
             let zone =
@@ -604,39 +604,134 @@ pub(crate) mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn cache_semantics_follow_upstream_protocol_not_field_names() {
+        use crate::config::ApiFormat;
+        let temp = tempfile::tempdir().unwrap();
+        let writer = Writer::new(temp.path().join(FILE));
+        for (format, usage, expected) in [
+            // Regression: OpenAI gateway aliases do not change input semantics.
+            (
+                ApiFormat::OpenaiChat,
+                json!({"input_tokens":120675,"cache_read_input_tokens":120448,"cache_creation_input_tokens":0}),
+                Some(120675),
+            ),
+            (
+                ApiFormat::Anthropic,
+                json!({"input_tokens":227,"cache_read_input_tokens":120448,"cache_creation_input_tokens":0}),
+                Some(120675),
+            ),
+            (
+                ApiFormat::OpenaiChat,
+                json!({"prompt_tokens":100,"prompt_cache_hit_tokens":90,"prompt_cache_miss_tokens":10}),
+                Some(100),
+            ),
+            (
+                ApiFormat::OpenaiResponses,
+                json!({"input_tokens":100,"input_tokens_details":{"cached_tokens":0}}),
+                Some(100),
+            ),
+            (ApiFormat::OpenaiChat, json!({"prompt_tokens":100}), None),
+            (
+                ApiFormat::OpenaiChat,
+                json!({"prompt_tokens":100,"prompt_cache_hit_tokens":101}),
+                None,
+            ),
+            (
+                ApiFormat::Anthropic,
+                json!({"input_tokens":10,"cache_read_input_tokens":90}),
+                None,
+            ),
+        ] {
+            let mut req = request("Claude", "p", "generation");
+            req.api_format = format;
+            let mut t = Ticket::begin(writer.clone(), req).await.unwrap();
+            t.observe_usage(&json!({"usage":usage}));
+            t.observe_usage(&json!({"usage":{"output_tokens":42}}));
+            assert_eq!(t.cache_input, expected);
+            if usage.get("prompt_cache_miss_tokens").is_some() {
+                assert_eq!(
+                    t.tokens.cache_write, None,
+                    "cache misses are not cache writes"
+                );
+                assert_eq!(t.tokens.cache_read, Some(90));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn historical_metrics_and_incomplete_calls_do_not_pollute_new_rates() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(FILE);
+        let writer = Writer::new(path.clone());
+        for (provider, kind, outcome) in [
+            ("valid", "generation", "success"),
+            ("failed", "generation", "failed"),
+            ("interrupted", "generation", "interrupted"),
+            ("compact", "compact", "success"),
+            ("legacy", "generation", "success"),
+        ] {
+            let mut req = request("Codex", provider, kind);
+            req.api_format = crate::config::ApiFormat::OpenaiChat;
+            let mut t = Ticket::begin(writer.clone(), req).await.unwrap();
+            t.observe_usage(&json!({"usage":{"prompt_tokens":100,"completion_tokens":50,"prompt_cache_hit_tokens":90}}));
+            t.request_ms = Some(2000);
+            t.outcome = outcome;
+        }
+        settled(&path, 5).await;
+        let db = Connection::open(&path).unwrap();
+        db.execute("UPDATE requests SET upstream_format=NULL,request_ms=NULL,output_ms=1,cache_input=190 WHERE provider='legacy'", []).unwrap();
+        let total = snapshot(&path, Path::new("test-config")).unwrap().total(
+            None,
+            None,
+            None,
+            "generation",
+        );
+        assert_eq!(total.calls, 4, "historical usage remains visible");
+        assert_eq!((total.cache_hits, total.cache_input), (90, 100));
+        assert_eq!(
+            (total.speed_output, total.speed_ms, total.speed_samples),
+            (50, 2000, 1)
+        );
+    }
+
+    #[tokio::test]
     async fn cache_denominators_and_stream_speed_use_matching_samples() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(FILE);
         let writer = Writer::new(path.clone());
-        for (usage, duration, outcome) in [
+        for (format, usage, duration, outcome) in [
             (
+                crate::config::ApiFormat::Anthropic,
                 json!({"input_tokens":100,"cache_read_input_tokens":300,"cache_creation_input_tokens":100,"output_tokens":40}),
                 Some(1000),
                 "success",
             ),
             (
+                crate::config::ApiFormat::OpenaiResponses,
                 json!({"input_tokens":500,"input_tokens_details":{"cached_tokens":200},"output_tokens":60}),
                 Some(3000),
                 "success",
             ),
             (
+                crate::config::ApiFormat::OpenaiChat,
                 json!({"input_tokens":500,"output_tokens":9999}),
                 None,
                 "success",
             ),
             (
+                crate::config::ApiFormat::OpenaiChat,
                 json!({"input_tokens":500,"output_tokens":9999}),
                 Some(1),
                 "failed",
             ),
         ] {
-            let mut t = Ticket::begin(writer.clone(), request("Claude", "p", "generation"))
-                .await
-                .unwrap();
+            let mut req = request("Claude", "p", "generation");
+            req.api_format = format;
+            let mut t = Ticket::begin(writer.clone(), req).await.unwrap();
             t.observe_usage(&json!({"usage":usage}));
             // Partial cumulative events must preserve protocol/cache metadata.
             t.observe_usage(&json!({"usage":{"output_tokens":t.tokens.output}}));
-            t.output_ms = duration;
+            t.request_ms = duration;
             t.outcome = outcome;
             drop(t);
         }
@@ -677,6 +772,7 @@ pub(crate) mod tests {
 
     pub fn request(client: &'static str, provider: &str, kind: &'static str) -> Request {
         Request {
+            api_format: crate::config::ApiFormat::Anthropic,
             config: PathBuf::from("test-config"),
             client,
             provider: provider.into(),

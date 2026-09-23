@@ -52,6 +52,7 @@ enum Action {
     Section(usize),
     Refresh,
     Close,
+    SessionSort,
 }
 fn buttons(area: Rect, labels: &[(&str, Action)]) -> Vec<(String, Action, Rect)> {
     let padding = u16::from(area.width >= 70);
@@ -118,20 +119,39 @@ fn controls(a: &Areas, page: &UsagePage) -> Vec<(String, Action, Rect)> {
             ("All time", Action::Range(3)),
         ],
     ));
-    let narrow = a.sections.width < 70;
+    let narrow = a.sections.width < 94;
+    let tiny = a.sections.width < 50;
     result.extend(buttons(
         a.sections,
         &[
             (
-                if narrow { "Prov1" } else { "Providers 1" },
+                if tiny {
+                    "Pr1"
+                } else if narrow {
+                    "Prov1"
+                } else {
+                    "Providers 1"
+                },
                 Action::Section(0),
             ),
             (
-                if narrow { "Days2" } else { "History 2" },
+                if tiny {
+                    "Dy2"
+                } else if narrow {
+                    "Days2"
+                } else {
+                    "History 2"
+                },
                 Action::Section(1),
             ),
             (
-                if narrow { "Info3" } else { "Details 3" },
+                if tiny {
+                    "In3"
+                } else if narrow {
+                    "Info3"
+                } else {
+                    "Details 3"
+                },
                 Action::Section(2),
             ),
             (
@@ -142,6 +162,16 @@ fn controls(a: &Areas, page: &UsagePage) -> Vec<(String, Action, Rect)> {
                 if narrow { "Chart5" } else { "Chart 5" },
                 Action::Section(4),
             ),
+            (
+                if tiny {
+                    "Ses6"
+                } else if narrow {
+                    "Sessions6"
+                } else {
+                    "Sessions 6"
+                },
+                Action::Section(5),
+            ),
         ],
     ));
     if page.section == 4 {
@@ -151,6 +181,19 @@ fn controls(a: &Areas, page: &UsagePage) -> Vec<(String, Action, Rect)> {
                 ("Calls c", Action::Metric(false)),
                 ("Tokens v", Action::Metric(true)),
             ],
+        ));
+    }
+    if page.section == 5 {
+        result.extend(buttons(
+            a.body,
+            &[(
+                if page.session_sort_tokens {
+                    "Sort: tokens s"
+                } else {
+                    "Sort: recent s"
+                },
+                Action::SessionSort,
+            )],
         ));
     }
 
@@ -215,6 +258,221 @@ fn heading(label: &str) -> Cell<'static> {
 }
 
 impl App {
+    fn session_rows(&self, page: &UsagePage) -> Vec<&crate::sessions::Session> {
+        let zone = chrono::FixedOffset::east_opt(self.usage.snapshot.offset)
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        let mut rows: Vec<_> = self
+            .usage
+            .sessions
+            .rows
+            .iter()
+            .filter(|s| {
+                page.client().is_none_or(|c| c == s.client)
+                    && (page.range == 3
+                        || chrono::DateTime::from_timestamp(s.updated, 0).is_some_and(|t| {
+                            page.includes(&t.with_timezone(&zone).format("%Y-%m-%d").to_string())
+                        }))
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            if page.session_sort_tokens {
+                b.tokens
+                    .known
+                    .cmp(&a.tokens.known)
+                    .then_with(|| b.tokens.total().cmp(&a.tokens.total()))
+                    .then_with(|| b.updated.cmp(&a.updated))
+                    .then_with(|| a.id.cmp(&b.id))
+            } else {
+                b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id))
+            }
+        });
+        rows
+    }
+
+    fn draw_sessions(&self, frame: &mut ratatui::Frame, a: &Areas, page: &UsagePage) {
+        let sessions = self.session_rows(page);
+        let mut summary = vec![Line::styled(
+            if a.summary.width < 52 {
+                format!("{} sessions · lifetime tokens", sessions.len())
+            } else {
+                format!("{} sessions · local logs · lifetime tokens", sessions.len())
+            },
+            Style::default().fg(ROUTE),
+        )];
+        if a.summary.height >= 3 {
+            summary.push(Line::raw(
+                "Date filters last activity; input includes cache. Independent of proxy ledger.",
+            ));
+            summary.push(Line::styled(
+                "Child sessions listed separately; forks may include inherited usage (*).",
+                Style::default().fg(MUTED),
+            ));
+        }
+        frame.render_widget(Paragraph::new(summary), a.summary);
+        let body = Rect {
+            y: a.body.y.saturating_add(1),
+            height: a.body.height.saturating_sub(1),
+            ..a.body
+        };
+        let detail_height = if body.height >= 10 {
+            5
+        } else if body.height >= 5 {
+            2
+        } else {
+            0
+        };
+        let table_area = Rect {
+            height: body.height.saturating_sub(detail_height),
+            ..body
+        };
+        let wide = body.width >= 90;
+        let medium = body.width >= 60;
+        let mut headers = vec![
+            Cell::from("Session / project"),
+            Cell::from("Client"),
+            heading("Tokens"),
+        ];
+        let mut widths = vec![
+            Constraint::Min(10),
+            Constraint::Length(6),
+            Constraint::Length(11),
+        ];
+        if medium {
+            headers.extend([heading("Input"), heading("Output")]);
+            widths.extend([Constraint::Length(10), Constraint::Length(10)]);
+        }
+        if wide {
+            headers.extend([heading("Cache read"), Cell::from("Last active")]);
+            widths.extend([Constraint::Length(10), Constraint::Length(16)]);
+        }
+        let zone = chrono::FixedOffset::east_opt(self.usage.snapshot.offset)
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        let rows = sessions
+            .iter()
+            .map(|s| {
+                let project = std::path::Path::new(&s.project)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let id: String = s.id.chars().take(8).collect();
+                let value = |n| {
+                    if s.tokens.known {
+                        format!("{}{}", compact(n), if s.incomplete { "?" } else { "" })
+                    } else {
+                        "?".into()
+                    }
+                };
+                let mut cells = vec![
+                    Cell::from(format!(
+                        "{id} {project}{}{}",
+                        if s.child { " [child]" } else { "" },
+                        if s.fork { " *" } else { "" }
+                    )),
+                    Cell::from(s.client),
+                    numeric(value(s.tokens.total()), ROUTE),
+                ];
+                if medium {
+                    cells.extend([
+                        numeric(value(s.tokens.input), Color::White),
+                        numeric(value(s.tokens.output), Color::White),
+                    ]);
+                }
+                if wide {
+                    cells.push(numeric(value(s.tokens.read), MUTED));
+                    cells.push(Cell::from(
+                        chrono::DateTime::from_timestamp(s.updated, 0)
+                            .map(|t| t.with_timezone(&zone).format("%m-%d %H:%M").to_string())
+                            .unwrap_or_default(),
+                    ));
+                }
+                Row::new(cells)
+            })
+            .collect();
+        draw_table(
+            frame,
+            table_area,
+            page,
+            rows,
+            headers,
+            widths,
+            if self.usage.sessions_updated.is_none() {
+                "Loading local sessions…"
+            } else {
+                "No local sessions in this range. Try All time (y) or another client."
+            },
+        );
+        if detail_height > 0
+            && let Some(s) = sessions.get(page.scroll.min(page.limit.get()) as usize)
+        {
+            let count = |n| {
+                if s.tokens.known {
+                    number(n)
+                } else {
+                    "unknown".into()
+                }
+            };
+            let lines = vec![
+                Line::styled(
+                    format!(
+                        "{} · {}{}",
+                        s.client,
+                        s.id,
+                        if s.fork {
+                            " · fork: may include inherited tokens"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Style::default().fg(ROUTE),
+                ),
+                Line::raw(format!(
+                    "Input {} · Output {} · Total {}{}",
+                    count(s.tokens.input),
+                    count(s.tokens.output),
+                    count(s.tokens.total()),
+                    if s.incomplete { " + ? (partial)" } else { "" }
+                )),
+                Line::raw(if s.tokens.cache_known {
+                    format!(
+                        "Cache reuse {} · read {} · write {} (in input)",
+                        s.tokens
+                            .cache_reuse_percent()
+                            .map_or("—".into(), |rate| format!("{rate:.1}%")),
+                        count(s.tokens.read),
+                        count(s.tokens.write)
+                    )
+                } else {
+                    "Cache usage unavailable in local log".into()
+                }),
+                Line::raw(format!("Project: {}", s.project)),
+                Line::styled(
+                    format!(
+                        "Models: {}",
+                        s.models.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                    Style::default().fg(MUTED),
+                ),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect::new(body.x, table_area.bottom(), body.width, detail_height),
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(if self.usage.sessions.warnings > 0 {
+                "Some logs unavailable · cached/partial data · r retry"
+            } else {
+                "↑↓ select · s sort · 6 Sessions · r refresh · Esc back"
+            })
+            .style(Style::default().fg(if self.usage.sessions.warnings > 0 {
+                WARNING
+            } else {
+                MUTED
+            })),
+            a.footer,
+        );
+    }
+
     fn usage_models(&self, page: &UsagePage) -> Vec<ModelRow> {
         let mut models: BTreeMap<(String, String, String), ModelRow> = BTreeMap::new();
         for row in &self.usage.snapshot.rows {
@@ -470,13 +728,23 @@ impl App {
                         }
                         Action::Section(section) => {
                             page.section = section;
+                            if section == 5 {
+                                page.provider = None;
+                            }
+                            page.scroll = 0;
+                        }
+                        Action::SessionSort => {
+                            page.session_sort_tokens = !page.session_sort_tokens;
                             page.scroll = 0;
                         }
                         Action::All => {
                             page.provider = None;
                             page.scroll = 0;
                         }
-                        Action::Refresh => self.usage.updated = None,
+                        Action::Refresh => {
+                            self.usage.updated = None;
+                            self.usage.sessions_updated = None;
+                        }
                         Action::Close => {
                             close = page.key(
                                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -499,7 +767,9 @@ impl App {
                 {
                     let index =
                         page.offset.get() + usize::from(mouse.row - page.table_area.get().y - 1);
-                    let count = if page.section == 3 {
+                    let count = if page.section == 5 {
+                        self.session_rows(&page).len()
+                    } else if page.section == 3 {
                         self.usage_models(&page).len()
                     } else if page.section == 0 {
                         self.usage_providers(&page).len()
@@ -582,7 +852,24 @@ impl App {
                 }
             })
             .unwrap_or_else(|| "All providers".into());
-        frame.render_widget(panel(&format!(" Usage · {scope} "), true), area);
+        frame.render_widget(
+            panel(
+                &format!(
+                    " Usage · {} ",
+                    if page.section == 5 {
+                        "Local sessions"
+                    } else {
+                        &scope
+                    }
+                ),
+                true,
+            ),
+            area,
+        );
+        if page.section == 5 {
+            self.draw_sessions(frame, &a, page);
+            return;
+        }
         if self.usage.query.is_some() && self.usage.updated.is_none() {
             frame.render_widget(
                 Paragraph::new("Loading usage…").style(Style::default().fg(MUTED)),
@@ -1035,6 +1322,99 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn sessions_filter_sort_render_and_mouse_without_proxy_data() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        app.open_usage();
+        app.usage.sessions_updated = Some(std::time::Instant::now());
+        app.usage.sessions.rows = vec![
+            crate::sessions::Session {
+                id: "older-codex".into(),
+                client: "Codex",
+                project: "/work/project".into(),
+                updated: 100,
+                tokens: crate::sessions::Tokens {
+                    input: 1000,
+                    output: 20,
+                    known: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            crate::sessions::Session {
+                id: "recent-claude".into(),
+                client: "Claude",
+                updated: 200,
+                tokens: crate::sessions::Tokens {
+                    input: 10,
+                    output: 2,
+                    known: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ];
+        app.usage.page.as_mut().unwrap().provider = Some("proxy-provider".into());
+        app.usage_key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE));
+        app.usage_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let page = app.usage.page.as_ref().unwrap();
+        assert!(page.provider.is_none());
+        assert_eq!(app.session_rows(page)[0].id, "recent-claude");
+        app.usage_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(
+            app.session_rows(app.usage.page.as_ref().unwrap())[0].id,
+            "older-codex"
+        );
+        // A loading or unavailable proxy ledger must never block local sessions.
+        app.usage.query = Some(crate::usage::Query::All);
+        app.usage.updated = None;
+        for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("older-co"));
+            assert!(text.contains("1,020"));
+            assert!(!text.contains("Loading usage"));
+            let screen = Rect::new(0, 0, width, height);
+            let a = areas(page_area(screen));
+            let session_button = controls(&a, app.usage.page.as_ref().unwrap())
+                .into_iter()
+                .find(|(_, action, _)| matches!(action, Action::Section(5)))
+                .unwrap()
+                .2;
+            app.usage_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: session_button.x,
+                    row: session_button.y,
+                    modifiers: KeyModifiers::NONE,
+                },
+                screen,
+            );
+            assert_eq!(app.usage.page.as_ref().unwrap().section, 5);
+        }
+        app.usage.page.as_mut().unwrap().client = 1;
+        assert_eq!(app.session_rows(app.usage.page.as_ref().unwrap()).len(), 1);
+        app.usage.page.as_mut().unwrap().client = 3;
+        assert!(
+            app.session_rows(app.usage.page.as_ref().unwrap())
+                .is_empty()
+        );
+        app.usage.page.as_mut().unwrap().client = 0;
+        app.usage.page.as_mut().unwrap().range = 0;
+        app.usage.page.as_mut().unwrap().day = "2026-09-22".into();
+        assert!(
+            app.session_rows(app.usage.page.as_ref().unwrap())
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn usage_drilldown_dates_and_mouse_targets_are_consistent() {
         let (_temp, mut app) = crate::tui::tests::persisted_app();
         let today = app.usage.snapshot.today();
@@ -1238,7 +1618,7 @@ mod tests {
                     .iter()
                     .filter(|(_, action, _)| matches!(action, Action::Section(_)))
                     .count(),
-                5
+                6
             );
             assert_eq!(
                 buttons

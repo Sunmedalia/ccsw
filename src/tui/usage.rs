@@ -31,6 +31,10 @@ pub(super) struct UsageUi {
     reader: Option<Reader>,
     query: Option<Query>,
     error: Option<String>,
+    sessions: crate::sessions::Snapshot,
+    sessions_reader: Option<crate::sessions::Reader>,
+    sessions_receiver: Option<mpsc::Receiver<(crate::sessions::Reader, crate::sessions::Snapshot)>>,
+    sessions_updated: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -43,6 +47,7 @@ pub(super) struct UsagePage {
     provider: Option<String>,
     scroll: u16,
     section: usize,
+    session_sort_tokens: bool,
     limit: std::cell::Cell<u16>,
     offset: std::cell::Cell<usize>,
     clicked: Option<(usize, usize)>,
@@ -128,8 +133,15 @@ impl UsagePage {
                 self.provider = None;
                 self.scroll = 0;
             }
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 self.section = (c as u8 - b'1') as usize;
+                if self.section == 5 {
+                    self.provider = None;
+                }
+                self.scroll = 0;
+            }
+            KeyCode::Char('s') if self.section == 5 => {
+                self.session_sort_tokens = !self.session_sort_tokens;
                 self.scroll = 0;
             }
             KeyCode::Char('d' | 'w' | 'm' | 'y') => {
@@ -203,6 +215,7 @@ impl App {
     }
 
     pub(super) fn poll_usage(&mut self) -> bool {
+        let sessions_changed = self.poll_sessions();
         if let Some(page) = &mut self.usage.page
             && page.follow_today
         {
@@ -258,6 +271,51 @@ impl App {
             });
             self.usage.receiver = Some(receiver);
         }
+        changed || sessions_changed
+    }
+
+    fn poll_sessions(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(receiver) = &self.usage.sessions_receiver {
+            match receiver.try_recv() {
+                Ok((reader, snapshot)) => {
+                    self.usage.sessions_reader = Some(reader);
+                    self.usage.sessions = snapshot;
+                    self.usage.sessions_updated = Some(Instant::now());
+                    self.usage.sessions_receiver = None;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.usage.sessions_receiver = None;
+                    self.usage.sessions_updated = Some(Instant::now());
+                    self.usage.sessions.warnings = 1;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.usage.active
+            && self.usage.page.as_ref().is_some_and(|p| p.section == 5)
+            && self.usage.sessions_receiver.is_none()
+            && self
+                .usage
+                .sessions_updated
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
+        {
+            let (sender, receiver) = mpsc::channel();
+            let mut reader = self.usage.sessions_reader.take().unwrap_or_default();
+            std::thread::spawn(move || {
+                let snapshot = match crate::sessions::roots() {
+                    Ok(roots) => reader.read(&roots),
+                    Err(_) => crate::sessions::Snapshot {
+                        rows: vec![],
+                        warnings: 1,
+                    },
+                };
+                let _ = sender.send((reader, snapshot));
+            });
+            self.usage.sessions_receiver = Some(receiver);
+        }
         changed
     }
 
@@ -279,6 +337,7 @@ impl App {
             provider: None,
             scroll: 0,
             section: 0,
+            session_sort_tokens: false,
             limit: Default::default(),
             offset: Default::default(),
             clicked: None,
@@ -303,6 +362,7 @@ impl App {
             }
             if key.code == KeyCode::Char('r') {
                 self.usage.updated = None;
+                self.usage.sessions_updated = None;
             }
             self.usage.page = Some(page);
         }

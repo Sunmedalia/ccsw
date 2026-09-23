@@ -19,6 +19,7 @@ pub(super) async fn begin(
             name: profile.name.clone(),
             model: model.into(),
             kind,
+            api_format: profile.api_format,
         },
     )
     .await
@@ -79,9 +80,6 @@ impl Observer {
                 }
             };
             self.ticket.observe_usage(&value);
-            if output_delta(&value) {
-                self.ticket.output_delta();
-            }
             if value.get("error").is_some_and(|e| !e.is_null())
                 || matches!(value["type"].as_str(), Some("error" | "response.failed"))
             {
@@ -116,35 +114,6 @@ impl Observer {
             }
             Err(_) => self.ticket.outcome = "failed",
         }
-    }
-}
-
-fn output_delta(value: &Value) -> bool {
-    let nonempty = |v: &Value| v.as_str().is_some_and(|s| !s.is_empty());
-    match value["type"].as_str() {
-        Some("content_block_delta") => ["text", "thinking", "partial_json"]
-            .iter()
-            .any(|key| nonempty(&value["delta"][key])),
-        Some(
-            "response.output_text.delta"
-            | "response.reasoning_text.delta"
-            | "response.reasoning_summary_text.delta"
-            | "response.function_call_arguments.delta"
-            | "response.custom_tool_call_input.delta",
-        ) => nonempty(&value["delta"]),
-        _ => value["choices"].as_array().is_some_and(|choices| {
-            choices.iter().any(|c| {
-                let d = &c["delta"];
-                nonempty(&d["content"])
-                    || nonempty(&d["reasoning_content"])
-                    || nonempty(&d["function_call"]["arguments"])
-                    || d["tool_calls"].as_array().is_some_and(|calls| {
-                        calls
-                            .iter()
-                            .any(|call| nonempty(&call["function"]["arguments"]))
-                    })
-            })
-        }),
     }
 }
 
@@ -188,28 +157,8 @@ mod tests {
     use super::*;
     use crate::usage::tests::{request, settled};
 
-    #[test]
-    fn streaming_timer_ignores_headers_usage_and_empty_deltas() {
-        for value in [
-            json!({"type":"message_start"}),
-            json!({"type":"response.completed"}),
-            json!({"choices":[{"delta":{"role":"assistant"}}]}),
-            json!({"choices":[{"delta":{"content":""}}]}),
-        ] {
-            assert!(!output_delta(&value));
-        }
-        for value in [
-            json!({"type":"content_block_delta","delta":{"text":"hello"}}),
-            json!({"type":"response.output_text.delta","delta":"hello"}),
-            json!({"choices":[{"delta":{"content":"hello"}}]}),
-            json!({"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{}"}}]}}]}),
-        ] {
-            assert!(output_delta(&value));
-        }
-    }
-
     #[tokio::test]
-    async fn stream_duration_is_recorded_only_after_output_and_completion() {
+    async fn stream_duration_includes_wait_before_buffered_output() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(crate::usage::FILE);
         let ticket = Ticket::begin(
@@ -218,10 +167,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // Headers/hidden reasoning may take most of the time; the final text can
+        // arrive in one burst. That wait must remain in the denominator.
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
         let mut observer = Observer::new(ticket, true);
         observer
             .push(b"data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hello\"}}\n\n");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         observer.push(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\ndata: {\"type\":\"message_stop\"}\n\n");
         drop(observer);
         let t = settled(&path, 1)
@@ -229,7 +180,7 @@ mod tests {
             .total(None, None, None, "generation");
         assert_eq!(t.speed_output, 20);
         assert_eq!(t.speed_samples, 1);
-        assert!(t.speed_ms >= 20);
+        assert!(t.speed_ms >= 40);
     }
 
     #[tokio::test]

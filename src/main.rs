@@ -3,11 +3,13 @@ mod claude_preferences;
 mod codex;
 mod config;
 mod discovery;
+mod herdr_install;
 mod import;
 mod managed_process;
 mod pi;
 mod platform;
 mod proxy;
+mod sessions;
 mod sync;
 mod tui;
 mod uninstall;
@@ -38,6 +40,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install this checkout as a Herdr plugin and configure its shortcut
+    HerdrInstall {
+        /// Checkout containing herdr-plugin.toml and target/release/ccsw
+        #[arg(long, default_value = ".")]
+        source: PathBuf,
+        /// Shortcut to add; existing unrelated bindings are never overwritten
+        #[arg(long, default_value = "prefix+u")]
+        key: String,
+    },
     /// Live usage and request-health monitor for a persistent Herdr side pane
     Quick {
         /// Toggle the monitor beside the current Herdr pane
@@ -133,6 +144,9 @@ enum InternalCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Commands::HerdrInstall { source, key }) = &cli.command {
+        return herdr_install::run(source, key);
+    }
     // A daemon is completely described by its registry. Login managers do not
     // necessarily inherit the interactive shell's directory overrides.
     if let Some(Commands::Internal {
@@ -163,6 +177,7 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Quick { open }) => tui::run_quick(paths, open),
         Some(Commands::Uninstall { .. }) => unreachable!(),
+        Some(Commands::HerdrInstall { .. }) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;
             let import = if config.profiles.is_empty() {

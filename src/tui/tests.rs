@@ -720,6 +720,90 @@ fn scrollbar_click_and_drag_cover_the_full_list() {
 }
 
 #[test]
+fn model_picker_scrollbar_drag_moves_the_api_list() {
+    let mut app = interactive_test_app();
+    let models = (0..40)
+        .map(|index| ModelEntry {
+            id: format!("api-model-{index:02}"),
+            label: None,
+            description: None,
+            max_output_tokens: None,
+            context_window: None,
+            reasoning_max: None,
+        })
+        .collect();
+    app.modal = Some(Modal::Model(ModelForm::with_api_models(models)));
+    let screen = Rect::new(0, 0, 120, 30);
+    let area = modal_area_for(app.modal.as_ref().unwrap(), screen);
+    let inner = panel_inner(area);
+    let content = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let (_, api_area) = model_form_areas(content, false);
+    let api_inner = panel_inner(api_area);
+    let list_area = Rect::new(
+        api_inner.x,
+        api_inner.y + 2,
+        api_inner.width,
+        api_inner.height.saturating_sub(2),
+    );
+    app.handle_modal_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: list_area.right() - 1,
+            row: list_area.bottom() - 2,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    let Some(Modal::Model(form)) = &app.modal else {
+        panic!("model form closed");
+    };
+    assert!(form.api_scroll > 0);
+}
+
+#[test]
+fn provider_catalog_scrollbar_drag_selects_a_later_model() {
+    let mut app = interactive_test_app();
+    let profile = app.config.profiles.get_mut("one").unwrap();
+    for index in 0..30 {
+        profile.models.push(ModelEntry {
+            id: format!("model-{index:02}"),
+            label: None,
+            description: None,
+            max_output_tokens: None,
+            context_window: None,
+            reasoning_max: None,
+        });
+    }
+    app.view_mode = ViewMode::Provider;
+    app.focus = Focus::Models;
+    let screen = Rect::new(0, 0, 120, 30);
+    let panel = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let list_area = Rect::new(
+        panel.x,
+        panel.y + 3,
+        panel.width,
+        panel.height.saturating_sub(3),
+    );
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: list_area.right() - 1,
+            row: list_area.bottom() - 2,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    assert!(app.model_idx > 0);
+}
+
+#[test]
 fn route_details_exposes_clickable_provider_editor() {
     let mut app = interactive_test_app();
     app.view_mode = ViewMode::Provider;
