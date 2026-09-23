@@ -5,8 +5,30 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::mpsc::SyncSender,
     time::SystemTime,
 };
+
+pub fn watch_changes(
+    roots: &[(PathBuf, bool)],
+    wake: SyncSender<()>,
+) -> Option<notify::RecommendedWatcher> {
+    use notify::{RecursiveMode, Watcher};
+
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if matches!(event, Ok(event) if !matches!(event.kind, notify::EventKind::Access(_))) {
+            let _ = wake.try_send(());
+        }
+    })
+    .ok()?;
+    let mut watched = false;
+    for (root, _) in roots {
+        if root.is_dir() && watcher.watch(root, RecursiveMode::Recursive).is_ok() {
+            watched = true;
+        }
+    }
+    watched.then_some(watcher)
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -201,8 +223,7 @@ impl CachedFile {
         }
     }
     fn read(&mut self, path: &Path, claude: bool) -> std::io::Result<()> {
-        let mut file = File::open(path)?;
-        let meta = file.metadata()?;
+        let meta = fs::metadata(path)?;
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;
@@ -239,6 +260,7 @@ impl CachedFile {
                 self.session.id = format!("{}/{}", parent.to_string_lossy(), self.session.id);
             }
         }
+        let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(self.offset))?;
         let mut reader = BufReader::new(file);
         loop {
@@ -412,6 +434,17 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Write;
+
+    #[test]
+    fn watcher_wakes_when_a_session_log_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (wake, changes) = std::sync::mpsc::sync_channel(1);
+        let _watcher = watch_changes(&[(temp.path().to_path_buf(), true)], wake).unwrap();
+        append(&temp.path().join("new-session.jsonl"), claude("m1", 1));
+        changes
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+    }
 
     fn append(path: &Path, value: Value) {
         let mut f = fs::OpenOptions::new()

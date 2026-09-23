@@ -89,10 +89,14 @@ impl Observer {
             }
             if matches!(
                 value["type"].as_str(),
-                Some("message_stop" | "response.completed" | "response.incomplete")
+                Some("message_stop" | "response.completed")
             ) {
                 self.ticket.outcome = "success";
                 self.ticket.output_finished();
+                self.completed = true;
+                break;
+            }
+            if value["type"] == "response.incomplete" {
                 self.completed = true;
                 break;
             }
@@ -181,6 +185,26 @@ mod tests {
         assert_eq!(t.speed_output, 20);
         assert_eq!(t.speed_samples, 1);
         assert!(t.speed_ms >= 40);
+    }
+
+    #[tokio::test]
+    async fn incomplete_response_does_not_contribute_to_output_rate() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(crate::usage::FILE);
+        let ticket = Ticket::begin(
+            crate::usage::Writer::new(path.clone()),
+            request("Codex", "p", "generation"),
+        )
+        .await
+        .unwrap();
+        let mut observer = Observer::new(ticket, true);
+        observer.push(b"data: {\"type\":\"response.incomplete\",\"response\":{\"usage\":{\"output_tokens\":20}}}\n\n");
+        drop(observer);
+        let total = settled(&path, 1)
+            .await
+            .total(None, None, None, "generation");
+        assert_eq!(total.interrupted, 1);
+        assert_eq!(total.speed_samples, 0);
     }
 
     #[tokio::test]

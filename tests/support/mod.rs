@@ -1,7 +1,26 @@
-use std::{fs, path::Path, process::Command};
+use std::{env, fs, path::Path, process::Command};
 
 pub fn isolate(command: &mut Command, root: &Path) {
     fs::create_dir_all(root.join("tmp")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let herdr = bin.join("herdr");
+        if !herdr.exists() {
+            fs::write(
+                &herdr,
+                "#!/bin/sh\nif [ \"$1 $2\" = 'plugin list' ]; then\n  printf '{\"result\":{\"plugins\":[]}}\\n'\n  exit 0\nfi\nprintf 'Unexpected Herdr command in isolated test: %s\\n' \"$*\" >&2\nexit 1\n",
+            )
+            .unwrap();
+            fs::set_permissions(&herdr, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        command.env(
+            "PATH",
+            format!("{}:{}", bin.display(), env::var("PATH").unwrap_or_default()),
+        );
+    }
     for key in [
         "HOME",
         "USERPROFILE",
@@ -24,6 +43,13 @@ pub fn isolate(command: &mut Command, root: &Path) {
         "OPENAI_API_KEY",
         "CODEX_ACCESS_TOKEN",
         "CODEX_AUTH",
+        "HERDR_ENV",
+        "HERDR_SOCKET_PATH",
+        "HERDR_CONFIG_PATH",
+        "HERDR_BIN_PATH",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+        "HERDR_PANE_ID",
     ] {
         command.env_remove(key);
     }

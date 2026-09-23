@@ -3,6 +3,7 @@ use super::*;
 use crate::usage::{Query, Reader, Snapshot, Totals};
 use chrono::Timelike;
 use std::{
+    io::{BufRead, BufReader, Read, Write},
     process::Command,
     sync::mpsc,
     time::{Duration, Instant},
@@ -98,11 +99,82 @@ fn focused_agent(panes: &serde_json::Value, tab_id: &str) -> Option<FocusedAgent
         })
 }
 
+fn focused_pane(
+    pane: &serde_json::Value,
+    tab_id: Option<&str>,
+    source: &str,
+) -> Option<FocusedAgent> {
+    if tab_id.is_some_and(|tab| pane["tab_id"].as_str() != Some(tab))
+        || (tab_id.is_none() && pane["pane_id"].as_str() != Some(source))
+        || (tab_id.is_some() && pane["focused"] != true)
+    {
+        return None;
+    }
+    let pane_id = pane["pane_id"].as_str()?;
+    let client = initial_client(pane["agent"].as_str());
+    (client != 2).then(|| FocusedAgent {
+        pane_id: pane_id.into(),
+        client,
+        session: agent_session(pane),
+    })
+}
+
 #[derive(Clone, Debug)]
 struct FocusUpdate {
     pane_id: String,
     client: usize,
     session: Option<AgentSession>,
+}
+
+#[derive(Default)]
+struct FocusTracker {
+    previous: Option<AgentSession>,
+    pane: Option<String>,
+    client: Option<usize>,
+    missing: u8,
+}
+
+impl FocusTracker {
+    fn observe(
+        &mut self,
+        focused: Option<FocusedAgent>,
+        send: &mpsc::SyncSender<FocusUpdate>,
+        event_driven: bool,
+    ) -> bool {
+        let Some(focused) = focused else { return true };
+        let changed_focus = self.pane.as_deref() != Some(focused.pane_id.as_str())
+            || self.client != Some(focused.client);
+        if changed_focus {
+            self.pane = Some(focused.pane_id.clone());
+            self.client = Some(focused.client);
+            self.previous = focused.session.clone();
+            self.missing = 0;
+            return send
+                .send(FocusUpdate {
+                    pane_id: focused.pane_id,
+                    client: focused.client,
+                    session: focused.session,
+                })
+                .is_ok();
+        }
+        // A full pane event is authoritative. The polling fallback waits for
+        // three missing observations because CLI snapshots can be transient.
+        if event_driven && focused.session.is_none() && self.previous.is_some() {
+            self.missing = 2;
+        }
+        if let Some(session) =
+            stable_agent_session(&mut self.previous, &mut self.missing, focused.session)
+        {
+            return send
+                .send(FocusUpdate {
+                    pane_id: focused.pane_id,
+                    client: focused.client,
+                    session,
+                })
+                .is_ok();
+        }
+        true
+    }
 }
 fn stable_agent_session(
     previous: &mut Option<AgentSession>,
@@ -2094,7 +2166,7 @@ impl Monitor {
                 format!("! {} logs unavailable · r retry", self.sessions.warnings)
             } else if let Some(time) = self.sessions_refreshed {
                 format!(
-                    "● Sessions updated {}s ago · refresh 2s",
+                    "● Sessions updated {}s ago · on change",
                     time.elapsed().as_secs()
                 )
             } else {
@@ -2107,14 +2179,14 @@ impl Monitor {
                     self.sessions.warnings
                 )
             } else {
-                "● Charts update every 2s · c: Home".into()
+                "● Charts auto-update · c: Home".into()
             }
         } else if let Some(error) = &self.error {
             format!("! STALE · {error}")
         } else if let Some(note) = &self.notice {
             note.clone()
         } else if let Some(time) = self.refreshed {
-            format!("● Updated {}s ago · refresh 2s", time.elapsed().as_secs())
+            format!("● Checked {}s ago · every 2s", time.elapsed().as_secs())
         } else {
             "◌ Reading local usage…".into()
         };
@@ -2181,11 +2253,21 @@ impl Monitor {
 fn spawn_session_reader(
     session_send: mpsc::SyncSender<crate::sessions::Snapshot>,
     session_requests: mpsc::Receiver<()>,
+    session_refresh: mpsc::SyncSender<()>,
 ) {
     std::thread::spawn(move || {
         let mut reader = crate::sessions::Reader::default();
+        let mut watcher = None;
+        let mut watched_at = Instant::now();
         loop {
-            let snapshot = match crate::sessions::roots() {
+            let roots = crate::sessions::roots();
+            if watcher.is_none() || watched_at.elapsed() >= Duration::from_secs(30) {
+                watcher = roots.as_ref().ok().and_then(|roots| {
+                    crate::sessions::watch_changes(roots, session_refresh.clone())
+                });
+                watched_at = Instant::now();
+            }
+            let snapshot = match roots {
                 Ok(roots) => reader.read(&roots),
                 Err(_) => crate::sessions::Snapshot {
                     rows: vec![],
@@ -2195,14 +2277,120 @@ fn spawn_session_reader(
             if session_send.send(snapshot).is_err() {
                 break;
             }
-            if matches!(
-                session_requests.recv_timeout(Duration::from_secs(2)),
-                Err(mpsc::RecvTimeoutError::Disconnected)
-            ) {
-                break;
+            let wait = if watcher.is_some() {
+                Duration::from_secs(30).saturating_sub(watched_at.elapsed())
+            } else {
+                Duration::from_secs(2)
+            };
+            match session_requests.recv_timeout(wait) {
+                Ok(()) => {
+                    std::thread::sleep(Duration::from_millis(150));
+                    while session_requests.try_recv().is_ok() {}
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
     });
+}
+
+fn current_focus(workspace: Option<&str>, tab: Option<&str>, source: &str) -> Option<FocusedAgent> {
+    match (workspace, tab) {
+        (Some(workspace), Some(tab)) => herdr(&["pane", "list", "--workspace", workspace])
+            .ok()
+            .and_then(|panes| focused_agent(&panes, tab)),
+        _ => herdr(&["pane", "get", source])
+            .ok()
+            .and_then(|result| focused_pane(&result["result"]["pane"], None, source)),
+    }
+}
+
+fn focus_from_event(
+    event: &serde_json::Value,
+    workspace: Option<&str>,
+    tab: Option<&str>,
+    source: &str,
+) -> Option<FocusedAgent> {
+    let data = &event["data"];
+    match event["event"].as_str()? {
+        "pane_updated" | "pane_created" | "pane_moved" => focused_pane(&data["pane"], tab, source),
+        "pane_focused" | "pane_agent_detected" => {
+            let id = data["pane_id"].as_str()?;
+            herdr(&["pane", "get", id])
+                .ok()
+                .and_then(|result| focused_pane(&result["result"]["pane"], tab, source))
+        }
+        "pane_closed" => current_focus(workspace, tab, source),
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+fn focus_event_socket(path: &std::path::Path) -> Result<Box<dyn ReadWrite>> {
+    Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?))
+}
+
+#[cfg(windows)]
+fn focus_event_socket(path: &std::path::Path) -> Result<Box<dyn ReadWrite>> {
+    Ok(Box::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?,
+    ))
+}
+
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
+
+fn follow_focus_events(
+    tracker: &mut FocusTracker,
+    send: &mpsc::SyncSender<FocusUpdate>,
+    workspace: Option<&str>,
+    tab: Option<&str>,
+    source: &str,
+) -> Result<bool> {
+    let path = std::env::var_os("HERDR_SOCKET_PATH").context("Herdr socket unavailable")?;
+    let mut socket = focus_event_socket(std::path::Path::new(&path))?;
+    let request = serde_json::json!({
+        "id": "ccsw_focus",
+        "method": "events.subscribe",
+        "params": {"subscriptions": [
+            {"type": "pane.focused"},
+            {"type": "pane.updated"},
+            {"type": "pane.created"},
+            {"type": "pane.moved"},
+            {"type": "pane.closed"},
+            {"type": "pane.agent_detected"}
+        ]}
+    });
+    socket.write_all(request.to_string().as_bytes())?;
+    socket.write_all(b"\n")?;
+    let mut reader = BufReader::new(socket);
+    let mut line = String::new();
+    anyhow::ensure!(
+        reader.read_line(&mut line)? > 0,
+        "Herdr subscription closed"
+    );
+    let response: serde_json::Value = serde_json::from_str(&line)?;
+    anyhow::ensure!(
+        response["result"].is_object(),
+        "Herdr subscription rejected"
+    );
+    if !tracker.observe(current_focus(workspace, tab, source), send, true) {
+        return Ok(false);
+    }
+    loop {
+        line.clear();
+        anyhow::ensure!(
+            reader.read_line(&mut line)? > 0,
+            "Herdr subscription closed"
+        );
+        let event: serde_json::Value = serde_json::from_str(&line)?;
+        if !tracker.observe(focus_from_event(&event, workspace, tab, source), send, true) {
+            return Ok(false);
+        }
+    }
 }
 
 pub(super) fn run(paths: AppPaths) -> Result<()> {
@@ -2219,56 +2407,24 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let (active_send, active_updates) = mpsc::sync_channel(1);
     if let Some(source) = source_pane.clone() {
         std::thread::spawn(move || {
-            let mut previous = None;
-            let mut previous_pane = None;
-            let mut previous_client = None;
-            let mut missing = 0;
+            let mut tracker = FocusTracker::default();
             loop {
-                let focused = match (&workspace, &tab) {
-                    (Some(workspace), Some(tab)) => {
-                        herdr(&["pane", "list", "--workspace", workspace])
-                            .ok()
-                            .and_then(|panes| focused_agent(&panes, tab))
-                    }
-                    _ => herdr(&["pane", "get", &source]).ok().and_then(|pane| {
-                        let client = initial_client(pane["result"]["pane"]["agent"].as_str());
-                        (client != 2).then(|| FocusedAgent {
-                            pane_id: source.clone(),
-                            client,
-                            session: agent_session(&pane),
-                        })
-                    }),
-                };
-                if let Some(focused) = focused {
-                    let changed_focus = previous_pane.as_deref() != Some(focused.pane_id.as_str())
-                        || previous_client != Some(focused.client);
-                    if changed_focus {
-                        previous_pane = Some(focused.pane_id.clone());
-                        previous_client = Some(focused.client);
-                        previous = focused.session.clone();
-                        missing = 0;
-                        if active_send
-                            .send(FocusUpdate {
-                                pane_id: focused.pane_id,
-                                client: focused.client,
-                                session: focused.session,
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    } else if let Some(session) =
-                        stable_agent_session(&mut previous, &mut missing, focused.session)
-                        && active_send
-                            .send(FocusUpdate {
-                                pane_id: focused.pane_id,
-                                client: focused.client,
-                                session,
-                            })
-                            .is_err()
-                    {
-                        break;
-                    }
+                match follow_focus_events(
+                    &mut tracker,
+                    &active_send,
+                    workspace.as_deref(),
+                    tab.as_deref(),
+                    &source,
+                ) {
+                    Ok(false) => break,
+                    Ok(true) | Err(_) => {}
+                }
+                if !tracker.observe(
+                    current_focus(workspace.as_deref(), tab.as_deref(), &source),
+                    &active_send,
+                    false,
+                ) {
+                    break;
                 }
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -2312,16 +2468,28 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     if monitor.source_pane.is_some() {
         session_reader_started = true;
         let (session_send, session_requests) = session_worker.take().unwrap();
-        spawn_session_reader(session_send, session_requests);
+        spawn_session_reader(session_send, session_requests, session_refresh.clone());
     }
+    let mut redraw = true;
+    let mut last_theme_check = Instant::now();
+    let mut last_clock_redraw = Instant::now();
     loop {
-        monitor.pulse_theme = theme::PulseTheme::load(&theme_paths);
+        if last_theme_check.elapsed() >= Duration::from_secs(2) {
+            let theme = theme::PulseTheme::load(&theme_paths);
+            if monitor.pulse_theme != theme {
+                monitor.pulse_theme = theme;
+                redraw = true;
+            }
+            last_theme_check = Instant::now();
+        }
         while let Ok(update) = active_updates.try_recv() {
             monitor.apply_focus(update);
+            redraw = true;
         }
         while let Ok(snapshot) = session_updates.try_recv() {
             monitor.sessions = snapshot;
             monitor.sessions_refreshed = Some(Instant::now());
+            redraw = true;
         }
         while let Ok(result) = updates.try_recv() {
             match result {
@@ -2334,14 +2502,23 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                 }
                 Err(error) => monitor.error = Some(error),
             }
+            redraw = true;
         }
-        terminal.draw(|f| {
-            monitor.draw(f);
-            monitor.pulse_theme.apply(f.buffer_mut());
-        })?;
+        if last_clock_redraw.elapsed() >= Duration::from_secs(1) {
+            redraw = true;
+            last_clock_redraw = Instant::now();
+        }
+        if redraw {
+            terminal.draw(|f| {
+                monitor.draw(f);
+                monitor.pulse_theme.apply(f.buffer_mut());
+            })?;
+            redraw = false;
+        }
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
+        redraw = true;
         let key = match event::read()? {
             Event::Key(k) if k.kind == event::KeyEventKind::Press => Some(k),
             Event::Mouse(m) => {
@@ -2499,7 +2676,11 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     if monitor.sessions_mode && !session_reader_started {
                         session_reader_started = true;
                         let (session_send, session_requests) = session_worker.take().unwrap();
-                        spawn_session_reader(session_send, session_requests);
+                        spawn_session_reader(
+                            session_send,
+                            session_requests,
+                            session_refresh.clone(),
+                        );
                     }
                 }
                 KeyCode::Char('r') => {
@@ -2773,6 +2954,42 @@ mod tests {
         assert_eq!(current.client, 0);
         assert!(current.session.is_none());
         assert!(focused_agent(&panes, "tab-b").is_none());
+    }
+
+    #[test]
+    fn focus_subscription_uses_pane_updates_without_a_cli_query() {
+        let event = json!({"event":"pane_updated","data":{"pane":{
+            "pane_id":"pane-a","tab_id":"tab-a","focused":true,"agent":"codex",
+            "agent_session":{"agent":"codex","kind":"id","value":"session-a"}
+        }}});
+        let focused =
+            focus_from_event(&event, Some("workspace-a"), Some("tab-a"), "source").unwrap();
+        assert_eq!(focused.pane_id, "pane-a");
+        assert_eq!(focused.session.unwrap().id, "session-a");
+        assert!(focus_from_event(&event, Some("workspace-a"), Some("tab-b"), "source").is_none());
+
+        let (send, updates) = mpsc::sync_channel(1);
+        let mut tracker = FocusTracker::default();
+        assert!(tracker.observe(
+            focus_from_event(&event, Some("workspace-a"), Some("tab-a"), "source"),
+            &send,
+            true,
+        ));
+        assert_eq!(updates.try_recv().unwrap().pane_id, "pane-a");
+        assert!(tracker.observe(
+            focus_from_event(&event, Some("workspace-a"), Some("tab-a"), "source"),
+            &send,
+            true,
+        ));
+        assert!(updates.try_recv().is_err());
+        let mut cleared = event;
+        cleared["data"]["pane"]["agent_session"] = serde_json::Value::Null;
+        assert!(tracker.observe(
+            focus_from_event(&cleared, Some("workspace-a"), Some("tab-a"), "source"),
+            &send,
+            true,
+        ));
+        assert!(updates.try_recv().unwrap().session.is_none());
     }
 
     #[test]

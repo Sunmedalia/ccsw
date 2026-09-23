@@ -28,7 +28,7 @@ impl App {
                 std::thread::sleep(std::time::Duration::from_millis(40));
                 continue;
             }
-            if !event::poll(std::time::Duration::from_millis(50))? {
+            if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;
             }
             let input = event::read()?;
