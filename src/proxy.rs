@@ -692,6 +692,13 @@ struct ServerState {
 }
 
 pub async fn serve(registry_path: PathBuf) -> Result<()> {
+    serve_with_listener(registry_path, None).await
+}
+
+async fn serve_with_listener(
+    registry_path: PathBuf,
+    prebound_listener: Option<tokio::net::TcpListener>,
+) -> Result<()> {
     let proxy_paths = ProxyPaths {
         registry: registry_path.clone(),
         registry_lock: registry_path.with_extension("json.lock"),
@@ -723,9 +730,17 @@ pub async fn serve(registry_path: PathBuf) -> Result<()> {
     }
     fs::write(&proxy_paths.pid, std::process::id().to_string())?;
     set_private(&proxy_paths.pid)?;
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .with_context(|| format!("failed to bind {address}"))?;
+    let listener = if let Some(listener) = prebound_listener {
+        anyhow::ensure!(
+            listener.local_addr()? == address,
+            "proxy listener address changed"
+        );
+        listener
+    } else {
+        tokio::net::TcpListener::bind(address)
+            .await
+            .with_context(|| format!("failed to bind {address}"))?
+    };
     let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let state = ServerState {
         sessions: Default::default(),
@@ -3725,9 +3740,8 @@ mod client_search_integration {
                     Ok(())
                 })
                 .unwrap();
-                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let proxy_address = listener.local_addr().unwrap();
-                drop(listener);
                 let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
                 update_registry(&proxy_paths, Some(&proxy_address.to_string()), |r| {
                     r.routes.insert(
@@ -3743,23 +3757,30 @@ mod client_search_integration {
                 })
                 .unwrap();
                 let registry = load_registry(&proxy_paths).unwrap();
-                let server = tokio::spawn(async move { serve(proxy_paths.registry).await });
+                let server = tokio::spawn(async move {
+                    serve_with_listener(proxy_paths.registry, Some(listener)).await
+                });
                 let client = Client::builder()
                     .timeout(Duration::from_secs(5))
                     .build()
                     .unwrap();
                 let url = format!("http://{proxy_address}/r/search/v1/messages");
-                for _ in 0..50 {
+                let mut ready = false;
+                for _ in 0..500 {
                     if client
                         .get(format!("http://{proxy_address}/health"))
+                        .bearer_auth(&registry.local_token)
                         .send()
                         .await
-                        .is_ok()
+                        .is_ok_and(|response| response.status().is_success())
                     {
+                        ready = true;
                         break;
                     }
+                    assert!(!server.is_finished(), "proxy exited before becoming ready");
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
+                assert!(ready, "proxy did not become ready");
                 let mut request = json!({"model":"test","stream":streaming,"max_tokens":100,"output_config":{"effort":"max"},
                     "tools":[{"name":"ToolSearch","input_schema":{"type":"object"}},{"name":"lookup","defer_loading":true,"input_schema":{"type":"object"}}],
                     "messages":[{"role":"user","content":"Find and call lookup"}]});

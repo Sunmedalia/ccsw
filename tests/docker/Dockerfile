@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -
 RUN rustup component add rustfmt clippy
 WORKDIR /work
 COPY Cargo.toml Cargo.lock build.rs ./
+COPY herdr-plugin.toml ./
 COPY resources ./resources
 COPY .cargo ./.cargo
 COPY src ./src
