@@ -6,7 +6,7 @@ min_herdr_version = "0.7.0"
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["cargo", "build", "--release", "--bin", "ccsw"]
+command = ["bash", "scripts/download-herdr-binary.sh"]
 
 [[panes]]
 id = "quick"

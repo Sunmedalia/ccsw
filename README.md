@@ -18,7 +18,34 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ## 安装
 
-如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件一键安装](#herdr-插件一键安装)，不需要先手工安装 CCSW 或编辑快捷键。
+如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件安装](#通过-herdr-安装发布版插件)，不需要先手工安装 CCSW；如需快捷键，可按下文配置。
+
+### 一键安装（macOS / Linux）
+
+安装 CCSW（默认安装最新发布版，自动校验 SHA-256，无需 sudo 或 Rust）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | bash
+```
+
+安装 **Herdr 的 CCSW Pulse 插件**，请在 Herdr 普通终端中执行（只需已安装 Herdr 0.7.0+，不需要 Git、Rust 或 Cargo）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | bash -s -- herdr
+# 自定义快捷键
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | bash -s -- herdr --key prefix+shift+u
+```
+
+CCSW 安装到 `~/.local/bin/ccsw`，覆盖前备份旧程序；若目录不在 PATH，脚本会提示添加方式。支持 macOS ARM64、Linux x86_64 / ARM64。
+Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并退出；不会下载或安装 Herdr 本体。检测通过后下载并校验预编译 CCSW，生成不含构建步骤的插件清单，安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/ccsw/herdr/plugin.*`，链接插件并合并快捷键；请保留该目录。重复运行可更新，旧插件目录保留以便恢复。该模式也会安装 CCSW 命令，需要发布版支持 `herdr-install`。
+
+指定 CCSW 发布版本：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.14 bash -s -- ccsw
+```
+
+以上在线命令需要本脚本已合并到 GitHub 的 main 分支。本地源码安装方式见下文。
 
 ### 下载 Release
 
@@ -637,7 +664,25 @@ Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、�
 以及服务商/模型的调用数和失败数。蓝灰底色、三行大号数字和独立的文字层级用于常驻侧栏；
 字体家族继承终端，不修改其他 pane 的字体。面板使用完整高度，短屏可滚动；pane 小于 32 × 12 时自动切换为迷你布局，保留客户端切换、关键统计、滚动和常用操作。
 
-### Herdr 插件一键安装
+### 通过 Herdr 安装发布版插件
+
+```sh
+herdr plugin install Sunmedalia/ccsw
+```
+
+Herdr 下载仓库后，安装钩子会按 `herdr-plugin.toml` 的版本下载对应 Release 的预编译 CCSW，校验 SHA-256 和程序版本，再放入插件目录的 `target/release/ccsw`。无需 Rust / Cargo，不在用户机器上编译，也不安装全局 `ccsw` 命令。需要 Git（Herdr 下载仓库）、Bash、curl、tar 和 sha256sum 或 shasum；支持 macOS ARM64、Linux x86_64 / ARM64。对应版本的 Release 必须已发布，下载失败会中止安装。
+
+安装后在 Herdr 内打开侧栏：
+
+```sh
+herdr plugin action invoke ccsw.open
+```
+
+快捷键可按下方“手动安装”中的配置添加。更新时重新运行安装命令；如果之前使用本地脚本链接过同名插件，先执行 `herdr plugin unlink ccsw`，再安装。
+
+此方式需包含下载钩子的提交已发布到仓库默认分支；旧 tag 仍使用该 tag 自己的安装流程。
+
+### Herdr 插件一键安装（本地源码开发）
 
 支持 macOS / Linux，需要支持 `herdr plugin` 的 Herdr（0.7.0+）和 Rust 1.88+ / Cargo。**在 Herdr 的普通终端中**，进入本项目目录，执行：
 
