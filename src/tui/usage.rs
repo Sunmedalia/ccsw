@@ -35,6 +35,10 @@ pub(super) struct UsageUi {
     sessions_reader: Option<crate::sessions::Reader>,
     sessions_receiver: Option<mpsc::Receiver<(crate::sessions::Reader, crate::sessions::Snapshot)>>,
     sessions_updated: Option<Instant>,
+    sessions_watcher: Option<notify::RecommendedWatcher>,
+    sessions_events: Option<mpsc::Receiver<()>>,
+    sessions_dirty: bool,
+    sessions_watch_attempt: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -276,6 +280,34 @@ impl App {
 
     fn poll_sessions(&mut self) -> bool {
         let mut changed = false;
+        let showing_sessions =
+            self.usage.active && self.usage.page.as_ref().is_some_and(|p| p.section == 5);
+        if !showing_sessions {
+            self.usage.sessions_watcher = None;
+            self.usage.sessions_events = None;
+            self.usage.sessions_watch_attempt = None;
+            self.usage.sessions_dirty = true;
+            return false;
+        }
+        if self.usage.sessions_watcher.is_none()
+            && self
+                .usage
+                .sessions_watch_attempt
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
+            && let Ok(roots) = crate::sessions::roots()
+        {
+            self.usage.sessions_watch_attempt = Some(Instant::now());
+            let (sender, receiver) = mpsc::sync_channel(1);
+            if let Some(watcher) = crate::sessions::watch_changes(&roots, sender) {
+                self.usage.sessions_watcher = Some(watcher);
+                self.usage.sessions_events = Some(receiver);
+            }
+        }
+        if let Some(events) = &self.usage.sessions_events {
+            while events.try_recv().is_ok() {
+                self.usage.sessions_dirty = true;
+            }
+        }
         if let Some(receiver) = &self.usage.sessions_receiver {
             match receiver.try_recv() {
                 Ok((reader, snapshot)) => {
@@ -294,14 +326,23 @@ impl App {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        if self.usage.active
-            && self.usage.page.as_ref().is_some_and(|p| p.section == 5)
-            && self.usage.sessions_receiver.is_none()
-            && self
+        let interval = if self.usage.sessions_watcher.is_some() {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(2)
+        };
+        if self.usage.sessions_receiver.is_none()
+            && (self
                 .usage
                 .sessions_updated
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
+                .is_none_or(|t| t.elapsed() >= interval)
+                || (self.usage.sessions_dirty
+                    && self
+                        .usage
+                        .sessions_updated
+                        .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))))
         {
+            self.usage.sessions_dirty = false;
             let (sender, receiver) = mpsc::channel();
             let mut reader = self.usage.sessions_reader.take().unwrap_or_default();
             std::thread::spawn(move || {

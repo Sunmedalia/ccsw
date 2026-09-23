@@ -8,7 +8,7 @@ main() {
     case "$mode" in
         -h|--help)
             echo '用法: bash install.sh [ccsw|herdr [--key prefix+shift+u]]'
-            echo 'ccsw: 下载发布包到 ~/.local/bin；CCSW_VERSION 可指定版本（如 v0.1.14）。'
+            echo 'ccsw: 下载发布包到 ~/.local/bin；CCSW_VERSION 可指定版本（如 v0.1.15）。'
             echo 'herdr: 下载预编译 CCSW Pulse 插件；需要已安装 Herdr，并在 Herdr 终端运行。'
             return ;;
         ccsw|herdr) ;;
@@ -55,7 +55,7 @@ main() {
         base=https://github.com/Sunmedalia/ccsw/releases/latest/download
     else
         [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || {
-            echo 'CCSW_VERSION 必须是版本标签，如 v0.1.14。' >&2; return 1;
+            echo 'CCSW_VERSION 必须是版本标签，如 v0.1.15。' >&2; return 1;
         }
         base="https://github.com/Sunmedalia/ccsw/releases/download/$version"
     fi

@@ -2409,15 +2409,14 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
         std::thread::spawn(move || {
             let mut tracker = FocusTracker::default();
             loop {
-                match follow_focus_events(
+                if let Ok(false) = follow_focus_events(
                     &mut tracker,
                     &active_send,
                     workspace.as_deref(),
                     tab.as_deref(),
                     &source,
                 ) {
-                    Ok(false) => break,
-                    Ok(true) | Err(_) => {}
+                    break;
                 }
                 if !tracker.observe(
                     current_focus(workspace.as_deref(), tab.as_deref(), &source),

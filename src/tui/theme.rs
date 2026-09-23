@@ -25,7 +25,7 @@ impl Theme {
     fn name(self) -> &'static str {
         match self {
             Self::Classic => "Classic",
-            Self::Slate => "Graphite / charcoal & ivory",
+            Self::Slate => "Graphite / terminal bg & ivory",
             Self::Moss => "Tundra / pine & brass",
             Self::Sand => "Paper / parchment & blue ink",
             Self::Plum => "Nightfall / navy & lilac",
@@ -52,8 +52,8 @@ impl Theme {
     pub(super) fn apply(self, buffer: &mut ratatui::buffer::Buffer) {
         let Some(p) = self.palette() else { return };
         for cell in &mut buffer.content {
-            // Explicit foreground/background defaults make the light Paper theme
-            // and dark themes independent of the terminal's own color scheme.
+            // Graphite keeps the terminal's default background; other themes
+            // paint their own background.
             cell.fg = if matches!(cell.fg, Color::Reset | Color::White)
                 && cell.modifier.contains(Modifier::BOLD)
             {
@@ -103,7 +103,11 @@ impl Theme {
                 0xeac17e, 0xec8b83, 0xf1f5f7,
             ],
         };
-        Some(Palette::new(values))
+        let mut palette = Palette::new(values);
+        if self == Self::Slate {
+            palette.background = Color::Reset;
+        }
+        Some(palette)
     }
 }
 
@@ -125,7 +129,7 @@ impl PulseTheme {
     fn name(self) -> &'static str {
         match self {
             Self::Pulse => "Pulse / blue gray & cyan",
-            Self::Slate => "Graphite / charcoal & ivory",
+            Self::Slate => "Graphite / terminal bg & ivory",
             Self::Moss => "Tundra / pine & brass",
             Self::Sand => "Paper / parchment & blue ink",
             Self::Plum => "Nightfall / navy & lilac",
@@ -274,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_palettes_have_readable_text_and_explicit_backgrounds() {
+    fn complete_palettes_have_readable_text_and_expected_backgrounds() {
         for theme in [
             Theme::Slate,
             Theme::Moss,
@@ -283,7 +287,13 @@ mod tests {
             Theme::Pulse,
         ] {
             let p = theme.palette().unwrap();
-            for bg in [p.background, p.selection] {
+            let backgrounds = if theme == Theme::Slate {
+                assert_eq!(p.background, Color::Reset);
+                vec![p.selection]
+            } else {
+                vec![p.background, p.selection]
+            };
+            for bg in backgrounds {
                 for fg in [
                     p.text, p.heading, p.muted, p.accent, p.success, p.warning, p.error,
                 ] {
@@ -311,6 +321,23 @@ mod tests {
             assert_eq!(buffer[(2, 0)].fg, p.heading);
             assert_ne!(p.heading, p.text);
         }
+    }
+
+    #[test]
+    fn graphite_uses_terminal_background_in_main_and_pulse_views() {
+        let mut main = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+        main[(1, 0)].set_bg(SELECTION);
+        Theme::Slate.apply(&mut main);
+        assert_eq!(main[(0, 0)].bg, Color::Reset);
+        assert_eq!(main[(1, 0)].bg, Theme::Slate.palette().unwrap().selection);
+
+        let mut pulse = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+        pulse[(0, 0)].set_fg(quick::INK).set_bg(quick::BG);
+        pulse[(1, 0)].set_fg(quick::BG).set_bg(quick::BLUE);
+        PulseTheme::Slate.apply(&mut pulse);
+        assert_eq!(pulse[(0, 0)].bg, Color::Reset);
+        assert_eq!(pulse[(1, 0)].bg, Theme::Slate.palette().unwrap().accent);
+        assert_eq!(pulse[(1, 0)].fg, Theme::Slate.palette().unwrap().on_accent);
     }
 }
 

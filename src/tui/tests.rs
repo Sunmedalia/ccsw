@@ -2505,6 +2505,7 @@ fn client_tabs_click_from_accounts_and_preserve_active_view_and_modal() {
 #[test]
 fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
     let (_temp, mut app) = persisted_app();
+    app.theme = theme::Theme::Classic;
     for (width, height) in [(40, 12), (80, 24), (120, 36)] {
         for tab in [
             ClientTab::Claude,
@@ -3284,6 +3285,7 @@ fn provider_form_tests_use_unsaved_connection_and_target_model() {
 #[test]
 fn provider_model_test_button_and_1m_color_work_in_narrow_form() {
     let mut app = interactive_test_app();
+    app.theme = theme::Theme::Classic;
     let mut form = ProfileForm::new();
     form.selected = 12;
     app.modal = Some(Modal::Profile(Box::new(form)));
