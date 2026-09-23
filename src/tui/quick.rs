@@ -186,6 +186,47 @@ fn token_digits(value: &str, color: Color) -> Vec<Line<'static>> {
         .map(|row| line(row, color))
         .collect()
 }
+fn mini_token_total(value: &str, width: u16, color: Color) -> Vec<Line<'static>> {
+    if width < 2 {
+        return vec![mini_line(value, width, color)];
+    }
+    let chars: Vec<char> = value.chars().collect();
+    chars
+        .chunks((usize::from(width) + 1) / 3)
+        .flat_map(|chunk| {
+            let mut rows = [String::new(), String::new(), String::new()];
+            for (index, ch) in chunk.iter().enumerate() {
+                // Two-column glyphs retain a middle row so all ten digits are distinct.
+                let glyph = match ch {
+                    '0' => ["▛▜", "▌▐", "▙▟"],
+                    '1' => ["▗▌", " ▌", " ▌"],
+                    '2' => ["▀▜", "▛▀", "▙▄"],
+                    '3' => ["▀▜", " ▜", "▄▟"],
+                    '4' => ["▌▐", "▀▜", " ▐"],
+                    '5' => ["▛▀", "▀▜", "▄▟"],
+                    '6' => ["▛▀", "▛▜", "▙▟"],
+                    '7' => ["▀▜", " ▐", " ▐"],
+                    '8' => ["▛▜", "▛▜", "▙▟"],
+                    '9' => ["▛▜", "▀▜", "▄▟"],
+                    '.' => [" ", " ", "▪"],
+                    'K' => ["▌▞", "▛▖", "▌▚"],
+                    'M' => ["▙▟", "▌▐", "▌▐"],
+                    'B' => ["▛▖", "▛▖", "▙▘"],
+                    '?' => ["▀▜", " ▘", " ▖"],
+                    _ => ["  ", "━━", "  "],
+                };
+                for (row, part) in rows.iter_mut().zip(glyph) {
+                    if index > 0 {
+                        row.push(' ');
+                    }
+                    row.push_str(part);
+                }
+            }
+            rows.into_iter().map(|row| line(row, color))
+        })
+        .collect()
+}
+
 fn line(text: impl Into<String>, color: Color) -> Line<'static> {
     Line::from(Span::styled(text.into(), Style::default().fg(color)))
 }
@@ -774,21 +815,19 @@ impl Monitor {
         let m = metrics(&self.snapshot, self.client());
         let t = &m.total;
         let unknown = t.calls > 0 && t.unknown == t.calls;
-        let mut out = vec![
-            mini_line(format!("TODAY  {}", self.snapshot.today()), width, BLUE),
-            mini_line(
-                format!(
-                    "{} tok · {} calls",
-                    if self.refreshed.is_none() || unknown {
-                        "—".into()
-                    } else {
-                        short(t.input + t.output)
-                    },
-                    t.calls
-                ),
-                width,
-                INK,
-            ),
+        let total = if self.refreshed.is_none() || unknown {
+            "—".into()
+        } else {
+            short(t.input + t.output)
+        };
+        let mut out = vec![mini_line(
+            format!("TODAY  {}", self.snapshot.today()),
+            width,
+            BLUE,
+        )];
+        out.extend(mini_token_total(&total, width, BLUE));
+        out.extend([
+            mini_line(format!("{} calls", t.calls), width, SOFT),
             mini_line(
                 format!(
                     "↑ {}  ↓ {}",
@@ -808,7 +847,7 @@ impl Monitor {
                 width,
                 GREEN,
             ),
-        ];
+        ]);
         if let Some(active) = self.active_row() {
             out.push(mini_line("CURRENT SESSION", width, GREEN));
             out.push(mini_line(
@@ -816,18 +855,12 @@ impl Monitor {
                 width,
                 GREEN,
             ));
-            out.push(mini_line(
-                format!(
-                    "{} tok",
-                    if active.tokens.known {
-                        short(active.tokens.total())
-                    } else {
-                        "?".into()
-                    }
-                ),
-                width,
-                INK,
-            ));
+            let total = if active.tokens.known {
+                short(active.tokens.total())
+            } else {
+                "?".into()
+            };
+            out.extend(mini_token_total(&total, width, GREEN));
             if active.tokens.known {
                 out.push(mini_line(
                     format!(
