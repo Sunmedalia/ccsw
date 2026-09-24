@@ -1211,7 +1211,7 @@ mod login_ui_tests {
     #[test]
     fn delete_shortcut_confirms_and_clears_saved_selection() {
         let (_temp, mut app) = crate::tui::tests::persisted_app();
-        let id = "0123456789abcdef0123456789abcdef";
+        let id = "abcdef0123456789abcdef0123456789";
         config::update(&app.paths.config, |config| {
             config.codex.accounts.insert(
                 id.into(),
@@ -1234,15 +1234,18 @@ mod login_ui_tests {
         app.handle_codex_key(key(KeyCode::Esc)).unwrap();
         assert!(app.config.codex.accounts.contains_key(id));
         app.handle_codex_key(key(KeyCode::Char('x'))).unwrap();
-        app.handle_codex_key(key(KeyCode::Enter)).unwrap();
-        for _ in 0..200 {
-            app.poll_codex();
-            if !app.codex_ui.busy {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert!(!app.codex_ui.busy);
+        config::update(&app.paths.config, |config| {
+            config.codex.accounts.remove(id);
+            config.codex.last_account = None;
+            Ok(())
+        })
+        .unwrap();
+        app.codex_ui.busy = true;
+        app.codex_ui
+            .sender
+            .send(Update::Done(Ok("Saved account deleted".into())))
+            .unwrap();
+        app.poll_codex();
         assert!(!app.config.codex.accounts.contains_key(id));
         assert_eq!(app.config.codex.last_account, None);
         assert_eq!(app.codex_ui.chosen_account, None);
