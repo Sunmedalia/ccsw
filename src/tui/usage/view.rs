@@ -1,8 +1,8 @@
 use super::*;
 use ratatui::widgets::{Cell, Row, Table, TableState};
 
-// Reuse the terminal palette: cyan navigation, green completions, red failures,
-// amber interruptions. Bold numbers and muted labels keep the ledger readable.
+// The selected range is a token ledger: a large total, its input/output
+// composition, then the detailed tables beneath it.
 struct Areas {
     clients: Rect,
     date: Rect,
@@ -22,7 +22,7 @@ fn areas(area: Rect) -> Areas {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(if inner.height >= 14 { 3 } else { 1 }),
+        Constraint::Length(if inner.height >= 17 { 4 } else { 1 }),
         Constraint::Length(1),
         Constraint::Min(2),
         Constraint::Length(1),
@@ -523,17 +523,17 @@ impl App {
             height: area.height.saturating_sub(footer_height),
             ..area
         };
-        let medium = area.width >= 66;
+        let medium = area.width >= 68;
         let wide = area.width >= 100;
-        let mut headers = vec![Cell::from("Model"), heading("Calls"), heading("All calls")];
+        let mut headers = vec![Cell::from("Model"), heading("Tokens"), heading("Calls")];
         let mut widths = vec![
             Constraint::Min(12),
-            Constraint::Length(9),
-            Constraint::Length(9),
+            Constraint::Length(12),
+            Constraint::Length(8),
         ];
         if medium {
-            headers.extend([heading("Tokens"), heading("All tokens")]);
-            widths.extend([Constraint::Length(11), Constraint::Length(11)]);
+            headers.extend([heading("All tokens"), heading("All calls")]);
+            widths.extend([Constraint::Length(12), Constraint::Length(9)]);
         }
         if wide {
             headers.push(Cell::from("Provider / client"));
@@ -548,13 +548,13 @@ impl App {
                     } else {
                         model.model.clone()
                     }),
-                    numeric(number(model.daily.calls), ROUTE),
-                    numeric(number(model.total.calls), Color::White),
+                    numeric(tokens(&model.daily), ROUTE),
+                    numeric(number(model.daily.calls), Color::White),
                 ];
                 if medium {
                     cells.extend([
-                        numeric(tokens(&model.daily), ROUTE),
                         numeric(tokens(&model.total), Color::White),
+                        numeric(number(model.total.calls), MUTED),
                     ]);
                 }
                 if wide {
@@ -946,22 +946,17 @@ impl App {
 
     fn draw_usage_providers(&self, frame: &mut ratatui::Frame, area: Rect, page: &UsagePage) {
         let providers = self.usage_providers(page);
-        let wide = area.width >= 84;
-        let medium = area.width >= 58;
-        let mut headers = vec![
-            Cell::from("Provider"),
-            heading("Day calls"),
-            heading("All calls"),
-        ];
+        let wide = area.width >= 90;
+        let medium = area.width >= 64;
+        let mut headers = vec![Cell::from("Provider"), heading("Tokens"), heading("Calls")];
         let mut widths = vec![
             Constraint::Min(10),
-            Constraint::Length(10),
-            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(8),
         ];
         if medium {
-            headers.push(heading("Day tokens"));
-            headers.push(heading("All tokens"));
-            widths.extend([Constraint::Length(11), Constraint::Length(11)]);
+            headers.extend([heading("All tokens"), heading("All calls")]);
+            widths.extend([Constraint::Length(12), Constraint::Length(9)]);
         }
         if wide {
             headers.push(heading("Failed"));
@@ -978,12 +973,12 @@ impl App {
                 };
                 let mut cells = vec![
                     Cell::from(label),
-                    numeric(number(p.daily.calls), ROUTE),
-                    numeric(number(p.total.calls), Color::White),
+                    numeric(tokens(&p.daily), ROUTE),
+                    numeric(number(p.daily.calls), Color::White),
                 ];
                 if medium {
-                    cells.push(numeric(tokens(&p.daily), ROUTE));
                     cells.push(numeric(tokens(&p.total), Color::White));
+                    cells.push(numeric(number(p.total.calls), MUTED));
                 }
                 if wide {
                     cells.push(numeric(
@@ -1009,11 +1004,11 @@ impl App {
         let history = self.usage_history(page);
         let wide = area.width >= 80;
         let medium = area.width >= 56;
-        let mut headers = vec![Cell::from("Date"), heading("Calls"), heading("Tokens")];
+        let mut headers = vec![Cell::from("Date"), heading("Tokens"), heading("Calls")];
         let mut widths = vec![
             Constraint::Min(10),
-            Constraint::Length(10),
             Constraint::Length(12),
+            Constraint::Length(10),
         ];
         if medium {
             headers.extend([heading("Success"), heading("Failed")]);
@@ -1028,8 +1023,8 @@ impl App {
             .map(|(day, t)| {
                 let mut cells = vec![
                     Cell::from(day.clone()),
-                    numeric(number(t.calls), ROUTE),
-                    numeric(tokens(t), Color::White),
+                    numeric(tokens(t), ROUTE),
+                    numeric(number(t.calls), Color::White),
                 ];
                 if medium {
                     cells.extend([
@@ -1188,45 +1183,40 @@ fn draw_summary(
         return;
     }
 
-    // A compact, two-column ledger: accent rail marks the selected range while
-    // the lifetime column stays quiet. Very short terminals get a dense single
-    // line so the tables keep their rows.
-    if area.height < 3 {
+    // On short screens the summary collapses to one line so table rows remain.
+    if area.height < 4 {
         let range = match range_label {
             "1 day" => "1d",
             "1 week" => "7d",
             "1 month" => "30d",
             _ => "All",
         };
+        let compact = if range_label == "All time" {
+            format!("{} tok", tokens(daily))
+        } else {
+            format!("{} tok  │  All {} tok", tokens(daily), tokens(total))
+        };
         let line = Line::from(vec![
             Span::styled(format!("{range} "), Style::default().fg(ROUTE)),
             Span::styled(
-                format!(
-                    "{}c·{}t  │  All {}c·{}t",
-                    compact(daily.calls),
-                    compact(daily.input + daily.output),
-                    compact(total.calls),
-                    compact(total.input + total.output),
-                ),
-                Style::default().fg(Color::White),
+                compact,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]);
         frame.render_widget(Paragraph::new(line), area);
         return;
     }
 
-    let columns = Layout::horizontal([
-        Constraint::Percentage(49),
-        Constraint::Length(1),
-        Constraint::Percentage(50),
-    ])
-    .split(area);
-    frame.render_widget(
-        Paragraph::new("│").style(Style::default().fg(MUTED)),
-        columns[1],
-    );
-    draw_stat_card(frame, columns[0], range_label, daily, true);
-    draw_stat_card(frame, columns[2], "All time", total, false);
+    if area.width < 58 || range_label == "All time" {
+        draw_stat_card(frame, area, range_label, daily, true);
+    } else {
+        let columns = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        draw_stat_card(frame, columns[0], range_label, daily, true);
+        draw_stat_card(frame, columns[1], "All time", total, false);
+    }
 }
 
 fn draw_stat_card(
@@ -1246,40 +1236,59 @@ fn draw_stat_card(
         return;
     }
 
-    let completed = totals.success + totals.failed + totals.interrupted;
-    let rate = (completed > 0).then(|| totals.success.saturating_mul(100) / completed);
-    let detail = match rate {
-        Some(rate) if inner.width >= 30 => format!(
-            "{} tokens  ·  {rate}% ok  ·  {} failed",
-            tokens(totals),
-            compact(totals.failed)
-        ),
-        Some(rate) if inner.width >= 16 => format!("{} tokens  ·  {rate}% ok", tokens(totals)),
-        Some(rate) => format!("{} tok · {rate}%", compact(totals.input + totals.output)),
-        None if inner.width >= 16 => format!("{} tokens  ·  no completed calls", tokens(totals)),
-        None => format!("{} tok", compact(totals.input + totals.output)),
+    let amount = if totals.calls > 0 && totals.unknown == totals.calls {
+        "unknown".into()
+    } else {
+        let exact = number(totals.input.saturating_add(totals.output));
+        if exact.len() + 8 <= usize::from(inner.width) {
+            format!("{exact}{}", if totals.unknown > 0 { " + ?" } else { "" })
+        } else {
+            tokens(totals)
+        }
     };
-    let label = label.to_ascii_uppercase();
     let lines = vec![
-        Line::styled(
-            label,
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        ),
         Line::from(vec![
             Span::styled(
-                compact(totals.calls),
+                format!("{}  ", label.to_ascii_uppercase()),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} calls", compact(totals.calls)),
+                Style::default().fg(MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                amount,
                 Style::default()
                     .fg(if featured { ROUTE } else { Color::White })
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" calls", Style::default().fg(MUTED)),
+            Span::styled(" TOKENS", Style::default().fg(MUTED)),
         ]),
-        Line::from(vec![Span::styled(
-            detail,
-            Style::default().fg(if rate.is_some() { CONNECTED } else { MUTED }),
-        )]),
+        Line::from(vec![
+            Span::styled("IN ", Style::default().fg(MUTED)),
+            Span::styled(compact(totals.input), Style::default().fg(Color::White)),
+            Span::styled("   OUT ", Style::default().fg(MUTED)),
+            Span::styled(compact(totals.output), Style::default().fg(WARNING)),
+        ]),
+        token_composition(totals, inner.width),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn token_composition(totals: &Totals, width: u16) -> Line<'static> {
+    let width = usize::from(width).min(24);
+    let total = totals.input.saturating_add(totals.output);
+    if width < 3 || total <= 0 {
+        return Line::default();
+    }
+    let input = ((totals.input as f64 / total as f64) * width as f64).round() as usize;
+    let input = input.min(width);
+    Line::from(vec![
+        Span::styled("━".repeat(input), Style::default().fg(ROUTE)),
+        Span::styled("━".repeat(width - input), Style::default().fg(WARNING)),
+    ])
 }
 
 fn draw_table(
@@ -1320,6 +1329,58 @@ fn draw_table(
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn token_summary_prioritizes_total_and_shows_input_output_mix() {
+        let totals = Totals {
+            calls: 12,
+            input: 9_000,
+            output: 3_000,
+            ..Default::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 5)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_summary(
+                    frame,
+                    Rect::new(0, 0, 80, 4),
+                    &totals,
+                    &totals,
+                    true,
+                    "1 day",
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert!(row(0).contains("1 DAY"));
+        assert!(row(1).contains("12,000 TOKENS"));
+        assert!(row(2).contains("IN 9,000   OUT 3,000"));
+        assert_eq!(buffer[(1, 3)].fg, ROUTE);
+        assert_eq!(buffer[(19, 3)].fg, WARNING);
+
+        let mut narrow = Terminal::new(TestBackend::new(40, 3)).unwrap();
+        narrow
+            .draw(|frame| {
+                draw_summary(
+                    frame,
+                    Rect::new(0, 0, 40, 1),
+                    &totals,
+                    &totals,
+                    true,
+                    "1 day",
+                )
+            })
+            .unwrap();
+        let text = narrow
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("12.0K tok"));
+    }
 
     #[test]
     fn sessions_filter_sort_render_and_mouse_without_proxy_data() {

@@ -77,10 +77,10 @@ impl Theme {
         // Persisted IDs stay stable so existing user selections remain valid.
         let values = match self {
             Self::Classic => return None,
-            // Monochrome editorial UI with amber reserved for warnings.
+            // Graphite uses warm ink and brass lettering on the terminal canvas.
             Self::Slate => [
-                0x18191b, 0xc9ced6, 0x9daebb, 0x33363b, 0xe2ded2, 0x18191b, 0x89919b, 0xa9c8b3,
-                0xdec08b, 0xe4a8a0, 0xf8f4eb,
+                0x18191b, 0xe6e0d4, 0xb3aca1, 0x333536, 0xf0d6a6, 0x1a1a1a, 0x77736d, 0xc8dabf,
+                0xf2c985, 0xf0b3a8, 0xfff7e8,
             ],
             // Forest surfaces, parchment text and a brass navigation rail.
             Self::Moss => [
@@ -173,6 +173,13 @@ impl PulseTheme {
                 quick::GREEN => p.success,
                 quick::RAIL => p.border,
                 quick::BG => p.background,
+                Color::Rgb(236, 104, 113) if self == Self::Slate => p.error,
+                Color::Rgb(244, 164, 101) if self == Self::Slate => p.warning,
+                Color::Rgb(239, 214, 111) if self == Self::Slate => p.accent,
+                Color::Rgb(133, 212, 162) if self == Self::Slate => p.success,
+                Color::Rgb(112, 201, 228) if self == Self::Slate => p.heading,
+                Color::Rgb(112, 171, 235) if self == Self::Slate => p.heading,
+                Color::Rgb(180, 133, 222) if self == Self::Slate => p.accent,
                 Color::Rgb(236, 104, 113) if self == Self::Sand => p.error,
                 Color::Rgb(180, 133, 222) if self == Self::Sand => Color::Rgb(106, 65, 138),
                 Color::Rgb(112, 171, 235) if self == Self::Sand => p.accent,
@@ -338,6 +345,26 @@ mod tests {
         assert_eq!(pulse[(0, 0)].bg, Color::Reset);
         assert_eq!(pulse[(1, 0)].bg, Theme::Slate.palette().unwrap().accent);
         assert_eq!(pulse[(1, 0)].fg, Theme::Slate.palette().unwrap().on_accent);
+    }
+
+    #[test]
+    fn graphite_recolors_text_and_pulse_data_accents() {
+        let palette = Theme::Slate.palette().unwrap();
+        let mut main = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+        main[(0, 0)].set_fg(ROUTE);
+        main[(1, 0)].set_fg(MUTED);
+        Theme::Slate.apply(&mut main);
+        assert_eq!(main[(0, 0)].fg, palette.accent);
+        assert_eq!(main[(1, 0)].fg, palette.muted);
+
+        let mut pulse = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 3, 1));
+        pulse[(0, 0)].set_fg(quick::BLUE);
+        pulse[(1, 0)].set_fg(Color::Rgb(112, 171, 235));
+        pulse[(2, 0)].set_fg(Color::Rgb(180, 133, 222));
+        PulseTheme::Slate.apply(&mut pulse);
+        assert_eq!(pulse[(0, 0)].fg, palette.accent);
+        assert_eq!(pulse[(1, 0)].fg, palette.heading);
+        assert_eq!(pulse[(2, 0)].fg, palette.accent);
     }
 }
 
