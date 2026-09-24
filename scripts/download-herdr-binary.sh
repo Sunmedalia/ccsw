@@ -60,3 +60,8 @@ chmod 755 "$staged"
 mv -f "$staged" "$destination/ccsw"
 staged=''
 echo "已准备插件程序: $destination/ccsw"
+# Releases from before automatic binding do not have this subcommand. Keep
+# their installation working; the next release will configure the key here.
+if ! "$destination/ccsw" herdr-bind; then
+    echo '此发布版未能自动配置快捷键；可手动绑定 ccsw.open。' >&2
+fi

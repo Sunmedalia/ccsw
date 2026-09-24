@@ -387,6 +387,14 @@ pub fn snapshot(path: &Path, config: &Path) -> Result<Snapshot> {
 }
 
 fn aggregate_sql(day: &str, model: &str, hour: &str, filter: &str, extended: bool) -> String {
+    // Anthropic reports cache reads/writes outside input_tokens. OpenAI formats
+    // already include cached input in input_tokens, even when their cache fields
+    // use Anthropic names.
+    let input = if extended {
+        "COALESCE(SUM(CASE WHEN upstream_format='Anthropic' THEN input+COALESCE(cache_read,0)+COALESCE(cache_write,0) ELSE input END),0)"
+    } else {
+        "COALESCE(SUM(input),0)"
+    };
     let extras = if extended {
         "COALESCE(SUM(CASE WHEN upstream_format IS NOT NULL AND outcome='success' AND kind='generation' AND cache_input>0 AND cache_read BETWEEN 0 AND cache_input THEN cache_input ELSE 0 END),0),
          COALESCE(SUM(CASE WHEN upstream_format IS NOT NULL AND outcome='success' AND kind='generation' AND cache_input>0 AND cache_read BETWEEN 0 AND cache_input THEN cache_read ELSE 0 END),0),
@@ -398,7 +406,7 @@ fn aggregate_sql(day: &str, model: &str, hour: &str, filter: &str, extended: boo
     };
     format!("SELECT {day} AS day,client,provider,MAX(name) AS name,kind,COUNT(*) AS calls,
       SUM(outcome='success'),SUM(outcome='failed'),SUM(outcome='interrupted'),SUM(outcome='pending'),
-      COALESCE(SUM(input),0),COALESCE(SUM(output),0),SUM(input IS NULL OR output IS NULL),
+      {input},COALESCE(SUM(output),0),SUM(input IS NULL OR output IS NULL),
       COALESCE(SUM(cache_read),0),COALESCE(SUM(cache_write),0),{model} AS model,{hour} AS hour,{extras}
       FROM requests WHERE config=?1 {filter} GROUP BY 1,2,3,5,16,17")
 }
@@ -661,6 +669,36 @@ pub(crate) mod tests {
                 assert_eq!(t.tokens.cache_read, Some(90));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_totals_include_anthropic_cache_without_double_counting_openai_cache() {
+        use crate::config::ApiFormat;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(FILE);
+        let writer = Writer::new(path.clone());
+        for (provider, format) in [
+            ("anthropic", ApiFormat::Anthropic),
+            ("openai", ApiFormat::OpenaiChat),
+        ] {
+            let mut req = request("Claude", provider, "generation");
+            req.api_format = format;
+            let mut ticket = Ticket::begin(writer.clone(), req).await.unwrap();
+            ticket.observe_usage(&json!({"usage":{
+                "input_tokens":if format == ApiFormat::Anthropic { 10 } else { 120 },
+                "output_tokens":5,
+                "cache_read_input_tokens":90,
+                "cache_creation_input_tokens":20
+            }}));
+            ticket.outcome = "success";
+        }
+        let snapshot = settled(&path, 2).await;
+        let anthropic = snapshot.total(Some("Claude"), Some("anthropic"), None, "generation");
+        let openai = snapshot.total(Some("Claude"), Some("openai"), None, "generation");
+        assert_eq!((anthropic.input, anthropic.output), (120, 5));
+        assert_eq!(anthropic.tokens_label(), "125");
+        assert_eq!((openai.input, openai.output), (120, 5));
+        assert_eq!(openai.tokens_label(), "125");
     }
 
     #[tokio::test]

@@ -326,11 +326,7 @@ impl App {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        let interval = if self.usage.sessions_watcher.is_some() {
-            Duration::from_secs(30)
-        } else {
-            Duration::from_secs(2)
-        };
+        let interval = Duration::from_secs(2);
         if self.usage.sessions_receiver.is_none()
             && (self
                 .usage

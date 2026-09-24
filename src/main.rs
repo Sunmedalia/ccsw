@@ -50,6 +50,9 @@ enum Commands {
         #[arg(long, default_value = "prefix+u")]
         key: String,
     },
+    /// Configure the default Herdr plugin shortcut during GitHub installation
+    #[command(hide = true)]
+    HerdrBind,
     /// Live usage and request-health monitor for a persistent Herdr side pane
     Quick {
         /// Toggle the monitor beside the current Herdr pane
@@ -160,6 +163,9 @@ fn main() -> Result<()> {
     if let Some(Commands::HerdrInstall { source, key }) = &cli.command {
         return herdr_install::run(source, key);
     }
+    if let Some(Commands::HerdrBind) = &cli.command {
+        return herdr_install::bind_default();
+    }
     // A daemon is completely described by its registry. Login managers do not
     // necessarily inherit the interactive shell's directory overrides.
     if let Some(Commands::Internal {
@@ -195,6 +201,7 @@ fn main() -> Result<()> {
         Some(Commands::Uninstall { .. }) => unreachable!(),
         Some(Commands::Update { .. }) => unreachable!(),
         Some(Commands::HerdrInstall { .. }) => unreachable!(),
+        Some(Commands::HerdrBind) => unreachable!(),
         None => {
             let config = config::load(&paths.config)?;
             let import = if config.profiles.is_empty() {

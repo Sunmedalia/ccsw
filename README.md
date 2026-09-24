@@ -18,7 +18,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 ## 安装
 
-如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件安装](#通过-herdr-安装发布版插件)，不需要先手工安装 CCSW；如需快捷键，可按下文配置。
+如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件安装](#通过-herdr-安装发布版插件)，不需要先手工安装 CCSW；支持自动绑定的版本会配置默认快捷键。
 
 ### 一键安装（macOS / Linux）
 
@@ -499,7 +499,7 @@ Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage*
 
 - 覆盖经过 CCSW 本地代理的 Claude Code 和 Codex API 请求，按实际路由的 provider ID 和客户端分别归属。一条对话可能产生多次请求；每次向上游发起请求计一次，包括失败请求。成功、失败、中断、进行中分别显示。
 - 每日按请求开始时间归属；首次创建用量库时保存本机 UTC 偏移，此后固定使用该偏移，界面显示具体时区。累计为启用记录以来的总数，不回填历史数据。改名保留历史；删除 provider 不删除账本，复用同一 ID 会接续原有累计。
-- 输入、输出、缓存读取和缓存写入 tokens 来自上游原始 `usage`。流式响应在结束事件确认结果，同一请求的累计 usage 不重复相加。缺失值显示 `unknown` 或 `+ ?`，缓存计数单列，不重复加进 tokens 合计；不同协议的输入/缓存口径可能不同。
+- 输入、输出、缓存读取和缓存写入 tokens 来自上游原始 `usage`。流式响应在结束事件确认结果，同一请求的累计 usage 不重复相加。缺失值显示 `unknown` 或 `+ ?`；Anthropic 的总输入包含单列上报的缓存读取和写入，OpenAI 兼容协议的输入已经包含缓存，不再重复相加。
 - 远程 Responses 压缩调用单独计数，不混入生成调用。模型目录刷新、健康检查和本地 token 估算不计数。Pi 直连和 ChatGPT 账号显示未接入统计。
 - 账本存于 CCSW 状态目录的 `usage.sqlite3`（默认 `~/.local/state/ccsw/`）；仅保存请求时间、客户端、provider、模型、结果和 token 数，不保存对话、请求头或密钥。代理异常退出留下的进行中记录在下次启动时标记为中断。数据库读写失败会提示/记入代理日志，不阻止 API 转发；失败期间统计可能不完整。
 
@@ -669,7 +669,7 @@ Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、�
 herdr plugin install Sunmedalia/ccsw
 ```
 
-Herdr 下载仓库后，安装钩子会按 `herdr-plugin.toml` 的版本下载对应 Release 的预编译 CCSW，校验 SHA-256 和程序版本，再放入插件目录的 `target/release/ccsw`。无需 Rust / Cargo，不在用户机器上编译，也不安装全局 `ccsw` 命令。需要 Git（Herdr 下载仓库）、Bash、curl、tar 和 sha256sum 或 shasum；支持 macOS ARM64、Linux x86_64 / ARM64。对应版本的 Release 必须已发布，下载失败会中止安装。
+Herdr 下载仓库后，安装钩子会按 `herdr-plugin.toml` 的版本下载对应 Release 的预编译 CCSW，校验 SHA-256 和程序版本，再放入插件目录的 `target/release/ccsw`。支持自动绑定默认快捷键 `prefix+u`：已有 CCSW 快捷键会保留，键位冲突会提示并跳过，修改配置前会备份。无需 Rust / Cargo，不在用户机器上编译，也不安装全局 `ccsw` 命令。需要 Git（Herdr 下载仓库）、Bash、curl、tar 和 sha256sum 或 shasum；支持 macOS ARM64、Linux x86_64 / ARM64。对应版本的 Release 必须已发布，下载失败会中止安装。
 
 安装后在 Herdr 内打开侧栏：
 
@@ -677,7 +677,7 @@ Herdr 下载仓库后，安装钩子会按 `herdr-plugin.toml` 的版本下载�
 herdr plugin action invoke ccsw.open
 ```
 
-快捷键可按下方“手动安装”中的配置添加。更新时重新运行安装命令；如果之前使用本地脚本链接过同名插件，先执行 `herdr plugin unlink ccsw`，再安装。
+自动绑定需发布包含此改动的 CCSW 二进制；旧版 Release 会提示手动配置。更新时重新运行安装命令；如果之前使用本地脚本链接过同名插件，先执行 `herdr plugin unlink ccsw`，再安装。
 
 此方式需包含下载钩子的提交已发布到仓库默认分支；旧 tag 仍使用该 tag 自己的安装流程。
 

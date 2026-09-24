@@ -86,6 +86,68 @@ fn backup(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn config_path() -> Result<std::path::PathBuf> {
+    crate::platform::override_path("HERDR_CONFIG_PATH", || {
+        Ok(crate::platform::home()?.join(".config/herdr/config.toml"))
+    })
+}
+
+fn read_config(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn write_config(path: &Path, original: &str, updated: &str) -> Result<()> {
+    if updated == original {
+        return Ok(());
+    }
+    fs::create_dir_all(path.parent().unwrap())?;
+    // Do not replace edits made by another process while preparing the shortcut.
+    ensure!(
+        read_config(path)? == original,
+        "Herdr config changed during installation; re-run to merge the shortcut"
+    );
+    backup(path)?;
+    let mut temp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+    temp.write_all(updated.as_bytes())?;
+    if let Ok(meta) = fs::metadata(path) {
+        temp.as_file().set_permissions(meta.permissions())?;
+    }
+    temp.as_file().sync_all()?;
+    temp.persist(path)?;
+    Ok(())
+}
+
+/// Called by the GitHub install build hook, before Herdr registers the plugin.
+pub fn bind_default() -> Result<()> {
+    let config = config_path()?;
+    let original = read_config(&config)?;
+    let (updated, key) = match shortcut(&original, "prefix+u") {
+        Ok(binding) => binding,
+        Err(error) => {
+            eprintln!("CCSW shortcut skipped: {error:#}");
+            return Ok(());
+        }
+    };
+    write_config(&config, &original, &updated)?;
+    println!("CCSW shortcut: {key}");
+    if updated != original {
+        // A server may not be running during plugin install. It will read the
+        // config on startup; a live server can pick it up immediately.
+        if !Command::new("herdr")
+            .args(["server", "reload-config"])
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            eprintln!("CCSW shortcut saved; restart Herdr to activate it");
+        }
+    }
+    Ok(())
+}
+
 pub fn run(source: &Path, key: &str) -> Result<()> {
     ensure!(
         cfg!(any(target_os = "macos", target_os = "linux")),
@@ -106,14 +168,8 @@ pub fn run(source: &Path, key: &str) -> Result<()> {
         binary.is_file(),
         "Build first: bash scripts/install-herdr.sh"
     );
-    let config = crate::platform::override_path("HERDR_CONFIG_PATH", || {
-        Ok(crate::platform::home()?.join(".config/herdr/config.toml"))
-    })?;
-    let original = match fs::read_to_string(&config) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
+    let config = config_path()?;
+    let original = read_config(&config)?;
     let (updated, bound_key) = shortcut(&original, key)?;
     // Validate the live plugin API before writing configuration or binaries.
     herdr(&[
@@ -145,27 +201,7 @@ pub fn run(source: &Path, key: &str) -> Result<()> {
     }
     herdr(&["plugin".as_ref(), "link".as_ref(), source.as_os_str()])?;
     herdr(&["plugin".as_ref(), "enable".as_ref(), "ccsw".as_ref()])?;
-    if updated != original {
-        fs::create_dir_all(config.parent().unwrap())?;
-        // Do not replace edits made by another process while linking the plugin.
-        let current = match fs::read_to_string(&config) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e.into()),
-        };
-        ensure!(
-            current == original,
-            "Herdr config changed during installation; re-run to merge the shortcut"
-        );
-        backup(&config)?;
-        let mut temp = tempfile::NamedTempFile::new_in(config.parent().unwrap())?;
-        temp.write_all(updated.as_bytes())?;
-        if let Ok(meta) = fs::metadata(&config) {
-            temp.as_file().set_permissions(meta.permissions())?;
-        }
-        temp.as_file().sync_all()?;
-        temp.persist(&config)?;
-    }
+    write_config(&config, &original, &updated)?;
     herdr(&["server".as_ref(), "reload-config".as_ref()])?;
     println!("Installed CCSW from {}", source.display());
     println!("Binary: {}", destination.display());
