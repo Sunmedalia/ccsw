@@ -99,6 +99,20 @@ fn focused_agent(panes: &serde_json::Value, tab_id: &str) -> Option<FocusedAgent
         })
 }
 
+fn focused_or_source_agent(
+    panes: &serde_json::Value,
+    tab_id: &str,
+    source: &str,
+) -> Option<FocusedAgent> {
+    focused_agent(panes, tab_id).or_else(|| {
+        panes["result"]["panes"]
+            .as_array()?
+            .iter()
+            .find(|pane| pane["pane_id"].as_str() == Some(source))
+            .and_then(|pane| focused_pane(pane, None, source))
+    })
+}
+
 fn focused_pane(
     pane: &serde_json::Value,
     tab_id: Option<&str>,
@@ -2278,7 +2292,8 @@ fn spawn_session_reader(
                 break;
             }
             let wait = if watcher.is_some() {
-                Duration::from_secs(30).saturating_sub(watched_at.elapsed())
+                Duration::from_secs(2)
+                    .min(Duration::from_secs(30).saturating_sub(watched_at.elapsed()))
             } else {
                 Duration::from_secs(2)
             };
@@ -2298,7 +2313,7 @@ fn current_focus(workspace: Option<&str>, tab: Option<&str>, source: &str) -> Op
     match (workspace, tab) {
         (Some(workspace), Some(tab)) => herdr(&["pane", "list", "--workspace", workspace])
             .ok()
-            .and_then(|panes| focused_agent(&panes, tab)),
+            .and_then(|panes| focused_or_source_agent(&panes, tab, source)),
         _ => herdr(&["pane", "get", source])
             .ok()
             .and_then(|result| focused_pane(&result["result"]["pane"], None, source)),
@@ -2327,7 +2342,9 @@ fn focus_from_event(
 
 #[cfg(unix)]
 fn focus_event_socket(path: &std::path::Path) -> Result<Box<dyn ReadWrite>> {
-    Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?))
+    let socket = std::os::unix::net::UnixStream::connect(path)?;
+    socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+    Ok(Box::new(socket))
 }
 
 #[cfg(windows)]
@@ -2381,12 +2398,24 @@ fn follow_focus_events(
         return Ok(false);
     }
     loop {
-        line.clear();
-        anyhow::ensure!(
-            reader.read_line(&mut line)? > 0,
-            "Herdr subscription closed"
-        );
+        match reader.read_line(&mut line) {
+            Ok(0) => anyhow::bail!("Herdr subscription closed"),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if !tracker.observe(current_focus(workspace, tab, source), send, false) {
+                    return Ok(false);
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        }
         let event: serde_json::Value = serde_json::from_str(&line)?;
+        line.clear();
         if !tracker.observe(focus_from_event(&event, workspace, tab, source), send, true) {
             return Ok(false);
         }
@@ -2906,6 +2935,18 @@ mod tests {
         assert!(agent_session(&wrong).is_none());
         wrong["result"]["pane"]["agent_session"] = serde_json::Value::Null;
         assert!(agent_session(&wrong).is_none());
+    }
+
+    #[test]
+    fn source_agent_remains_visible_when_pulse_pane_is_focused() {
+        let panes = json!({"result":{"panes":[
+            {"pane_id":"source","tab_id":"tab","focused":false,"agent":"codex",
+             "agent_session":{"agent":"codex","kind":"id","value":"session-123"}},
+            {"pane_id":"pulse","tab_id":"tab","focused":true,"agent":null}
+        ]}});
+        let active = focused_or_source_agent(&panes, "tab", "source").unwrap();
+        assert_eq!(active.pane_id, "source");
+        assert_eq!(active.session.unwrap().id, "session-123");
     }
 
     #[test]
