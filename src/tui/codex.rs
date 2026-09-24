@@ -20,6 +20,7 @@ enum Input {
     ImportFile,
     ImportFileName(std::path::PathBuf),
     Rename(String),
+    Delete(String),
     Reasoning,
     Disconnect,
     Subscription(Option<String>),
@@ -230,6 +231,14 @@ impl App {
                             self.config = config;
                         }
                     }
+                    if self
+                        .codex_ui
+                        .chosen_account
+                        .as_ref()
+                        .is_some_and(|id| !self.config.codex.accounts.contains_key(id))
+                    {
+                        self.codex_ui.chosen_account = None;
+                    }
                     if let Some(id) = self.codex_ui.pending_selection.take() {
                         self.codex_ui.selected = self
                             .config
@@ -348,19 +357,27 @@ impl App {
             }
             return Ok(Some(false));
         }
-        if let Some(Input::Subscription(account)) = self.codex_ui.input.clone() {
+        if let Some(input @ (Input::Subscription(_) | Input::Delete(_))) =
+            self.codex_ui.input.clone()
+        {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('n') => self.codex_ui.input = None,
                 KeyCode::Enter | KeyCode::Char('y') => {
                     self.codex_ui.input = None;
-                    self.codex_job(move |paths, _, _| {
-                        if let Some(id) = account {
+                    self.codex_job(move |paths, _, _| match input {
+                        Input::Subscription(Some(id)) => {
                             service::accounts::activate(&paths, &id)?;
                             Ok("ChatGPT enabled · API providers paused · restart Codex".into())
-                        } else {
+                        }
+                        Input::Subscription(None) => {
                             service::disable_subscription(&paths)?;
                             Ok("ChatGPT disabled · previous API providers restored · restart Codex".into())
                         }
+                        Input::Delete(id) => {
+                            service::accounts::remove(&paths, &id)?;
+                            Ok("Saved account deleted".into())
+                        }
+                        _ => unreachable!("handled by confirmation"),
                     });
                 }
                 _ => {}
@@ -442,7 +459,9 @@ impl App {
                             })?;
                             Ok("Reasoning saved · p apply to Codex".into())
                         }
-                        Input::Subscription(_) => unreachable!("handled by confirmation"),
+                        Input::Subscription(_) | Input::Delete(_) => {
+                            unreachable!("handled by confirmation")
+                        }
                         Input::Disconnect => {
                             if text != "disconnect" {
                                 anyhow::bail!("Disconnect cancelled");
@@ -561,6 +580,11 @@ impl App {
                 if let Some(id) = self.selected_codex_account() {
                     let name = self.config.codex.accounts[&id].name.clone();
                     self.codex_input(Input::Rename(id), name);
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(id) = self.selected_codex_account() {
+                    self.codex_input(Input::Delete(id), String::new());
                 }
             }
             KeyCode::Char('b') => self.codex_input(Input::BrowserLogin, String::new()),
@@ -806,7 +830,7 @@ impl App {
                     .style(button_style(
                         false,
                         (self.codex_ui.busy && key != '\u{1b}')
-                            || (matches!(key, 'e' | 'p' | 'r')
+                            || (matches!(key, 'e' | 'p' | 'r' | 'x')
                                 && self.selected_codex_account().is_none()),
                         false,
                     )),
@@ -825,6 +849,7 @@ impl App {
             Input::Import => "Import current login · Account label",
             Input::ImportFileName(_) => "Import auth.json · Account label",
             Input::Rename(_) => "Edit account · Display name",
+            Input::Delete(_) => "Delete saved account?",
             Input::ImportFile => "Import auth.json · File path",
             Input::Reasoning => "Reasoning: none/minimal/low/medium/high/xhigh",
             Input::Disconnect => "Type disconnect to restore previous configuration",
@@ -864,12 +889,29 @@ impl App {
                 Some(Input::Subscription(None)) => {
                     "Restore previously enabled API providers and their models.\nPreviously disabled providers stay disabled. Restart Codex after applying."
                 }
+                Some(Input::Delete(_)) => "",
                 _ => "Enter a value, then confirm. Ctrl+U clears the field.",
+            };
+            let description = if let Some(Input::Delete(id)) = &self.codex_ui.input {
+                let name = self
+                    .config
+                    .codex
+                    .accounts
+                    .get(id)
+                    .map_or("this account", |account| account.name.as_str());
+                format!(
+                    "Delete {name} and its saved credentials?\nApplied accounts must be switched or disconnected first."
+                )
+            } else {
+                description.to_owned()
             };
             frame.render_widget(Clear, popup);
             frame.render_widget(panel(title, true), popup);
             let inner = panel_inner(popup);
-            if matches!(self.codex_ui.input, Some(Input::Subscription(_))) {
+            if matches!(
+                self.codex_ui.input,
+                Some(Input::Subscription(_) | Input::Delete(_))
+            ) {
                 frame.render_widget(
                     Paragraph::new(description).wrap(Wrap { trim: false }),
                     Rect::new(
@@ -888,7 +930,10 @@ impl App {
             );
             frame.render_widget(
                 Paragraph::new(
-                    if matches!(self.codex_ui.input, Some(Input::Subscription(_))) {
+                    if matches!(
+                        self.codex_ui.input,
+                        Some(Input::Subscription(_) | Input::Delete(_))
+                    ) {
                         "Enter / y confirm · Esc / n cancel".into()
                     } else if login || matches!(self.codex_ui.input, Some(Input::Rename(_))) {
                         format!(
@@ -1010,6 +1055,7 @@ fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
         ('b', "Browser (b)"),
         ('d', "Device (d)"),
         ('e', "Rename (e)"),
+        ('x', "Delete (x)"),
         ('r', "Refresh (r)"),
         ('p', "Apply (p)"),
         ('\u{1b}', "Back (Esc)"),
@@ -1050,9 +1096,10 @@ mod login_ui_tests {
         for width in [40, 80, 120] {
             let area = Rect::new(0, 0, width, 24);
             let buttons = account_buttons(area);
-            assert_eq!(buttons.len(), 8);
+            assert_eq!(buttons.len(), 9);
             for (key, label, rect) in &buttons {
                 assert!(rect.right() <= area.right());
+                assert!(rect.bottom() <= area.bottom());
                 assert!(usize::from(rect.width) >= UnicodeWidthStr::width(*label));
                 if matches!(key, 'b' | 'd') {
                     app.codex_mouse(
@@ -1160,6 +1207,45 @@ mod login_ui_tests {
         let mut expected = account;
         expected.name = "Personal".into();
         assert_eq!(saved, &expected);
+    }
+    #[test]
+    fn delete_shortcut_confirms_and_clears_saved_selection() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        let id = "0123456789abcdef0123456789abcdef";
+        config::update(&app.paths.config, |config| {
+            config.codex.accounts.insert(
+                id.into(),
+                service::accounts::Account {
+                    name: "Personal".into(),
+                    ..Default::default()
+                },
+            );
+            config.codex.last_account = Some(id.into());
+            Ok(())
+        })
+        .unwrap();
+        app.config = config::load(&app.paths.config).unwrap();
+        app.select_client_tab(ClientTab::Codex);
+        app.codex_ui.accounts = true;
+        app.codex_ui.chosen_account = Some(id.into());
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.handle_codex_key(key(KeyCode::Char('x'))).unwrap();
+        assert!(matches!(app.codex_ui.input, Some(Input::Delete(_))));
+        app.handle_codex_key(key(KeyCode::Esc)).unwrap();
+        assert!(app.config.codex.accounts.contains_key(id));
+        app.handle_codex_key(key(KeyCode::Char('x'))).unwrap();
+        app.handle_codex_key(key(KeyCode::Enter)).unwrap();
+        for _ in 0..200 {
+            app.poll_codex();
+            if !app.codex_ui.busy {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!app.codex_ui.busy);
+        assert!(!app.config.codex.accounts.contains_key(id));
+        assert_eq!(app.config.codex.last_account, None);
+        assert_eq!(app.codex_ui.chosen_account, None);
     }
     #[test]
     fn usage_bars_and_refresh_keep_account_list_visible() {

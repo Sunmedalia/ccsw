@@ -350,6 +350,7 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
                 "Browser / device code login; optional account label",
             ),
             ("e", "Rename the highlighted account"),
+            ("x", "Delete the highlighted saved account (confirm)"),
             ("r", "Refresh account usage and status"),
             ("PgUp / PgDn", "Scroll cached account details"),
             ("i", "Import current Codex login; optional account label"),

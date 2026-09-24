@@ -365,6 +365,9 @@ pub fn remove(paths: &AppPaths, id: &str) -> Result<()> {
             .accounts
             .remove(id)
             .context("Account does not exist")?;
+        if config.codex.last_account.as_deref() == Some(id) {
+            config.codex.last_account = None;
+        }
         Ok(())
     })?;
     for file in ["auth.json", "config.toml"] {

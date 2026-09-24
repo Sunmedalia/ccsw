@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.15。新增在线更新与更安全的卸载流程；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
+> 本文对应 v0.1.16。新增 Codex 账号删除、Usage token 视图和 Pulse Session token 刷新改进；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -42,14 +42,14 @@ Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并�
 指定 CCSW 发布版本：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.15 bash -s -- ccsw
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.16 bash -s -- ccsw
 ```
 
 以上在线命令需要本脚本已合并到 GitHub 的 main 分支。本地源码安装方式见下文。
 
 ### 下载 Release
 
-v0.1.15 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.16 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -654,6 +654,8 @@ Codex 账号页支持 `Browser (b)` 浏览器登录和 `Device (d)` 设备码登
 
 Codex 账号页的 `Rename (e)` 可修改当前高亮账号的显示名称；邮箱、工作区、套餐和登录凭据来自账号身份，不支持手动修改。Import 与 File 使用统一的可选账号备注，留空默认为 ChatGPT；File 先输入文件路径，再填写备注。重命名不会切换账号或重新登录。
 
+选中账号后按 `x` 或点击 `Delete (x)` 可删除保存的账号和凭据，操作前会确认。已应用的账号需先切换或断开；删除保存记录不会退出 Codex 当前的本机登录。
+
 Codex 账号详情显示缓存额度使用率、用量窗口重置倒计时、最近成功刷新时间，以及已应用/本机登录状态。点击 `Refresh (r)` 主动查询，平时浏览不会请求额度接口；`PgUp/PgDn` 滚动详情。查询失败保留旧缓存并标记失败，不把网络错误直接判定为登录过期。
 
 ## Herdr Pulse 常驻监控
@@ -777,4 +779,4 @@ command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
 ```
 
-也可以安装固定的已发布版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.15`。这会安装该 tag 的代码；仍需手动配置快捷键。
+也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.16`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。
