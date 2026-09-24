@@ -212,7 +212,7 @@ mod tests {
         for (data, input, output, cache) in [
             (
                 "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"cache_read_input_tokens\":5}}}\r\n\r\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
-                11,
+                16,
                 3,
                 5,
             ),
@@ -224,7 +224,7 @@ mod tests {
             ),
             (
                 "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":13,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":6}}}}\n\n",
-                13,
+                19,
                 5,
                 6,
             ),
