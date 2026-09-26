@@ -25,10 +25,25 @@ for line in sys.stdin:
         emit({"method": "account/login/completed", "params": {"loginId": "test-login", "success": True}})
         result = {"type": "chatgptDeviceCode", "loginId": "test-login", "verificationUrl": "https://auth.openai.com/codex/device", "userCode": "TEST-CODE"}
     elif method == "account/read":
+        if fixture.with_suffix(".unauthorized").exists():
+            emit({"id": request_id, "error": {"code": -32000, "message": "workspace routing discovery unauthorized (401) SECRET_SHOULD_NEVER_BE_LOGGED"}})
+            continue
         auth = json.loads((home / "auth.json").read_text())
         auth["tokens"]["refresh_token"] = "refreshed-in-fixture"
         (home / "auth.json").write_text(json.dumps(auth))
         result = {"account": {"type": "chatgpt", "email": "a@example.test", "planType": "plus"}}
+    elif method == "thread/start":
+        assert request["params"]["ephemeral"] is True
+        assert request["params"]["modelProvider"] == "openai"
+        assert request["params"]["sandbox"] == "read-only"
+        result = {"thread": {"id": "wake-thread"}}
+    elif method == "turn/start":
+        assert request["params"]["threadId"] == "wake-thread"
+        assert request["params"]["input"][0]["text"] == "Reply OK."
+        assert request["params"]["sandboxPolicy"]["type"] == "readOnly"
+        fixture.with_suffix(".wake").write_text("one minimal turn")
+        result = {"turn": {"id": "wake-turn", "status": "inProgress"}}
+        emit({"method":"turn/completed","params":{"threadId":"wake-thread","turn":{"id":"wake-turn","status":"failed" if fixture.with_suffix(".wake-fail").exists() else "completed"}}})
     elif method == "account/rateLimits/read":
         if fixture.with_suffix(".fail").exists():
             emit({"id": request_id, "error": {"code": -1, "message": "SECRET_SHOULD_NEVER_BE_LOGGED"}})

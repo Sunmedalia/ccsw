@@ -2853,7 +2853,7 @@ fn pi_uses_provider_layout_without_proxy_controls() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Providers · F2 Grok CLI"));
+        assert!(text.contains("Providers · F2 Grok"));
         let area = Rect::new(0, 0, width, height);
         let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
         assert!(

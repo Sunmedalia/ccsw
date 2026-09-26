@@ -101,7 +101,13 @@ impl Client {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .context("Codex RPC timed out or disconnected")??;
             if value["id"].as_u64() == Some(id) && value.get("method").is_none() {
-                if value.get("error").is_some() {
+                if let Some(error) = value.get("error") {
+                    let message = error["message"].as_str().unwrap_or("");
+                    if method == "account/read" && message.contains("401") {
+                        bail!(
+                            "Codex rejected this saved login (401); sign in again and re-import this account"
+                        );
+                    }
                     bail!(
                         "Codex rejected {method}; check login, client version and managed policies"
                     );
@@ -111,6 +117,54 @@ impl Client {
             // Notifications can arrive before the login response.
             if self.pending.len() < 256 {
                 self.pending.push(value);
+            }
+        }
+    }
+    /// Use an isolated home and ephemeral thread for one short account wake turn.
+    pub fn wake(&mut self) -> Result<()> {
+        let thread = self.call("thread/start", json!({
+            "ephemeral":true, "modelProvider":"openai", "approvalPolicy":"never", "sandbox":"read-only",
+            "baseInstructions":"Reply only OK. Do not use tools.",
+            "config":{"features.shell_tool":false, "web_search":"disabled"}
+        }))?;
+        let thread_id = thread["thread"]["id"]
+            .as_str()
+            .context("Codex wake thread unavailable")?;
+        let turn = self.call(
+            "turn/start",
+            json!({"threadId":thread_id,
+                "input":[{"type":"text","text":"Reply OK."}], "effort":"low",
+                "approvalPolicy":"never", "sandboxPolicy":{"type":"readOnly","networkAccess":false}
+            }),
+        )?;
+        let turn_id = turn["turn"]["id"]
+            .as_str()
+            .context("Codex wake turn unavailable")?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if Instant::now() >= deadline {
+                bail!("Codex wake timed out; no automatic retry");
+            }
+            let message = if !self.pending.is_empty() {
+                self.pending.remove(0)
+            } else {
+                self.output
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .context("Codex wake timed out or disconnected")??
+            };
+            // Refuse reverse RPCs (tools/approvals); never echo credential-bearing payloads.
+            if message.get("method").is_some() && message.get("id").is_some() {
+                self.send(json!({"id":message["id"],"error":{"code":-32601,"message":"Wake supports no tools"}}))?;
+                bail!("Codex wake attempted a tool; stopped");
+            }
+            if message["method"] == "turn/completed"
+                && message["params"]["threadId"] == thread_id
+                && message["params"]["turn"]["id"] == turn_id
+            {
+                if message["params"]["turn"]["status"] == "completed" {
+                    return Ok(());
+                }
+                bail!("Codex wake did not complete; check account login and limits");
             }
         }
     }

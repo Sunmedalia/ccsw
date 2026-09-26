@@ -1,7 +1,7 @@
 id = "ccsw"
 name = "CCSW Pulse"
 version = "0.1.16"
-description = "Persistent side-pane monitor for Claude, Codex accounts and Grok CLI usage"
+description = "Persistent side-pane monitor for Claude, Codex accounts and Grok usage"
 min_herdr_version = "0.7.0"
 platforms = ["macos", "linux"]
 

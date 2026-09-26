@@ -24,6 +24,7 @@ enum Input {
     Reasoning,
     Disconnect,
     Subscription(Option<String>),
+    Switch(String),
 }
 pub(super) struct CodexUi {
     pub enabled: bool,
@@ -84,7 +85,15 @@ impl App {
             Some(service::Selection::Account { .. })
         );
         let name = self
-            .chosen_codex_account()
+            .config
+            .codex
+            .active
+            .as_ref()
+            .and_then(|selection| match selection {
+                service::Selection::Account { id } => Some(id.clone()),
+                _ => None,
+            })
+            .or_else(|| self.chosen_codex_account())
             .and_then(|id| self.config.codex.accounts.get(&id))
             .map(|account| account.name.as_str())
             .unwrap_or("Select an account");
@@ -105,7 +114,7 @@ impl App {
         for (text, color) in [
             (
                 format!(
-                    "     Account: {name}   {} saved",
+                    "     Configured: {name}   {} saved",
                     self.config.codex.accounts.len()
                 ),
                 WARNING,
@@ -125,6 +134,26 @@ impl App {
         ] {
             lines.extend(wrap_styled_segments(
                 vec![(text, Style::default().fg(color))],
+                width,
+            ));
+        }
+        if selected
+            && !self.codex_ui.live_message.is_empty()
+            && let Some(service::Selection::Account { id }) = &self.config.codex.active
+            && self.codex_ui.live_id.as_ref() != Some(id)
+        {
+            let actual = self
+                .codex_ui
+                .live_id
+                .as_ref()
+                .and_then(|id| self.config.codex.accounts.get(id))
+                .map(|account| account.name.as_str())
+                .unwrap_or("other login");
+            lines.extend(wrap_styled_segments(
+                vec![(
+                    format!("     Codex login: {actual} · differs; open Accounts to apply"),
+                    Style::default().fg(WARNING),
+                )],
                 width,
             ));
         }
@@ -156,18 +185,18 @@ impl App {
     }
 
     fn apply_codex_account(&mut self) {
-        let Some(id) = self.chosen_codex_account() else {
-            self.set_error("No saved account selected · Enter Account, import a login, then press Space to select");
+        let Some(id) = self.account_to_apply() else {
+            self.set_error("No saved account selected · open Accounts, import a login, then highlight it and press p");
             return;
         };
+        if self.codex_ui.accounts {
+            self.codex_ui.chosen_account = Some(id.clone());
+        }
         if !self.subscription_enabled() {
             self.codex_input(Input::Subscription(Some(id)), String::new());
             return;
         }
-        self.codex_job(move |paths, _, _| {
-            service::accounts::activate(&paths, &id)?;
-            Ok("Codex account applied · restart CLI / Codex App and open a new chat".into())
-        });
+        self.codex_input(Input::Switch(id), String::new());
     }
 
     fn codex_job(
@@ -257,6 +286,14 @@ impl App {
         }
         changed
     }
+    fn account_to_apply(&self) -> Option<String> {
+        if self.codex_ui.accounts {
+            self.selected_codex_account()
+        } else {
+            self.chosen_codex_account()
+        }
+    }
+
     fn chosen_codex_account(&self) -> Option<String> {
         self.codex_ui
             .chosen_account
@@ -357,7 +394,7 @@ impl App {
             }
             return Ok(Some(false));
         }
-        if let Some(input @ (Input::Subscription(_) | Input::Delete(_))) =
+        if let Some(input @ (Input::Subscription(_) | Input::Switch(_) | Input::Delete(_))) =
             self.codex_ui.input.clone()
         {
             match key.code {
@@ -366,8 +403,12 @@ impl App {
                     self.codex_ui.input = None;
                     self.codex_job(move |paths, _, _| match input {
                         Input::Subscription(Some(id)) => {
-                            service::accounts::activate(&paths, &id)?;
-                            Ok("ChatGPT enabled · API providers paused · restart Codex".into())
+                            service::accounts::verify_for_switch(&paths, &id)?;
+                            Ok(service::accounts::activate_and_sync(&paths, &id)?.into())
+                        }
+                        Input::Switch(id) => {
+                            service::accounts::verify_for_switch(&paths, &id)?;
+                            Ok(service::accounts::activate_and_sync(&paths, &id)?.into())
                         }
                         Input::Subscription(None) => {
                             service::disable_subscription(&paths)?;
@@ -459,7 +500,7 @@ impl App {
                             })?;
                             Ok("Reasoning saved · p apply to Codex".into())
                         }
-                        Input::Subscription(_) | Input::Delete(_) => {
+                        Input::Subscription(_) | Input::Switch(_) | Input::Delete(_) => {
                             unreachable!("handled by confirmation")
                         }
                         Input::Disconnect => {
@@ -490,16 +531,22 @@ impl App {
         match key.code {
             KeyCode::F(3) => {
                 self.codex_ui.accounts = !self.codex_ui.accounts;
-                if self.codex_ui.accounts
-                    && let Some(service::Selection::Account { id }) = &self.config.codex.active
-                {
-                    self.codex_ui.selected = self
-                        .config
-                        .codex
-                        .accounts
-                        .keys()
-                        .position(|v| v == id)
-                        .unwrap_or(0);
+                if self.codex_ui.accounts {
+                    let target = self.codex_ui.chosen_account.as_ref().or({
+                        match &self.config.codex.active {
+                            Some(service::Selection::Account { id }) => Some(id),
+                            _ => None,
+                        }
+                    });
+                    if let Some(id) = target {
+                        self.codex_ui.selected = self
+                            .config
+                            .codex
+                            .accounts
+                            .keys()
+                            .position(|v| v == id)
+                            .unwrap_or(0);
+                    }
                 }
                 if self.codex_ui.accounts {
                     let sender = self.codex_ui.sender.clone();
@@ -542,7 +589,7 @@ impl App {
             return Ok(None);
         }
         match key.code {
-            KeyCode::Esc if self.codex_ui.busy => {
+            KeyCode::Esc if self.codex_ui.busy && !self.codex_ui.refreshing => {
                 self.codex_ui.cancel.store(true, Ordering::Relaxed)
             }
             KeyCode::Esc => self.codex_ui.accounts = false,
@@ -574,6 +621,17 @@ impl App {
                     self.codex_ui.refreshing = true;
                     self.codex_ui.message = "Refreshing usage… cached data shown below".into();
                     self.status = previous_status;
+                }
+            }
+            KeyCode::Char('w') if !self.codex_ui.busy => {
+                if let Some(id) = self.selected_codex_account() {
+                    self.codex_ui.help_scroll = 0;
+                    self.codex_job(move |paths, _, _| {
+                        service::accounts::wake(&paths, &id)?;
+                        Ok("Wake complete · usage refreshed".into())
+                    });
+                    self.codex_ui.refreshing = true;
+                    self.codex_ui.message = "Waking account… · consumes a little quota".into();
                 }
             }
             KeyCode::Char('e') => {
@@ -722,7 +780,7 @@ impl App {
             .map(|(id, account)| {
                 let active = self.config.codex.active
                     == Some(service::Selection::Account { id: id.clone() });
-                let chosen = self.chosen_codex_account().as_ref() == Some(id);
+                let chosen = self.codex_ui.chosen_account.as_ref() == Some(id);
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         if chosen { "● " } else { "○ " },
@@ -732,7 +790,13 @@ impl App {
                     Span::styled(format!("  {}", account.email), Style::default().fg(MUTED)),
                     Span::styled(
                         if active {
-                            "  Applied"
+                            if self.codex_ui.live_message.is_empty() {
+                                "  Configured"
+                            } else if self.codex_ui.live_id.as_ref() == Some(id) {
+                                "  Active"
+                            } else {
+                                "  Configured · login differs"
+                            }
                         } else if self.codex_ui.live_id.as_ref() == Some(id) {
                             "  Local login"
                         } else {
@@ -762,14 +826,24 @@ impl App {
             .map(|(id, account)| {
                 let applied = self.config.codex.active == Some(service::Selection::Account { id: id.clone() });
                 let local = self.codex_ui.live_id.as_ref() == Some(&id);
+                let conflict = applied
+                    && !self.codex_ui.live_message.is_empty()
+                    && self.codex_ui.live_id.as_ref() != Some(&id);
                 let state = if account.error.is_some() { "Refresh failed · cached data" } else if account.refreshed_at.is_some() { "Last check succeeded" } else { "Saved · not checked" };
-                format!("Status: {state}{}{}\n{}", if applied { " · Applied" } else { "" }, if local { " · Local login" } else { "" }, service::accounts::cached_summary(account))
+                format!("Status: {state}{}{}{}\n{}", if applied { " · Configured" } else { "" }, if local { " · Local login" } else { "" }, if conflict { " · Login differs; apply again after closing Codex" } else { "" }, service::accounts::cached_summary(account))
             })
             .unwrap_or("Add an account: Browser / Device to sign in, or Import / File to reuse a saved login.".into());
         let details = if login_busy {
             format!("Esc / Back cancels login\n{}", self.codex_ui.message)
         } else if self.codex_ui.refreshing {
-            format!("Refreshing usage…\n{details}")
+            format!(
+                "{}\n{details}",
+                if self.codex_ui.message.starts_with("Waking") {
+                    self.codex_ui.message.as_str()
+                } else {
+                    "Refreshing usage…"
+                }
+            )
         } else if self.codex_ui.message.is_empty() {
             details
         } else {
@@ -817,7 +891,7 @@ impl App {
                     .style(button_style(
                         false,
                         (self.codex_ui.busy && key != '\u{1b}')
-                            || (matches!(key, 'e' | 'p' | 'r' | 'x')
+                            || (matches!(key, 'e' | 'p' | 'r' | 'w' | 'x')
                                 && self.selected_codex_account().is_none()),
                         false,
                     )),
@@ -842,6 +916,7 @@ impl App {
             Input::Disconnect => "Type disconnect to restore previous configuration",
             Input::Subscription(Some(_)) => "Enable ChatGPT subscription?",
             Input::Subscription(None) => "Disable ChatGPT subscription?",
+            Input::Switch(_) => "Switch Codex account?",
         });
         if let Some(title) = title {
             let popup = account_input_area(area);
@@ -871,7 +946,10 @@ impl App {
                     "Edit the display name only.\nEmail and plan come from your login."
                 }
                 Some(Input::Subscription(Some(_))) => {
-                    "Pause all API providers and use the selected account.\nPrevious enablement will be saved. Restart Codex after applying."
+                    "Use this account and pause API providers.\nCCSW will restart the shared Codex service; active sessions may disconnect."
+                }
+                Some(Input::Switch(_)) => {
+                    "Use this account in new Codex sessions.\nCCSW will restart the shared Codex service; active sessions may disconnect."
                 }
                 Some(Input::Subscription(None)) => {
                     "Restore previously enabled API providers and their models.\nPreviously disabled providers stay disabled. Restart Codex after applying."
@@ -897,7 +975,7 @@ impl App {
             let inner = panel_inner(popup);
             if matches!(
                 self.codex_ui.input,
-                Some(Input::Subscription(_) | Input::Delete(_))
+                Some(Input::Subscription(_) | Input::Switch(_) | Input::Delete(_))
             ) {
                 frame.render_widget(
                     Paragraph::new(description).wrap(Wrap { trim: false }),
@@ -919,7 +997,7 @@ impl App {
                 Paragraph::new(
                     if matches!(
                         self.codex_ui.input,
-                        Some(Input::Subscription(_) | Input::Delete(_))
+                        Some(Input::Subscription(_) | Input::Switch(_) | Input::Delete(_))
                     ) {
                         "Enter / y confirm · Esc / n cancel".into()
                     } else if login || matches!(self.codex_ui.input, Some(Input::Rename(_))) {
@@ -1039,11 +1117,12 @@ fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
     let labels = [
         ('i', "Import (i)"),
         ('I', "File (I)"),
-        ('b', "Browser (b)"),
-        ('d', "Device (d)"),
+        ('b', "Browser b"),
+        ('d', "Device d"),
         ('e', "Rename (e)"),
         ('x', "Delete (x)"),
-        ('r', "Refresh (r)"),
+        ('r', "Refresh r"),
+        ('w', "Wake w"),
         ('p', "Apply (p)"),
         ('\u{1b}', "Back (Esc)"),
     ];
@@ -1083,7 +1162,7 @@ mod login_ui_tests {
         for width in [40, 80, 120] {
             let area = Rect::new(0, 0, width, 24);
             let buttons = account_buttons(area);
-            assert_eq!(buttons.len(), 9);
+            assert_eq!(buttons.len(), 10);
             for (key, label, rect) in &buttons {
                 assert!(rect.right() <= area.right());
                 assert!(rect.bottom() <= area.bottom());
@@ -1196,6 +1275,69 @@ mod login_ui_tests {
         assert_eq!(saved, &expected);
     }
     #[test]
+    fn home_card_shows_configured_and_actual_login_when_they_differ() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        let target = "11111111111111111111111111111111";
+        let actual = "22222222222222222222222222222222";
+        app.config.codex.accounts.insert(
+            target.into(),
+            service::accounts::Account {
+                name: "Target".into(),
+                ..Default::default()
+            },
+        );
+        app.config.codex.accounts.insert(
+            actual.into(),
+            service::accounts::Account {
+                name: "Actual".into(),
+                ..Default::default()
+            },
+        );
+        app.config.codex.active = Some(service::Selection::Account { id: target.into() });
+        app.codex_ui.live_id = Some(actual.into());
+        app.codex_ui.live_message = "Local login loaded".into();
+        let text = app
+            .chatgpt_provider_lines(80)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Configured: Target") && text.contains("Codex login: Actual · differs")
+        );
+    }
+
+    #[test]
+    fn apply_uses_highlighted_account_even_when_space_selected_another() {
+        let (_temp, mut app) = crate::tui::tests::persisted_app();
+        let first = "11111111111111111111111111111111";
+        let second = "22222222222222222222222222222222";
+        for id in [first, second] {
+            app.config.codex.accounts.insert(
+                id.into(),
+                service::accounts::Account {
+                    name: id.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        app.codex_ui.accounts = true;
+        app.codex_ui.selected = 1;
+        app.codex_ui.chosen_account = Some(first.into());
+        assert_eq!(app.account_to_apply().as_deref(), Some(second));
+        app.apply_codex_account();
+        assert!(
+            matches!(app.codex_ui.input, Some(Input::Subscription(Some(ref id))) if id == second)
+        );
+        assert_eq!(app.codex_ui.chosen_account.as_deref(), Some(second));
+        app.codex_ui.input = None;
+        app.codex_ui.accounts = false;
+        app.open_codex_accounts();
+        assert_eq!(app.codex_ui.selected, 1);
+        assert_eq!(app.account_to_apply().as_deref(), Some(second));
+    }
+
+    #[test]
     fn delete_shortcut_confirms_and_clears_saved_selection() {
         let (_temp, mut app) = crate::tui::tests::persisted_app();
         let id = "abcdef0123456789abcdef0123456789";
@@ -1262,6 +1404,19 @@ mod login_ui_tests {
         assert!(text.contains("ChatGPT accounts"));
         assert!(text.contains("Refreshing usage"));
         assert!(!text.contains("Login progress"));
+        app.codex_ui.message = "Waking account… · consumes a little quota".into();
+        terminal
+            .draw(|frame| app.draw_codex_accounts(frame, frame.area()))
+            .unwrap();
+        let waking: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(waking.contains("Waking account") && waking.contains("ChatGPT accounts"));
+        assert!(waking.contains("Wake w"));
         let controls = account_buttons(Rect::new(0, 0, 120, 30));
         assert_eq!(controls[0].2.x, 0);
         let gap = controls[1].2.x - controls[0].2.right();

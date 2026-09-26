@@ -334,7 +334,72 @@ pub fn activate(paths: &AppPaths, id: &str) -> Result<()> {
         &new,
         Some(&auth),
         Selection::Account { id: id.into() },
-    )
+    )?;
+    let actual = read_live_auth(&home, &document(&home)?)?
+        .as_ref()
+        .and_then(|auth| identity(auth).ok())
+        .map(|identity| identity.id);
+    anyhow::ensure!(
+        actual.as_deref() == Some(id),
+        "Codex login changed during switching; close running Codex clients and apply again"
+    );
+    Ok(())
+}
+
+/// Apply the saved login and reload the shared Codex process that ordinary CLI
+/// sessions attach to. An agent running inside that process cannot restart it.
+pub fn activate_and_sync(paths: &AppPaths, id: &str) -> Result<&'static str> {
+    activate(paths, id)?;
+    if std::env::var_os("CODEX_THREAD_ID").is_some() {
+        return Ok(
+            "Saved on disk; this active Codex task prevents a safe background restart. Finish it, then run `codex app-server daemon restart`.",
+        );
+    }
+    if std::env::var_os("CCSW_MOCK_AUTH").is_some() {
+        return Ok("Account applied to the configured Codex home.");
+    }
+    let binary_name =
+        crate::platform::nonempty_env("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
+    let binary = crate::platform::resolve_program(&binary_name)?;
+    let home = home()?;
+    let version = std::process::Command::new(&binary)
+        .args(["app-server", "daemon", "version"])
+        .env("CODEX_HOME", &home)
+        .output()
+        .context("Cannot inspect the Codex background service")?;
+    if !version.status.success() {
+        bail!(
+            "Account saved on disk, but the Codex background service could not be checked. Restart it manually with `codex app-server daemon restart`."
+        );
+    }
+    let info: Value = serde_json::from_slice(&version.stdout).context(
+        "Account saved on disk, but Codex returned an invalid background service status",
+    )?;
+    if info["status"] != "running" {
+        return Ok("Account applied. A new Codex session will start with this login.");
+    }
+    let restart = std::process::Command::new(&binary)
+        .args(["app-server", "daemon", "restart"])
+        .env("CODEX_HOME", &home)
+        .output()
+        .context("Account saved on disk, but the Codex background service could not restart")?;
+    if !restart.status.success() {
+        bail!(
+            "Account saved on disk, but the Codex background service did not restart. Finish active tasks and run `codex app-server daemon restart`."
+        );
+    }
+    let after = std::process::Command::new(&binary)
+        .args(["app-server", "daemon", "version"])
+        .env("CODEX_HOME", &home)
+        .output()
+        .context("Account saved on disk, but the restarted Codex service could not be checked")?;
+    let state: Value = serde_json::from_slice(&after.stdout)
+        .context("Account saved on disk, but the restarted Codex service status was invalid")?;
+    anyhow::ensure!(
+        after.status.success() && state["status"] == "running",
+        "Account saved on disk, but the Codex background service is not running; start a new Codex session"
+    );
+    Ok("Account applied; the Codex background service restarted. Open a new Codex session.")
 }
 pub fn rename(paths: &AppPaths, id: &str, name: &str) -> Result<()> {
     if name.trim().is_empty() {
@@ -380,6 +445,15 @@ pub fn remove(paths: &AppPaths, id: &str) -> Result<()> {
     Ok(())
 }
 pub fn refresh(paths: &AppPaths, id: &str) -> Result<()> {
+    refresh_inner(paths, id, false, false)
+}
+pub fn wake(paths: &AppPaths, id: &str) -> Result<()> {
+    refresh_inner(paths, id, true, false)
+}
+pub fn verify_for_switch(paths: &AppPaths, id: &str) -> Result<()> {
+    refresh_inner(paths, id, false, true)
+}
+fn refresh_inner(paths: &AppPaths, id: &str, wake: bool, check_only: bool) -> Result<()> {
     let _guard = lock(paths)?;
     let home = home()?;
     let doc = document(&home)?;
@@ -400,12 +474,24 @@ pub fn refresh(paths: &AppPaths, id: &str) -> Result<()> {
     )?;
     let result = (|| {
         let mut client = rpc::Client::start(temp.path())?;
-        let info = client.call("account/read", json!({"refreshToken":false}))?;
+        let info = match client.call("account/read", json!({"refreshToken":false})) {
+            Ok(info) => info,
+            Err(error) if error.to_string().contains("(401)") => {
+                client.call("account/read", json!({"refreshToken":true}))?
+            }
+            Err(error) => return Err(error),
+        };
         if info["account"]["type"] != "chatgpt" {
             bail!("Subscription login expired; sign in again");
         }
+        if check_only {
+            return Ok((info, None));
+        }
+        if wake {
+            client.wake()?;
+        }
         let limits = client.call("account/rateLimits/read", json!({}))?;
-        Ok::<_, anyhow::Error>((info, limits))
+        Ok::<_, anyhow::Error>((info, Some(limits)))
     })();
     // Always retain refreshed tokens, even if the quota endpoint failed.
     let refreshed = read_auth(&temp.path().join("auth.json"))?;
@@ -432,14 +518,29 @@ pub fn refresh(paths: &AppPaths, id: &str) -> Result<()> {
                     .as_str()
                     .map(str::to_owned)
                     .or(account.plan.clone());
-                account.limits = limits.clone();
-                account.refreshed_at = Some(now());
-                account.error = None;
+                if let Some(limits) = limits {
+                    account.limits = limits.clone();
+                    account.refreshed_at = Some(now());
+                    account.error = None;
+                } else if account
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("expired or rejected"))
+                {
+                    account.error = None;
+                }
             }
-            Err(_) => {
+            Err(error) => {
                 account.error = Some(
-                    "Refresh failed; cached limits may be stale. Check network or sign in again."
-                        .into(),
+                    if error.to_string().contains("(401)")
+                        || error.to_string().contains("Subscription login expired")
+                    {
+                        "Saved login expired or rejected; sign in again and re-import this account"
+                            .into()
+                    } else {
+                        "Refresh failed; cached limits may be stale. Check network or sign in again."
+                        .into()
+                    },
                 )
             }
         }

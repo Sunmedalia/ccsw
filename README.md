@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CCSW 是 Claude Code、Codex、Pi Agent 与 Grok CLI 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
+CCSW 是 Claude Code、Codex、Pi Agent 与 Grok 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
 
 它提供三个核心能力：
 
@@ -14,7 +14,7 @@ CCSW 是 Claude Code、Codex、Pi Agent 与 Grok CLI 的多厂商、多模型配
 
 > 本文对应 v0.1.16。新增 Codex 账号删除、Usage token 视图和 Pulse Session token 刷新改进；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok CLI 配置](#grok-cli-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok 配置](#grok-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
@@ -224,9 +224,9 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 旧版 v1–v3 的共享厂商会在迁移时复制为三份独立列表，以保留已添加的模型；之后编辑不再互相影响。Codex/Pi 副本不保留 Claude 角色别名。已有账号和接入快照保留，首次保存写入 v6；v4/v5 配置迁移后 Grok 列表为空，旧版本 CCSW 不能编辑 v6 文件。
 
-## Grok CLI 配置
+## Grok 配置
 
-点击顶部 **Grok CLI**，或按 `F2` 切换。页面沿用 Claude Code 的厂商和模型管理操作，支持三种 API 协议，由 Grok 直接连接厂商。
+点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude Code 的厂商和模型管理操作，支持三种 API 协议，由 Grok 直接连接厂商。
 
 1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `n` 新增厂商。
 2. 编辑厂商、模型、启用状态及 token 参数。新增模型在 Grok 中使用 `ccsw::厂商ID::模型ID`，请求发送实际上游模型 ID；导入模型保留原有配置键。
@@ -239,11 +239,11 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 外部修改了 CCSW 管理字段时，自动同步暂停。按 `p` 查看冲突字段，确认后重新接入。断开和卸载仅恢复未被外部修改的管理字段；无关配置、MCP、插件、Hooks 和登录凭据保留。不管理 Grok 多账号切换或任意高级 TOML 字段。仅包含继承端点的模型条目会在导入预览中标记并保留，需手动添加完整端点后管理。
 
-Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`（或再次点击）进入独立的 OAuth Accounts 管理页面；也可按 `o` 直接进入。页面沿用 Codex Accounts 的上下布局：上方账号列表、下方详情与原生模型配置、底部登录和退出操作，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok CLI 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
+Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`（或再次点击）进入独立的 OAuth Accounts 管理页面；也可按 `o` 直接进入。页面沿用 Codex Accounts 的上下布局：上方账号列表、下方详情与原生模型配置、底部登录、Wake 与退出操作，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
 
-登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。登录本身不会修改已选 API 模型；已有厂商和模型保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
+登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。登录本身不会修改已选 API 模型；已有厂商和模型保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`w` 对当前 OAuth 账号执行 Wake，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
 
-进入账号页或登录成功后自动获取用量：显示当前周期的已用比例、剩余比例、额度进度条、重置时间，以及服务返回的预付余额和按需用量/上限。共享额度会标为 **Shared account credit allowance**。这些数据是账号额度，不是本地会话 token 统计；缺失字段不会显示为零。`PgUp/PgDn` 查看较长详情。刷新失败时保留本次运行中同一账号的上次结果并提示缓存状态；退出登录或更换账号会清除对应缓存。访问令牌过期时，先在 Grok CLI 刷新登录或重新授权，再按 `r`。接口依据 [Grok 官方账单实现](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/extensions/billing.rs)。
+进入账号页或登录成功后自动获取用量：显示当前周期的已用比例、剩余比例、额度进度条、重置时间，以及服务返回的预付余额和按需用量/上限。共享额度会标为 **Shared account credit allowance**。这些数据是账号额度，不是本地会话 token 统计；缺失字段不会显示为零。`PgUp/PgDn` 查看较长详情。刷新失败时保留本次运行中同一账号的上次结果并提示缓存状态；退出登录或更换账号会清除对应缓存。访问令牌过期时，先在 Grok 刷新登录或重新授权，再按 `r`。接口依据 [Grok 官方账单实现](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/extensions/billing.rs)。
 
 实现依据 [Grok 原生设置说明](https://docs.x.ai/build/settings)，兼容验证基准为 Grok Build CLI `1.0.41`。
 
@@ -308,9 +308,9 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 ## Codex 配置与账号
 
-> Codex 配置随 v0.1.7 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
+> Codex 配置随 v0.1.7 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。切换账号时，CCSW 会在磁盘写入后重启正在运行的 Codex 后台服务，让普通 `codex` 的新会话读取新账号；这会断开服务中的现有会话，因此 TUI 会先提示。若 CCSW 本身运行在 Codex 任务中，切换只写入磁盘，并提示任务结束后运行 `codex app-server daemon restart`。真实 App 的账号切换与新会话请求仍需在目标版本上验证。
 
-在 TUI 中点击顶部 **Claude Code / Codex / Pi / Grok CLI** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。四个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
+在 TUI 中点击顶部 **Claude Code / Codex / Pi / Grok** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。四个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
 ### Codex API
 
@@ -352,25 +352,29 @@ Codex 首页依次显示 **All Models**、**ChatGPT Account** 和 API 提供商�
 - **启用订阅**：保存所有 API 厂商当前的启用状态，自动关闭它们并应用所选 ChatGPT 账号；TUI 在 ChatGPT Account 卡片标记订阅 Enabled、原先开启的厂商标记 Paused by ChatGPT。All Models 保持与 Claude 相同的 API 模型汇总视图，此时为空。
 - **关闭订阅**：恢复被自动关闭的厂商及其模型；原本手动关闭的厂商继续关闭。优先恢复先前使用的 API 模型；该模型已不可用时选择一个恢复启用的模型；没有可用 API 模型时断开 CCSW 管理并恢复原配置。
 - 切换订阅账号不会覆盖保存的 API 启用状态。订阅期间 API 厂商保持关闭；先禁用订阅再启用 API 厂商。新增厂商不会被自动恢复为开启。
-- 普通 API 厂商和模型的启用/禁用不弹窗；订阅的启用/禁用必须确认，包括通过 Apply 从 API 模式切入订阅。账号列表的 Space 仍仅选择账号，按 `p` 才应用。
+- 普通 API 厂商和模型的启用/禁用不弹窗；订阅的启用/禁用必须确认，包括通过 Apply 从 API 模式切入订阅。账号页的 `p` / Apply 直接应用当前高亮账号；Space 只作预选。
 
 订阅与 API 模式之间切换后需重启 Codex。API 模式内已加载的模型仍可通过原生 `/model` 切换，无需重启。CLI 可用 `ccsw codex accounts disable` 关闭订阅并恢复 API 配置。
 
-账号页只提供导入与切换，不进行额度查询或浏览器登录：
+账号页提供导入、切换、浏览器登录、额度刷新与 Wake：
 
 | 按键 / 按钮 | 操作 |
 | --- | --- |
 | `i` / Import | 导入本机当前 Codex 登录，输入保存名称 |
 | `I` / File | 导入指定 `auth.json` 文件 |
 | `↑↓`、`j/k` | 选择账号 |
-| `Space` | 选中光标所在账号，不应用配置 |
-| `p` / Apply Codex | 使用账号，同时切换为 ChatGPT 提供商 |
+| `Space` | 预选光标所在账号，不应用配置 |
+| `p` / Apply Codex | 应用当前高亮账号，同时切换为 ChatGPT 提供商 |
+| `r` / Refresh | 刷新选中账号的额度 |
+| `w` / Wake | 唤醒选中账号并刷新额度 |
 | `Esc` / Back | 返回提供商列表 |
 | `?` | 与 Claude 一致的分栏 Help：Providers / Accounts / Models / Forms |
 
-导入成功后自动高亮，空格选中，再按 p 或点击 Apply Codex 才激活。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
+CCSW TUI 的 Codex / Grok 账号管理页中的 **Wake**（或 `w`）发送一次最小 prompt 后刷新额度，可能消耗少量用量；不自动重试，也不批量唤醒其他账号。Codex 使用隔离的临时登录副本和不持久化会话；Grok 向官方聊天代理发送 `Reply OK.`，输出上限 1 token，不附带工具或项目内容。该操作不能保证额度周期开始或重置，周期由服务端决定；仅更新显示请用 `r`。超时或失败后可能已经产生一次请求，先用 `r` 检查额度。Codex 也可执行 `ccsw codex accounts wake <id>`。
 
-切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Applied]` 是当前写入 Codex 的账号，`[Local login]` 是磁盘凭据身份；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
+导入成功后自动高亮，按 p 或点击 Apply Codex 会先在线校验该账号，再应用当前高亮账号；校验失败不会替换当前登录。同一身份重新导入会更新凭据，不增加重复账号；即使目标目录中仍有同一账号的旧凭据，也不会在激活时覆盖刚导入的新副本。不同工作区分别保存。已撤销的 refresh token 无法通过切换恢复：先在 Codex 中重新登录，再导入新凭据。
+
+切换完成后重启 Codex CLI / App 并打开新会话。账号页的 `[Configured]` 是 CCSW 保存的目标账号，`[Local login]` 是当前 Codex 磁盘凭据身份；不一致时会明确提示；API 模式保留的登录文件不代表 API 请求使用 ChatGPT 订阅。本地身份读取不验证远程凭据有效性。
 
 在 Codex 内切换模型或推理强度后，可以直接回 CCSW 按 `p` 应用。连接地址等受管字段发生外部变化时，按 `s` 查看，必要时按 `D` 断开后再应用；事务恢复使用 `ccsw codex recover`。
 
@@ -378,6 +382,7 @@ Codex 首页依次显示 **All Models**、**ChatGPT Account** 和 API 提供商�
 ccsw codex accounts import --name current
 ccsw codex accounts import --name another --file /absolute/path/auth.json
 ccsw codex accounts list
+ccsw codex accounts check <account-id> # 在线校验保存的登录，不切换
 ccsw codex accounts use <account-id>
 ```
 
@@ -754,14 +759,14 @@ herdr plugin list --plugin ccsw
 快捷键在当前标签页最右边界的 pane 右侧打开常驻监控，保留原 pane 的焦点；
 再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
 首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
-Grok / Grok CLI → Grok CLI；未识别到这些 agent → All。打开后通过 Herdr 焦点事件跟随同一标签页当前聚焦的 Claude / Codex / Grok pane，Gateway、图表和 Sessions 均切换到对应客户端；事件连接不可用时每两秒检查一次。聚焦侧栏或普通终端时保留上一次 agent。手动选择 Claude / Codex / Grok CLI / All 后，下一次切换 agent 焦点时恢复自动跟随。
+Grok → Grok；未识别到这些 agent → All。打开后通过 Herdr 焦点事件跟随同一标签页当前聚焦的 Claude / Codex / Grok pane，Gateway、图表和 Sessions 均切换到对应客户端；事件连接不可用时每两秒检查一次。聚焦侧栏或普通终端时保留上一次 agent。手动选择 Claude / Codex / Grok / All 后，下一次切换 agent 焦点时恢复自动跟随。
 直接运行 `ccsw quick` 默认展示 All。
 
-- `Tab` 或 `1/2/3/4` 切换 Claude / Codex / Grok CLI / 全部统计，鼠标点击同样可用。
+- `Tab` 或 `1/2/3/4` 切换 Claude / Codex / Grok / 全部统计，鼠标点击同样可用。
 - 每 2 秒检查本地用量库；数据库版本未变化时跳过统计查询。`r` 立即检查。读取失败保留旧数据并标记 STALE。
 - 首页在 `PROVIDERS / TODAY` 标题右侧点击 `[Models m]`（或按 `m`）切换服务商与模型明细；不再使用 `d`。滚轮、方向键、PgUp/PgDn、鼠标点击或拖动滚动条均可滚动，Esc/Home 回到顶部。
-- **Codex** 页面顶部用紧凑账号卡显示名称、邮箱、套餐、本地登录状态及额度进度条。账号元数据每两秒更新；在线额度刷新仍在编辑器 Accounts 页面执行，Pulse 不切换或修改账号。
-- **Grok CLI** 页面先以独立的 Gateway token 区域显示今日 Grok 网关用量、输入/输出及缓存，再以 Session token 区域显示本地会话累计 token、缓存读写和命中率，两者不相加。下方以账号卡、额度进度条和模型列表显示 OAuth 账号、额度/重置时间/余额及模型配置。当前选择 Grok 时，每分钟自动刷新在线额度，`r` 立即刷新；失败保留同一账号缓存。Grok 直接 API 流量不计入 CCSW 网关统计，Pulse 只读索引 Grok 原生 `updates.jsonl` 中每个 prompt 的真实 usage，重复完成通知不会重复计数。聚焦的 Grok session 优先；没有聚焦 Grok session 时展示最近会话并标为 Recent，缺少 token 数据显示 `—`。
+- **Codex** 页面顶部用紧凑账号卡显示名称、邮箱、套餐、本地登录状态及额度进度条。简洁版以紧凑额度条显示已用比例与相对重置时间，登录状态、账号数量和缓存年龄合并为一行；文字版保留完整字段。账号元数据每两秒更新；`r` 可在线刷新额度，Pulse 不切换账号。
+- **Grok** 页面顶部先显示账号卡、额度进度条和模型列表，再以独立的 Gateway token 区域显示今日 Grok 网关用量、输入/输出及缓存，再以 Session token 区域显示本地会话累计 token、缓存读写和命中率，两者不相加。账号卡显示 OAuth 账号、额度/重置时间/余额及模型配置。当前选择 Grok 时，每分钟自动刷新在线额度，`r` 立即刷新；失败保留同一账号缓存。`v` 在文字版与简洁版之间切换：文字版沿用 Claude 的完整网关指标、请求健康及服务商/模型明细，简洁版与 Codex、Claude 共用精细比例条，账号额度、输入输出及缓存命中以紧凑视图显示。两版都显示网关输出速率（E2E）；Session 区域另显示原生日志的 API rate（有耗时记录的输出 token ÷ API 总耗时），不等同于纯模型解码速度，缺少有效耗时时显示 `—`。Grok 直接 API 流量不计入 CCSW 网关统计，Pulse 只读索引 Grok 原生 `updates.jsonl` 中每个 prompt 的真实 usage，重复完成通知不会重复计数。聚焦的 Grok session 优先；没有聚焦 Grok session 时展示最近会话并标为 Recent，缺少 token 数据显示 `—`。
 - Claude / All 侧栏首页首屏先显示**今日 CCSW 网关用量**，再显示当前聚焦的 Claude / Codex pane 的**当前 session 累计 token**；两者均用大数字展示，互不相加，各自保留输入/输出、缓存读写和缓存率。session 缓存复用率 = 缓存读取 ÷ 总输入（不含输出；缓存写入不算命中）。当前会话来自本地日志；文件变化会触发更新，并每 30 秒兜底检查一次。文件监听不可用时改为每 2 秒检查。Codex 恢复同一 session 时会合并多份日志的累计计数，避免新日志尚未写入 token 事件时用量暂时消失。`s` / `Sessions` 打开会话页，顶部保留当前会话摘要，下方显示其他本地会话；沿用 Claude / Codex / All 筛选。焦点切换到另一 agent pane 或 agent 切换 session 时，侧栏随之切换对应客户端和当前会话。若 Herdr 尚未提供 session ID，会显示等待识别，不会把最近的日志误标为当前会话。会话页按 `t` 切换最近活动 / token 排序，`r` 刷新，`?` 查看统计说明。Fork 会话标记 `*`，可能包含继承用量。
 - `c` / `Chart` 切换首页与图表页：上方为今日网关每小时请求数，下方为当前 session 今日每小时 token 增量（输入+输出，来自本地日志）；两组图分别缩放，不应直接比较柱高。
 - `v`（或点击右上角 `V(v)` / `T(v)`）在文字版和简洁图形版之间切换，当前页面、客户端筛选和排序保持不变。简洁版仍保留网关与当前 session 的大 Token 数字；网关指标改为输入/输出双色条、请求/未知计数、缓存命中条（内含 R/W 读写量）及速率/测量流数的紧凑读数，保留各项数值而减少重复标签。健康条按已完成请求分为绿色成功、红色失败、金色中断，待完成请求不计入比例。图表页原本就是图形展示，切换后图表数据不变。

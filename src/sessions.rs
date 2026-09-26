@@ -104,6 +104,10 @@ pub struct Session {
     // Token increments keyed by the log event timestamp, for local-day charts.
     pub activity: BTreeMap<i64, i64>,
     pub models: BTreeSet<String>,
+    // Grok API time totals include only prompts with positive recorded durations.
+    pub api_output: i64,
+    pub api_ms: i64,
+    pub api_samples: i64,
     pub child: bool,
     pub fork: bool,
     pub incomplete: bool,
@@ -116,6 +120,7 @@ struct CachedFile {
     identity: Option<(u64, u64)>,
     session: Session,
     messages: BTreeMap<String, (Tokens, i64)>,
+    grok_timings: BTreeMap<String, (i64, i64)>,
     // Codex emits cumulative totals. Keep the checkpoints so resumed logs with
     // the same session ID can be merged without a false chart spike.
     codex_totals: BTreeMap<i64, i64>,
@@ -153,6 +158,13 @@ impl CachedFile {
         }
         // Usage is per prompt, with input already including cache buckets.
         // Replayed completion notifications replace the same prompt, never add twice.
+        if let Some(ms) = n("apiDurationMs").filter(|ms| *ms > 0)
+            && let Some(output) = n("outputTokens")
+        {
+            self.grok_timings.insert(prompt.into(), (output, ms));
+        } else {
+            self.grok_timings.remove(prompt);
+        }
         self.messages.insert(prompt.into(), (tokens, timestamp));
     }
     fn observe(&mut self, v: &Value, claude: bool) {
@@ -367,6 +379,19 @@ impl CachedFile {
                 Err(_) => self.session.incomplete = true,
             }
         }
+        if grok {
+            self.session.api_output = self
+                .grok_timings
+                .values()
+                .map(|(output, _)| *output)
+                .fold(0i64, i64::saturating_add);
+            self.session.api_ms = self
+                .grok_timings
+                .values()
+                .map(|(_, ms)| *ms)
+                .fold(0i64, i64::saturating_add);
+            self.session.api_samples = self.grok_timings.len() as i64;
+        }
         if claude || grok {
             self.session.tokens = Tokens::default();
             self.session.activity.clear();
@@ -527,7 +552,7 @@ mod tests {
             json!({
                 "timestamp": timestamp, "params": {"sessionId": "grok-session", "update": {
                     "prompt_id": prompt, "usage": {"inputTokens": input, "outputTokens": output,
-                    "cachedReadTokens": 60, "cacheCreationTokens": 5, "modelUsage": {"grok-4": {}}}
+                    "cachedReadTokens": 60, "cacheCreationTokens": 5, "apiDurationMs": 2000, "modelUsage": {"grok-4": {}}}
                 }}
             })
         };
@@ -538,15 +563,29 @@ mod tests {
         assert_eq!(cached.session.client, "Grok");
         assert_eq!(cached.session.id, "grok-session");
         assert_eq!(cached.session.tokens.total(), 110);
+        assert_eq!(cached.session.api_output, 10);
+        assert_eq!(cached.session.api_ms, 2000);
+        assert_eq!(cached.session.api_samples, 1);
         append(&path, event("two", 200, 20, 2000));
         cached.read(&path, false).unwrap();
         assert_eq!(cached.session.tokens.input, 300);
         assert_eq!(cached.session.tokens.total(), 330);
         assert_eq!(cached.session.tokens.read, 120);
+        assert_eq!(cached.session.api_output, 30);
+        assert_eq!(cached.session.api_ms, 4000);
+        assert_eq!(cached.session.api_samples, 2);
         assert_eq!(cached.session.activity.values().sum::<i64>(), 330);
         cached.read(&path, false).unwrap();
         assert_eq!(cached.session.tokens.total(), 330);
         assert!(cached.session.models.contains("grok-4"));
+        let mut missing_time = event("three", 500, 100, 3000);
+        missing_time["params"]["update"]["usage"]["apiDurationMs"] = Value::Null;
+        append(&path, missing_time);
+        cached.read(&path, false).unwrap();
+        assert_eq!(cached.session.tokens.total(), 930);
+        assert_eq!(cached.session.api_output, 30);
+        assert_eq!(cached.session.api_ms, 4000);
+        assert_eq!(cached.session.api_samples, 2);
     }
 
     #[test]

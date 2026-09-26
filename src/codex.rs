@@ -85,6 +85,10 @@ pub enum AccountCommand {
     Use {
         id: String,
     },
+    /// Verify saved login online without changing the active account
+    Check {
+        id: String,
+    },
     Rename {
         id: String,
         name: String,
@@ -93,6 +97,10 @@ pub enum AccountCommand {
         id: String,
     },
     Refresh {
+        id: String,
+    },
+    /// Send one short prompt in an isolated temporary session, then refresh quota
+    Wake {
         id: String,
     },
 }
@@ -147,13 +155,18 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
                 accounts::import(paths, &name, file.as_deref())?
             ),
             AccountCommand::Use { id } => {
-                accounts::activate(paths, &id)?;
-                println!(
-                    "Account selected. Restart CLI / ChatGPT App, then check `ccsw codex status`."
-                );
+                println!("{}", accounts::activate_and_sync(paths, &id)?);
+            }
+            AccountCommand::Check { id } => {
+                accounts::verify_for_switch(paths, &id)?;
+                println!("Codex accepted the saved login for this account.");
             }
             AccountCommand::Rename { id, name } => accounts::rename(paths, &id, &name)?,
             AccountCommand::Remove { id } => accounts::remove(paths, &id)?,
+            AccountCommand::Wake { id } => {
+                accounts::wake(paths, &id)?;
+                println!("Wake request complete. {}", accounts::summary(paths, &id)?);
+            }
             AccountCommand::Refresh { id } => {
                 accounts::refresh(paths, &id)?;
                 println!("{}", accounts::summary(paths, &id)?);
@@ -718,6 +731,15 @@ pub fn status(paths: &AppPaths) -> Result<String> {
             .unwrap_or("Codex default")
     );
     message.push_str(&format!("\n{}", accounts::live_login()?.1));
+    if let Some(Selection::Account { id }) = &config.codex.active
+        && let Some(error) = config
+            .codex
+            .accounts
+            .get(id)
+            .and_then(|account| account.error.as_deref())
+    {
+        message.push_str(&format!("\nLast online account check failed: {error}"));
+    }
     for key in ["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_AUTH"] {
         if std::env::var_os(key).is_some_and(|v| !v.is_empty()) {
             message.push_str(&format!(
@@ -742,7 +764,7 @@ pub fn status(paths: &AppPaths) -> Result<String> {
         if matches!(config.codex.active, Some(Selection::Api { .. })) {
             message.push_str("\nOn-disk configuration only, not the running session model. Restart Codex CLI after syncing a changed catalog; use /model to switch loaded models without restarting. Project/launch overrides may take precedence.");
         } else {
-            message.push_str("\nOn-disk configuration only; restart CLI / ChatGPT App and verify a new chat. Project/launch overrides may take precedence.");
+            message.push_str("\nOn-disk configuration only. A running Codex background server may retain the previous login: use `codex --no-daemon` now, or restart the daemon after active tasks finish. Project/launch overrides may take precedence.");
         }
     }
     Ok(message)

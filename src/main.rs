@@ -33,7 +33,7 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 #[command(
     name = "ccsw",
     version,
-    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration; Grok CLI native configuration"
+    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration; Grok native configuration"
 )]
 struct Cli {
     #[command(subcommand)]

@@ -25,7 +25,7 @@ impl ClientTab {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Pi => "Pi",
-            Self::Grok => "Grok CLI",
+            Self::Grok => "Grok",
             Self::Usage => "Usage",
         }
     }
@@ -136,9 +136,7 @@ impl App {
             ClientTab::Claude => "Claude Code · p sync · F2 next tab",
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
-            ClientTab::Grok => {
-                "Grok CLI · o OAuth · i import · p connect · s status · D disconnect"
-            }
+            ClientTab::Grok => "Grok · o OAuth · i import · p connect · s status · D disconnect",
             ClientTab::Usage => unreachable!(),
         }
         .into();

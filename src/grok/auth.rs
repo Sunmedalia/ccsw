@@ -277,7 +277,7 @@ fn run_program(
         command.process_group(0);
     }
     let mut child = crate::managed_process::ManagedChild::spawn(&mut command)
-        .context("Cannot start Grok CLI; install it or set CCSW_GROK_BIN")?;
+        .context("Cannot start Grok; install it or set CCSW_GROK_BIN")?;
     let (sender, receiver) = mpsc::sync_channel(32);
     read_progress(
         child.stdout.take().context("Grok stdout unavailable")?,

@@ -1,4 +1,4 @@
-//! Read-only account summaries for the Pulse monitor. No credentials enter UI state.
+//! Account summaries and explicit refresh actions. No credentials enter UI state.
 use crate::{
     codex,
     config::{self, AppPaths},
@@ -16,6 +16,7 @@ pub(super) struct Info {
 }
 #[derive(Clone, Debug, Default)]
 pub(super) struct Card {
+    pub id: Option<String>,
     pub name: String,
     pub email: String,
     pub badge: String,
@@ -38,9 +39,11 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
     };
     let mut lines = vec![format!("Saved accounts: {}", config.codex.accounts.len())];
     lines.push(safe(local));
-    let chosen = active
-        .or(live)
-        .and_then(|id| config.codex.accounts.get(id).map(|account| (id, account)));
+    let chosen = live
+        .and_then(|id| config.codex.accounts.get(id).map(|account| (id, account)))
+        .or_else(|| {
+            active.and_then(|id| config.codex.accounts.get(id).map(|account| (id, account)))
+        });
     if let Some((id, account)) = chosen {
         lines.push(format!("Account: {}", safe(&account.name)));
         lines.push(format!("Email: {}", safe(&account.email)));
@@ -52,6 +55,8 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
             "State: {}{}",
             if active == Some(id) {
                 "Applied by CCSW"
+            } else if active.is_some() {
+                "Local login differs from CCSW selection"
             } else {
                 "Saved local login"
             },
@@ -69,6 +74,15 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
                 .skip(1)
                 .map(safe),
         );
+        if active.is_some() && active != live {
+            lines.push(format!(
+                "Configured: {} · local login differs · reopen Accounts and apply it",
+                active
+                    .and_then(|id| config.codex.accounts.get(id))
+                    .map(|account| safe(&account.name))
+                    .unwrap_or("unknown".into())
+            ));
+        }
         if account.error.is_some() {
             lines.push("Last quota refresh failed · cached data".into());
         }
@@ -85,6 +99,8 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
             safe(&account.email),
             if live == Some(id.as_str()) {
                 " · Local login"
+            } else if active == Some(id.as_str()) {
+                " · Configured"
             } else {
                 ""
             }
@@ -97,6 +113,7 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
         ..Default::default()
     };
     if let Some((id, account)) = chosen {
+        card.id = Some(id.into());
         card.name = safe(&account.name);
         card.email = safe(&account.email);
         card.badge = safe(account.plan.as_deref().unwrap_or("Account"));
@@ -109,6 +126,21 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
             }
             .into(),
         ));
+        if active.is_some() && active != live {
+            card.rows
+                .push(("Switch".into(), "! Login differs · apply again".into()));
+        }
+        if let Some(error) = &account.error {
+            card.rows.push((
+                "Quota".into(),
+                if error.contains("expired or rejected") {
+                    "! Login expired · re-import"
+                } else {
+                    "! Cached"
+                }
+                .into(),
+            ));
+        }
         card.rows
             .push(("Accounts".into(), config.codex.accounts.len().to_string()));
         card.rows.push((
@@ -198,7 +230,8 @@ fn grok_info(
     lines.push("Direct API traffic is not in the gateway ledger".into());
     let status = grok::auth::status(home).unwrap_or_default();
     let mut card = Card {
-        name: "Grok CLI".into(),
+        id: grok::usage::account(home).ok().flatten(),
+        name: "Grok".into(),
         email: status.email.unwrap_or_default(),
         badge: if status.expired {
             "Expired"
@@ -300,9 +333,21 @@ pub(super) fn spawn(
         loop {
             let config = config::load(&paths.config);
             let info = match config {
-                Ok(config) => {
+                Ok(mut config) => {
                     let (live, local) = codex::accounts::live_login()
                         .unwrap_or_else(|_| (None, "Local Codex login unavailable".into()));
+                    if force && client == 1 {
+                        let id = match &config.codex.active {
+                            Some(codex::Selection::Account { id }) => Some(id.clone()),
+                            _ => live.clone(),
+                        };
+                        if let Some(id) = id.filter(|id| config.codex.accounts.contains_key(id)) {
+                            let _ = codex::accounts::refresh(&paths, &id);
+                            if let Ok(updated) = config::load(&paths.config) {
+                                config = updated;
+                            }
+                        }
+                    }
                     let codex = codex_info(&config, live.as_deref(), &local);
                     let grok = match grok::home() {
                         Ok(home) => {
@@ -408,15 +453,22 @@ mod tests {
         for text in [
             "Personal",
             "one@example.com",
-            "plus",
-            "Applied by CCSW",
+            "Local login differs from CCSW selection",
+            "Configured: Personal",
             "two@example.com",
             "Local login",
             "cached",
         ] {
-            assert!(summary.contains(text));
+            assert!(summary.contains(text), "missing {text}: {summary}");
         }
         assert!(!summary.contains("SECRET-TOKEN"));
+        assert_eq!(
+            codex_info(&config, Some("two"), "Local login: two@example.com")
+                .card
+                .unwrap()
+                .name,
+            "Work"
+        );
     }
     #[test]
     fn grok_summary_shows_login_usage_and_models_without_credentials() {

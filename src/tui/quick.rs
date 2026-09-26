@@ -19,7 +19,7 @@ pub(super) const GREEN: Color = Color::Rgb(147, 204, 178);
 pub(super) const RAIL: Color = Color::Rgb(48, 67, 84);
 const LABEL: &str = "CCSW Pulse";
 mod accounts;
-const CLIENTS: [&str; 4] = ["Claude", "Codex", "Grok CLI", "All"];
+const CLIENTS: [&str; 4] = ["Claude", "Codex", "Grok", "All"];
 
 fn initial_client(agent: Option<&str>) -> usize {
     match agent.unwrap_or("").to_ascii_lowercase().as_str() {
@@ -377,6 +377,9 @@ fn line(text: impl Into<String>, color: Color) -> Line<'static> {
     Line::from(Span::styled(text.into(), Style::default().fg(color)))
 }
 fn clipped(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
     if text.width() <= width {
         return text.into();
     }
@@ -532,20 +535,109 @@ fn section_action(title: &str, action: &str, width: u16) -> Line<'static> {
         ),
     ])
 }
+fn compact_reset(reset: &str) -> String {
+    let time = chrono::DateTime::parse_from_rfc3339(reset)
+        .or_else(|_| chrono::DateTime::parse_from_str(reset, "%Y-%m-%d %H:%M %:z"));
+    if let Ok(time) = time {
+        let seconds = time.timestamp() - chrono::Utc::now().timestamp();
+        if seconds <= 0 {
+            return "Due · r refresh".into();
+        }
+        let minutes = (seconds + 59) / 60;
+        if minutes >= 1440 {
+            format!("{}d {}h", minutes / 1440, minutes % 1440 / 60)
+        } else if minutes >= 60 {
+            format!("{}h {}m", minutes / 60, minutes % 60)
+        } else {
+            format!("{minutes}m")
+        }
+    } else {
+        reset.into()
+    }
+}
+fn compact_age(age: &str) -> String {
+    let Some(minutes) = age
+        .strip_suffix("m ago")
+        .and_then(|m| m.parse::<u64>().ok())
+    else {
+        return age.into();
+    };
+    if minutes >= 1440 {
+        format!("{}d ago", minutes / 1440)
+    } else if minutes >= 60 {
+        format!("{}h ago", minutes / 60)
+    } else {
+        age.into()
+    }
+}
+// Eighth-cell precision keeps small values visible without making 99% look full.
+fn progress_spans(fraction: Option<f64>, cells: usize, color: Color) -> Vec<Span<'static>> {
+    let fraction = fraction
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let units = (fraction * cells as f64 * 8.0).floor() as usize;
+    let full = units / 8;
+    let partial = units % 8;
+    let mut fill = "█".repeat(full);
+    if partial > 0 {
+        fill.push([' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'][partial]);
+    }
+    vec![
+        Span::styled(fill, Style::default().fg(color)),
+        Span::styled(
+            "░".repeat(cells.saturating_sub(full + usize::from(partial > 0))),
+            Style::default().fg(RAIL),
+        ),
+    ]
+}
+fn quota_color(percent: f64) -> Color {
+    if percent >= 90.0 {
+        RED
+    } else if percent >= 75.0 {
+        GOLD
+    } else {
+        BLUE
+    }
+}
+fn compact_account_quota(label: &str, percent: f64, width: u16) -> Line<'static> {
+    let percent = percent.clamp(0.0, 100.0);
+    let value = if percent.is_finite() {
+        format!("{percent:.0}%")
+    } else {
+        "—".into()
+    };
+    if usize::from(width) <= value.width() + 2 {
+        return line(clipped(&value, width.into()), quota_color(percent));
+    }
+    let label = label.strip_prefix("codex ").unwrap_or(label);
+    let label = clipped(
+        label,
+        usize::from(width).saturating_sub(value.width() + 2).min(12),
+    );
+    let cells = usize::from(width).saturating_sub(label.width() + value.width() + 2);
+    let color = quota_color(percent);
+    let mut spans = vec![
+        Span::styled(label, Style::default().fg(INK)),
+        Span::raw(" "),
+    ];
+    spans.extend(progress_spans(Some(percent / 100.0), cells, color));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        value,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
+    Line::from(spans)
+}
 fn meter(label: &str, fraction: Option<f64>, width: u16, color: Color) -> Line<'static> {
     let prefix = format!("{label} ");
     let cells = usize::from(width).saturating_sub(prefix.width());
-    let filled = fraction
-        .map(|n| (n.clamp(0.0, 1.0) * cells as f64).round() as usize)
-        .unwrap_or(0);
-    Line::from(vec![
-        Span::styled(prefix, Style::default().fg(SOFT)),
-        Span::styled("█".repeat(filled), Style::default().fg(color)),
-        Span::styled(
-            "░".repeat(cells.saturating_sub(filled)),
-            Style::default().fg(RAIL),
-        ),
-    ])
+    let mut spans = vec![Span::styled(
+        clipped(&prefix, width.into()),
+        Style::default().fg(SOFT),
+    )];
+    spans.extend(progress_spans(fraction, cells, color));
+    Line::from(spans)
 }
 fn health_meter(t: &Totals, width: u16) -> Line<'static> {
     let cells = usize::from(width.saturating_sub(4));
@@ -558,14 +650,8 @@ fn health_meter(t: &Totals, width: u16) -> Line<'static> {
     if total == 0 || cells == 0 {
         return meter("OK ", None, width, GREEN);
     }
-    let active = counts.iter().filter(|&&count| count > 0).count();
     let mut lengths = [0usize; 3];
-    if cells >= active {
-        for (length, count) in lengths.iter_mut().zip(counts) {
-            *length = usize::from(count > 0);
-        }
-    }
-    let remaining = cells.saturating_sub(lengths.iter().sum::<usize>());
+    let remaining = cells;
     let mut remainders = [0u64; 3];
     for i in 0..3 {
         let weighted = (remaining as u128) * u128::from(counts[i]);
@@ -590,14 +676,11 @@ fn compact_token_meter(input: i64, output: i64, width: u16) -> Line<'static> {
     let info = format!("I {}  O {}", short(input), short(output));
     let cells = usize::from(width).saturating_sub(info.width() + 5).min(10);
     let total = input.saturating_add(output);
-    let mut input_cells = if total > 0 {
+    let input_cells = if total > 0 {
         ((input as f64 / total as f64) * cells as f64).round() as usize
     } else {
         0
     };
-    if input > 0 && output > 0 && cells >= 2 {
-        input_cells = input_cells.clamp(1, cells - 1);
-    }
     let output_cells = if total > 0 {
         cells.saturating_sub(input_cells)
     } else {
@@ -629,19 +712,11 @@ fn compact_cache_meter(
         if known { short(write) } else { "—".into() }
     );
     let cells = usize::from(width).saturating_sub(info.width() + 3).min(10);
-    let filled = reuse
-        .map(|n| (n.clamp(0.0, 100.0) / 100.0 * cells as f64).round() as usize)
-        .unwrap_or(0);
-    Line::from(vec![
-        Span::styled("↺ ", Style::default().fg(SOFT)),
-        Span::styled("█".repeat(filled), Style::default().fg(GREEN)),
-        Span::styled(
-            "░".repeat(cells.saturating_sub(filled)),
-            Style::default().fg(RAIL),
-        ),
-        Span::raw(" "),
-        Span::styled(info, Style::default().fg(INK)),
-    ])
+    let mut spans = vec![Span::styled("↺ ", Style::default().fg(SOFT))];
+    spans.extend(progress_spans(reuse.map(|n| n / 100.0), cells, GREEN));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(info, Style::default().fg(INK)));
+    Line::from(spans)
 }
 fn gateway_cache_meter(t: &Totals, unknown: bool, width: u16) -> Vec<Line<'static>> {
     let hit = (t.cache_input > 0).then(|| 100.0 * t.cache_hits as f64 / t.cache_input as f64);
@@ -670,19 +745,11 @@ fn gateway_cache_meter(t: &Totals, unknown: bool, width: u16) -> Vec<Line<'stati
         ];
     }
     let cells = available.min(10);
-    let filled = hit
-        .map(|n| (n.clamp(0.0, 100.0) / 100.0 * cells as f64).round() as usize)
-        .unwrap_or(0);
-    vec![Line::from(vec![
-        Span::styled("HIT ", Style::default().fg(SOFT)),
-        Span::styled("█".repeat(filled), Style::default().fg(GREEN)),
-        Span::styled(
-            "░".repeat(cells.saturating_sub(filled)),
-            Style::default().fg(RAIL),
-        ),
-        Span::raw(" "),
-        Span::styled(info, Style::default().fg(INK)),
-    ])]
+    let mut spans = vec![Span::styled("HIT ", Style::default().fg(SOFT))];
+    spans.extend(progress_spans(hit.map(|n| n / 100.0), cells, GREEN));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(info, Style::default().fg(INK)));
+    vec![Line::from(spans)]
 }
 fn buttons(area: Rect) -> Vec<Rect> {
     let constraints = if area.width >= 44 {
@@ -846,7 +913,7 @@ impl Monitor {
     fn account_content(&self, width: u16) -> Vec<Line<'static>> {
         let (title, info) = match self.client {
             1 => ("CODEX ACCOUNT", &self.accounts.codex),
-            2 => ("GROK CLI ACCOUNT", &self.accounts.grok),
+            2 => ("GROK ACCOUNT", &self.accounts.grok),
             _ => return vec![],
         };
         let mut out = vec![section(title, width)];
@@ -862,24 +929,123 @@ impl Monitor {
             out.push(Line::default());
             return out;
         };
-        out.push(pair(&card.name, &card.badge, width, GREEN));
+        if self.visual_mode {
+            let local = card
+                .rows
+                .iter()
+                .any(|(label, value)| label == "Login" && value.contains("Local"));
+            let mut identity = pair(
+                &format!(
+                    "{} {}",
+                    if local || (self.client == 2 && card.id.is_some()) {
+                        "●"
+                    } else {
+                        "○"
+                    },
+                    card.name
+                ),
+                card.badge.to_uppercase(),
+                width,
+                GREEN,
+            );
+            identity.spans[0].style = Style::default().fg(INK).add_modifier(Modifier::BOLD);
+            out.push(identity);
+        } else {
+            out.push(pair(&card.name, &card.badge, width, GREEN));
+        }
         if !card.email.is_empty() {
             out.push(line(clipped(&card.email, width.into()), INK));
+        }
+        if self.visual_mode {
+            if !card.gauges.is_empty() {
+                out.push(line(
+                    if self.client == 2 {
+                        "CREDITS · USED"
+                    } else {
+                        "LIMITS · USED"
+                    },
+                    SOFT,
+                ));
+            }
+            for (label, percent, reset) in &card.gauges {
+                out.push(compact_account_quota(label, *percent, width));
+                if !reset.is_empty() {
+                    out.push(pair(
+                        "↻",
+                        clipped(&compact_reset(reset), width.saturating_sub(2).into()),
+                        width,
+                        SOFT,
+                    ));
+                }
+            }
+            let row = |name| {
+                card.rows
+                    .iter()
+                    .find(|(label, _)| label == name)
+                    .map(|(_, value)| value.as_str())
+            };
+            if self.client == 1 {
+                if let Some(quota) = row("Quota") {
+                    out.push(line(quota, GOLD));
+                }
+                if let Some(switch) = row("Switch") {
+                    out.push(line(clipped(switch, width.into()), GOLD));
+                }
+                let login = row("Login")
+                    .map(|value| {
+                        if value.contains("Local") {
+                            "Local"
+                        } else {
+                            "Saved"
+                        }
+                    })
+                    .unwrap_or("API");
+                let state = row("Accounts")
+                    .map(|count| format!("{login} · {count} accounts"))
+                    .unwrap_or(login.into());
+                let age = compact_age(row("Updated").unwrap_or("—"));
+                out.push(pair(&state, age, width, SOFT));
+                if card.id.is_some() && card.gauges.is_empty() {
+                    out.push(line("○ Limits unavailable · r refresh", SOFT));
+                }
+            } else {
+                if card.gauges.is_empty() {
+                    out.push(line(
+                        clipped(
+                            row("Credits").unwrap_or("○ Credits unavailable · r refresh"),
+                            width.into(),
+                        ),
+                        SOFT,
+                    ));
+                }
+                if let Some(balance) = row("Balance") {
+                    out.push(pair("Balance", balance, width, GREEN));
+                }
+                if let Some(spend) = row("On demand") {
+                    out.push(pair("On demand", spend, width, SOFT));
+                }
+                if let Some(state) = row("Refresh") {
+                    out.push(pair("Usage", state, width, GOLD));
+                }
+                let models = row("Models").unwrap_or("0");
+                out.push(pair(
+                    &format!("◈ {models} models"),
+                    row("Default").unwrap_or("Native"),
+                    width,
+                    BLUE,
+                ));
+            }
+            out.push(Line::default());
+            return out;
         }
         for (label, percent, reset) in &card.gauges {
             out.push(Line::default());
             out.push(pair(label, format!("{percent:.0}% used"), width, GOLD));
-            let filled = (percent.clamp(0.0, 100.0) / 100.0 * f64::from(width)).round() as usize;
-            out.push(Line::from(vec![
-                Span::styled(
-                    "━".repeat(filled),
-                    Style::default().fg(if *percent >= 90.0 { RED } else { GOLD }),
-                ),
-                Span::styled(
-                    "━".repeat(usize::from(width).saturating_sub(filled)),
-                    Style::default().fg(RAIL),
-                ),
-            ]));
+            out.push(Line::from(progress_spans(
+                Some(percent / 100.0),
+                width.into(),
+                quota_color(*percent),
+            )));
             if !reset.is_empty() {
                 out.push(pair(
                     "Reset",
@@ -908,6 +1074,14 @@ impl Monitor {
         out
     }
     fn grok_gateway_tokens(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.visual_mode {
+            let mut out = self.stats_content(width);
+            if let Some(title) = out.first_mut() {
+                *title = pair("GATEWAY TOKENS", self.snapshot.today(), width, BLUE);
+            }
+            out.push(Line::default());
+            return out;
+        }
         let totals = metrics(&self.snapshot, Some("Grok")).total;
         let ready = self.refreshed.is_some();
         let unknown = !ready || (totals.calls > 0 && totals.unknown == totals.calls);
@@ -943,6 +1117,11 @@ impl Monitor {
         if ready {
             out.extend(gateway_cache_meter(&totals, unknown, width));
             out.push(pair("Requests", totals.calls.to_string(), width, INK));
+            out.push(speed_pair("↗ Rate", &totals, width));
+            out.push(line(
+                format!("{} measured streams", totals.speed_samples),
+                SOFT,
+            ));
             if totals.unknown > 0 {
                 out.push(pair(
                     "Unknown tokens",
@@ -1000,31 +1179,40 @@ impl Monitor {
                 ("↑ Input", "↑", &short(t.input), BLUE),
                 ("↓ Output", "↓", &short(t.output), GOLD),
             ));
-            let total = t.total().max(1);
-            let split = (t.input as f64 / total as f64 * f64::from(width)).round() as usize;
-            out.push(Line::from(vec![
-                Span::styled(
-                    "━".repeat(split.min(width.into())),
-                    Style::default().fg(BLUE),
-                ),
-                Span::styled(
-                    "━".repeat(usize::from(width).saturating_sub(split)),
-                    Style::default().fg(GOLD),
-                ),
-            ]));
-            out.push(duo_line(
+            if self.visual_mode {
+                out.push(compact_token_meter(t.input, t.output, width));
+                out.push(compact_cache_meter(
+                    t.read,
+                    t.write,
+                    t.cache_reuse_percent(),
+                    t.cache_known,
+                    width,
+                ));
+            } else {
+                out.push(duo_line(
+                    width,
+                    ("↺ Read", "R", &short(t.read), GREEN),
+                    ("Write", "W", &short(t.write), SOFT),
+                ));
+                out.push(pair(
+                    "Cache hit",
+                    t.cache_reuse_percent()
+                        .map(|p| format!("{p:.0}%"))
+                        .unwrap_or("—".into()),
+                    width,
+                    GREEN,
+                ));
+            }
+            out.push(speed_pair(
+                "API rate",
+                &Totals {
+                    speed_output: row.api_output,
+                    speed_ms: row.api_ms,
+                    ..Default::default()
+                },
                 width,
-                ("↺ Read", "R", &short(t.read), GREEN),
-                ("Write", "W", &short(t.write), SOFT),
             ));
-            out.push(pair(
-                "Cache hit",
-                t.cache_reuse_percent()
-                    .map(|p| format!("{p:.0}%"))
-                    .unwrap_or("—".into()),
-                width,
-                GREEN,
-            ));
+            out.push(line(format!("{} timed prompts", row.api_samples), SOFT));
             out.push(line(
                 clipped(&row.id.chars().take(12).collect::<String>(), width.into()),
                 SOFT,
@@ -1053,9 +1241,9 @@ impl Monitor {
             if self.chart_mode {
                 return self.chart_content(width);
             }
-            let mut out = self.grok_gateway_tokens(width);
+            let mut out = self.account_content(width);
+            out.extend(self.grok_gateway_tokens(width));
             out.extend(self.grok_tokens(width));
-            out.extend(self.account_content(width));
             return out;
         }
         let mut out = if !self.sessions_mode && !self.chart_mode {
@@ -1911,7 +2099,11 @@ impl Monitor {
         if !ready {
             out.push(pair("TOKENS", self.snapshot.today(), width, SOFT));
             out.push(line("◌ Reading gateway usage…", SOFT));
-            let active = self.active_content(width);
+            let active = if self.client == 2 {
+                vec![]
+            } else {
+                self.active_content(width)
+            };
             if !active.is_empty() {
                 out.push(Line::default());
                 out.extend(active);
@@ -2009,20 +2201,11 @@ impl Monitor {
             width,
             if health.is_some() { color } else { SOFT },
         ));
-        let filled = health.map_or(0, |r| (r / 100.0 * f64::from(width)).round() as usize);
-        out.push(Line::from(vec![
-            Span::styled("━".repeat(filled), Style::default().fg(GREEN)),
-            Span::styled(
-                "━".repeat(usize::from(width).saturating_sub(filled)),
-                Style::default().fg(if t.failed > 0 {
-                    RED
-                } else if t.interrupted > 0 {
-                    GOLD
-                } else {
-                    RAIL
-                }),
-            ),
-        ]));
+        out.push(Line::from(progress_spans(
+            health.map(|r| r / 100.0),
+            width.into(),
+            color,
+        )));
         out.push(pair("✓ Success", t.success.to_string(), width, GREEN));
         out.push(pair(
             "× Failed",
@@ -2042,7 +2225,11 @@ impl Monitor {
         ));
         out.push(pair("◌ Pending", t.pending.to_string(), width, GOLD));
         out.push(pair("↘ Compaction", m.compact.to_string(), width, SOFT));
-        let active = self.active_content(width);
+        let active = if self.client == 2 {
+            vec![]
+        } else {
+            self.active_content(width)
+        };
         if !active.is_empty() {
             out.push(Line::default());
             out.extend(active);
@@ -3209,6 +3396,48 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn progress_bars_preserve_proportions_endpoints_and_narrow_widths() {
+        for width in [1, 4, 10, 48] {
+            for fraction in [0.0, 0.01, 0.25, 0.46, 0.998, 1.0] {
+                let bar = Line::from(progress_spans(Some(fraction), width, BLUE));
+                assert_eq!(bar.width(), width);
+                let fill = &bar.spans[0].content;
+                if fraction == 0.0 {
+                    assert!(fill.is_empty());
+                }
+                if fraction == 1.0 {
+                    assert_eq!(fill.as_ref(), "█".repeat(width));
+                }
+                if fraction < 1.0 {
+                    assert!(fill.chars().filter(|&c| c == '█').count() < width);
+                }
+            }
+        }
+        assert_eq!(
+            Line::from(progress_spans(Some(0.25), 20, BLUE)).to_string(),
+            format!("{}{}", "█".repeat(5), "░".repeat(15))
+        );
+        assert!(
+            Line::from(progress_spans(Some(f64::NAN), 10, BLUE)).spans[0]
+                .content
+                .is_empty()
+        );
+        for width in 0..=48 {
+            assert!(compact_account_quota("codex 5h", 46.0, width).width() <= width.into());
+        }
+        let rare_failure = health_meter(
+            &Totals {
+                success: 999,
+                failed: 1,
+                ..Default::default()
+            },
+            24,
+        );
+        assert_eq!(rare_failure.spans[1].content.chars().count(), 20);
+        assert!(rare_failure.spans[2].content.is_empty());
+    }
+
+    #[test]
     fn reads_only_identified_agent_session() {
         let pane = json!({"result":{"pane":{"agent":"codex","agent_session":{
             "agent":"codex","kind":"id","value":"session-123"
@@ -4111,7 +4340,7 @@ mod account_page_tests {
     use ratatui::{Terminal, backend::TestBackend};
     #[test]
     fn grok_pane_detection_selects_its_page_and_keeps_all_separate() {
-        for name in ["grok", "grokcli", "grok-cli", "Grok CLI"] {
+        for name in ["grok", "grokcli", "grok-cli", "Grok"] {
             assert_eq!(initial_client(Some(name)), 2);
         }
         assert_eq!(initial_client(Some("all")), 3);
@@ -4121,9 +4350,111 @@ mod account_page_tests {
         assert_eq!(focus.session.unwrap().client, "Grok");
     }
     #[test]
+    fn grok_account_is_first_without_wake_controls() {
+        let mut monitor = Monitor {
+            client: 2,
+            ..Default::default()
+        };
+        monitor.accounts.grok.card = Some(accounts::Card {
+            id: Some("grok-id".into()),
+            name: "Grok".into(),
+            ..Default::default()
+        });
+        for visual in [true, false] {
+            monitor.visual_mode = visual;
+            let lines = monitor.content(48);
+            assert!(lines[0].to_string().starts_with("GROK ACCOUNT"));
+            assert!(!lines.iter().any(|line| line.to_string().contains("Wake")));
+        }
+    }
+
+    #[test]
+    fn grok_text_and_compact_views_show_measured_gateway_and_session_rates() {
+        let mut monitor = Monitor {
+            client: 2,
+            refreshed: Some(Instant::now()),
+            ..Default::default()
+        };
+        monitor.snapshot.rows.push(crate::usage::Row {
+            hour: 9,
+            model: "grok".into(),
+            day: monitor.snapshot.today(),
+            client: "Grok".into(),
+            provider: "p".into(),
+            name: "Provider".into(),
+            kind: "generation".into(),
+            totals: Totals {
+                calls: 2,
+                success: 2,
+                input: 1200,
+                output: 100,
+                speed_output: 100,
+                speed_ms: 2000,
+                speed_samples: 2,
+                ..Default::default()
+            },
+        });
+        monitor.sessions.rows.push(crate::sessions::Session {
+            client: "Grok",
+            id: "session".into(),
+            api_output: 200,
+            api_ms: 1000,
+            api_samples: 1,
+            tokens: crate::sessions::Tokens {
+                input: 1000,
+                output: 200,
+                known: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        for visual in [false, true] {
+            monitor.visual_mode = visual;
+            let text = monitor
+                .content(48)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains("50.0 tok/s")
+                    && text.contains("200.0 tok/s")
+                    && text.contains("API rate")
+            );
+            assert_eq!(text.contains("CALL HEALTH"), !visual);
+            assert_eq!(text.contains("Output rate (E2E)"), !visual);
+            assert_eq!(text.contains("↗ Rate"), visual);
+            assert_eq!(text.matches("SESSION TOKENS").count(), 1);
+            for (width, height) in [(48, 40), (28, 32), (32, 24)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| monitor.draw(frame)).unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("50.0 tok/s"));
+            }
+        }
+        monitor.snapshot.rows[0].totals.speed_ms = 0;
+        monitor.sessions.rows[0].api_ms = 0;
+        let text = monitor
+            .content(48)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("50.0 tok/s") && !text.contains("200.0 tok/s"));
+        assert_eq!(monitor.client, 2);
+    }
+
+    #[test]
     fn grok_gateway_tokens_are_today_only_and_independent_of_sessions() {
         let mut monitor = Monitor {
             client: 2,
+            visual_mode: true,
             refreshed: Some(Instant::now()),
             ..Default::default()
         };
@@ -4197,6 +4528,7 @@ mod account_page_tests {
     fn grok_dashboard_shows_real_session_tokens_and_separates_recent_from_active() {
         let mut monitor = Monitor {
             client: 2,
+            visual_mode: true,
             sessions_refreshed: Some(Instant::now()),
             ..Default::default()
         };
@@ -4224,7 +4556,7 @@ mod account_page_tests {
             recent.contains("Recent")
                 && recent.contains("1200")
                 && recent.contains("300")
-                && recent.contains("50%")
+                && recent.contains("50.0%")
         );
         monitor.active_session = Some(AgentSession {
             client: "Grok",
@@ -4251,6 +4583,7 @@ mod account_page_tests {
     fn account_pages_render_in_normal_and_mini_panes() {
         let mut monitor = Monitor {
             client: 1,
+            visual_mode: true,
             accounts: accounts::Accounts {
                 codex: accounts::Info {
                     lines: vec![
@@ -4274,7 +4607,7 @@ mod account_page_tests {
                         "API providers: 2 · 6 enabled models".into(),
                     ],
                     card: Some(accounts::Card {
-                        name: "Grok CLI".into(),
+                        name: "Grok".into(),
                         email: "grok@example.com".into(),
                         gauges: vec![("Weekly".into(), 25.0, "tomorrow".into())],
                         ..Default::default()
@@ -4296,12 +4629,10 @@ mod account_page_tests {
             assert!(
                 text.contains("CODEX ACCOUNT")
                     && text.contains("Personal")
-                    && text.contains("plus")
+                    && (text.contains("PLUS") || text.contains("plus"))
             );
             monitor.client = 2;
-            monitor.scroll = (monitor.grok_gateway_tokens(width.saturating_sub(8)).len()
-                + monitor.grok_tokens(width.saturating_sub(8)).len())
-                as u16;
+            monitor.scroll = 0;
             terminal.draw(|frame| monitor.draw(frame)).unwrap();
             let text: String = terminal
                 .backend()
@@ -4310,8 +4641,8 @@ mod account_page_tests {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect();
-            assert!(text.contains("GROK CLI ACCOUNT"));
-            assert!(text.contains("grok@example.com") && text.contains("25% used"));
+            assert!(text.contains("GROK ACCOUNT"));
+            assert!(text.contains("grok@example.com") && text.contains("25%"));
 
             monitor.client = 1;
             monitor.scroll = 0;

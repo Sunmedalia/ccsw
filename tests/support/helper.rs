@@ -64,11 +64,36 @@ fn main() {
                 result = json!({"type":"chatgptDeviceCode","loginId":"test-login","verificationUrl":"https://auth.openai.com/codex/device","userCode":"TEST-CODE"});
             }
             "account/read" => {
+                if fixture.with_extension("unauthorized").exists() {
+                    emit(
+                        json!({"id":id,"error":{"code":-32000,"message":"workspace routing discovery unauthorized (401) SECRET_SHOULD_NEVER_BE_LOGGED"}}),
+                    );
+                    continue;
+                }
                 let mut auth: Value =
                     serde_json::from_slice(&fs::read(home.join("auth.json")).unwrap()).unwrap();
                 auth["tokens"]["refresh_token"] = "refreshed-in-fixture".into();
                 fs::write(home.join("auth.json"), serde_json::to_vec(&auth).unwrap()).unwrap();
                 result = json!({"account":{"type":"chatgpt","email":"a@example.test","planType":"plus"}});
+            }
+            "thread/start" => {
+                assert_eq!(request["params"]["ephemeral"], true);
+                assert_eq!(request["params"]["modelProvider"], "openai");
+                assert_eq!(request["params"]["sandbox"], "read-only");
+                assert_eq!(request["params"]["approvalPolicy"], "never");
+                assert_eq!(request["params"]["config"]["features.shell_tool"], false);
+                result = json!({"thread":{"id":"wake-thread"}});
+            }
+            "turn/start" => {
+                assert_eq!(request["params"]["threadId"], "wake-thread");
+                assert_eq!(request["params"]["input"][0]["text"], "Reply OK.");
+                assert_eq!(request["params"]["sandboxPolicy"]["type"], "readOnly");
+                assert_eq!(request["params"]["sandboxPolicy"]["networkAccess"], false);
+                fs::write(fixture.with_extension("wake"), "one minimal turn").unwrap();
+                result = json!({"turn":{"id":"wake-turn","status":"inProgress"}});
+                emit(
+                    json!({"method":"turn/completed","params":{"threadId":"wake-thread","turn":{"id":"wake-turn","status":if fixture.with_extension("wake-fail").exists() {"failed"} else {"completed"}}}}),
+                );
             }
             "account/rateLimits/read" => {
                 if fixture.with_extension("fail").exists() {

@@ -72,6 +72,38 @@ fn auth(subject: &str, workspace: &str, refresh: &str) -> Value {
     json!({"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":format!("e30.{payload}.sig"),"access_token":"test-access-secret","refresh_token":refresh,"account_id":workspace},"last_refresh":"2026-01-01T00:00:00Z"})
 }
 
+#[cfg(unix)]
+#[test]
+fn account_switch_restarts_running_codex_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Sandbox::new();
+    let id = s.add("Black", &auth("black", "workspace", "refresh-black"));
+    let fake = s.root.path().join("codex-daemon-fixture");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$3\" in\n  version) printf '{\"status\":\"running\"}\\n' ;;\n  restart) touch \"$CODEX_HOME/restarted\" ;;\n  *) exit 1 ;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = support::command(s.root.path())
+        .args(["codex", "accounts", "use", &id])
+        .env("HOME", s.root.path())
+        .env("CODEX_HOME", s.home())
+        .env("CCSW_CONFIG", s.root.path().join("config.toml"))
+        .env("XDG_STATE_HOME", s.root.path().join("state"))
+        .env("CCSW_CODEX_BIN", &fake)
+        .env_remove("CODEX_THREAD_ID")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(s.home().join("restarted").exists());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("background service restarted"));
+}
+
 #[test]
 fn subscription_pauses_and_restores_only_previously_enabled_providers() {
     let s = Sandbox::new();
@@ -389,6 +421,13 @@ fn rpc_scenario(batch: bool) {
     let list = s.ok(&["codex", "accounts", "list"]);
     let id = list.split('\t').next().unwrap();
     s.ok(&["codex", "accounts", "use", id]);
+    let check = run(&["codex", "accounts", "check", id]);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check.stdout).contains("accepted the saved login"));
     let refresh = run(&["codex", "accounts", "refresh", id]);
     assert!(
         refresh.status.success(),
@@ -397,6 +436,31 @@ fn rpc_scenario(batch: bool) {
     );
     assert!(String::from_utf8_lossy(&refresh.stdout).contains("25% used"));
     assert_eq!(s.auth()["tokens"]["refresh_token"], "refreshed-in-fixture");
+    let before_auth = s.auth();
+    fs::write(fixture.with_extension("unauthorized"), "").unwrap();
+    let rejected = run(&["codex", "accounts", "check", id]);
+    assert!(!rejected.status.success());
+    let error = String::from_utf8_lossy(&rejected.stderr);
+    assert!(error.contains("(401)") && !error.contains("SECRET_SHOULD_NEVER_BE_LOGGED"));
+    assert_eq!(s.auth(), before_auth);
+    let settings = fs::read_to_string(s.root.path().join("config.toml")).unwrap();
+    assert!(settings.contains("Saved login expired or rejected"));
+    assert!(!settings.contains("SECRET_SHOULD_NEVER_BE_LOGGED"));
+    fs::remove_file(fixture.with_extension("unauthorized")).unwrap();
+    let wake = run(&["codex", "accounts", "wake", id]);
+    assert!(
+        wake.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wake.stderr)
+    );
+    assert!(fixture.with_extension("wake").exists());
+    assert_eq!(s.auth(), before_auth);
+    assert!(!s.home().join("sessions").exists());
+    fs::write(fixture.with_extension("wake-fail"), "").unwrap();
+    let wake_failure = run(&["codex", "accounts", "wake", id]);
+    assert!(!wake_failure.status.success());
+    assert_eq!(s.auth(), before_auth);
+    fs::remove_file(fixture.with_extension("wake-fail")).unwrap();
     fs::write(fixture.with_extension("fail"), "").unwrap();
     let failure = run(&["codex", "accounts", "refresh", id]);
     assert!(!failure.status.success());

@@ -1,4 +1,4 @@
-//! Read-only Grok account credits, following the official CLI billing contract:
+//! Grok account credits and explicit minimal wake requests, following official CLI contracts:
 //! https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/extensions/billing.rs
 use super::auth;
 use anyhow::{Context, Result, bail};
@@ -148,7 +148,7 @@ fn fetch_at(endpoint: &str, entry: &Value) -> Result<Credits> {
         .map_err(|_| anyhow::anyhow!("Cannot reach Grok usage service; retry refresh"))?;
     let code = response.status();
     if matches!(code.as_u16(), 401 | 403) {
-        bail!("Grok usage authorization rejected; refresh your login in Grok CLI or sign in again");
+        bail!("Grok usage authorization rejected; refresh your login in Grok or sign in again");
     }
     if !code.is_success() {
         bail!("Grok usage service returned HTTP {}", code.as_u16());
@@ -165,14 +165,14 @@ fn fetch_at(endpoint: &str, entry: &Value) -> Result<Credits> {
         .map_err(|_| anyhow::anyhow!("Invalid Grok usage response"))?;
     parse(&value)
 }
-pub fn fetch(home: &Path) -> Result<Snapshot> {
+fn validated_entry(home: &Path) -> Result<Value> {
     let entry = auth::saved_entry(home)?.context("Sign in to Grok OAuth to view account usage")?;
     if entry["expires_at"]
         .as_str()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .is_some_and(|time| time < chrono::Utc::now())
     {
-        bail!("Grok OAuth access token expired; refresh your login in Grok CLI or sign in again");
+        bail!("Grok OAuth access token expired; refresh your login in Grok or sign in again");
     }
     if let Some(issuer) = entry["oidc_issuer"].as_str().filter(|s| !s.is_empty()) {
         let trusted = url::Url::parse(issuer).ok().is_some_and(|url| {
@@ -185,6 +185,10 @@ pub fn fetch(home: &Path) -> Result<Snapshot> {
             bail!("Grok cloud usage is unavailable for this custom OAuth issuer");
         }
     }
+    Ok(entry)
+}
+pub fn fetch(home: &Path) -> Result<Snapshot> {
+    let entry = validated_entry(home)?;
     let account = account_id(&entry);
     let credits = fetch_at(ENDPOINT, &entry)?;
     Ok(Snapshot {
@@ -192,6 +196,61 @@ pub fn fetch(home: &Path) -> Result<Snapshot> {
         credits,
         fetched_at: chrono::Utc::now().timestamp(),
     })
+}
+/// Explicit user-triggered single request. No tools, files, retries or token refresh.
+pub fn wake(home: &Path, expected: &str) -> Result<()> {
+    let entry = validated_entry(home)?;
+    if account_id(&entry) != expected {
+        bail!("Grok account changed; try again");
+    }
+    wake_at(
+        "https://cli-chat-proxy.grok.com/v1/chat/completions",
+        &entry,
+    )
+}
+fn wake_at(endpoint: &str, entry: &Value) -> Result<()> {
+    let token = entry["key"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .or_else(|| entry["access_token"].as_str().filter(|s| !s.is_empty()))
+        .context("No Grok OAuth access token")?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let mut request = client.post(endpoint).bearer_auth(token)
+        .header("X-XAI-Token-Auth", "xai-grok-cli")
+        .header("x-grok-model-override", "grok-build")
+        .header("x-grok-client-identifier", "grok-shell")
+        .header("x-grok-client-version", "1.0.41")
+        .json(&serde_json::json!({"model":"grok-build", "messages":[{"role":"user","content":"Reply OK."}], "max_tokens":1, "stream":false}));
+    if let Some(user) = entry["user_id"].as_str().filter(|s| !s.is_empty()) {
+        request = request.header("x-userid", user);
+    }
+    let response = request
+        .send()
+        .map_err(|_| anyhow::anyhow!("Grok wake request failed; no automatic retry"))?;
+    if !response.status().is_success() {
+        bail!("Grok wake rejected (HTTP {})", response.status().as_u16());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("Cannot read Grok wake response"))?;
+    if bytes.len() > 1024 * 1024 {
+        bail!("Grok wake response exceeds size limit");
+    }
+    let response: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("Invalid Grok wake response"))?;
+    if response["choices"]
+        .as_array()
+        .is_none_or(|choices| choices.is_empty())
+    {
+        bail!("Grok returned no wake completion");
+    }
+    Ok(())
 }
 fn dollars(cents: i64) -> String {
     format!("${:.2}", cents as f64 / 100.0)
@@ -270,7 +329,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::{
-        io::{BufRead, BufReader, Write},
+        io::{BufRead, BufReader, Read, Write},
         net::TcpListener,
     };
     #[test]
@@ -330,11 +389,63 @@ mod tests {
                     break;
                 }
             }
+            let content_length = request
+                .lines()
+                .find_map(|line| {
+                    line.to_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let mut body_bytes = vec![0; content_length];
+            reader.read_exact(&mut body_bytes).unwrap();
+            request.push_str(&String::from_utf8(body_bytes).unwrap());
             write!(socket,"HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             request
         });
         (endpoint, worker)
     }
+    #[test]
+    fn wake_posts_only_a_bounded_prompt_and_never_echoes_error_bodies() {
+        let entry = json!({"key":"TEST-TOKEN","user_id":"user"});
+        let (endpoint, worker) = server(
+            "200 OK",
+            json!({"choices":[{"finish_reason":"length"}]}).to_string(),
+        );
+        wake_at(&endpoint, &entry).unwrap();
+        let request = worker.join().unwrap();
+        assert!(request.starts_with("POST "));
+        assert!(
+            request
+                .to_lowercase()
+                .contains("x-grok-model-override: grok-build")
+        );
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["max_tokens"], 1);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"][0]["content"], "Reply OK.");
+        assert_eq!(body["stream"], false);
+        assert!(body.get("tools").is_none());
+        for status in ["401 Unauthorized", "302 Found", "503 Unavailable"] {
+            let (endpoint, worker) = server(status, "TEST-TOKEN".into());
+            let error = wake_at(&endpoint, &entry).unwrap_err().to_string();
+            assert!(!error.contains("TEST-TOKEN"));
+            worker.join().unwrap();
+        }
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("auth.json"),
+            json!({"auth_mode":"oidc","key":"TEST-TOKEN"}).to_string(),
+        )
+        .unwrap();
+        assert!(
+            wake(home.path(), "different-account")
+                .unwrap_err()
+                .to_string()
+                .contains("changed")
+        );
+    }
+
     #[test]
     fn billing_get_authenticates_without_exposing_tokens_or_error_bodies() {
         let entry = json!({"key":"TEST-TOKEN","user_id":"test-user"});

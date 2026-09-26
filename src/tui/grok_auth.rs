@@ -28,6 +28,7 @@ pub(super) struct AuthUi {
     usage_error: Option<String>,
     usage_refreshing: bool,
     usage_request: u64,
+    usage_waking: bool,
 }
 impl Default for AuthUi {
     fn default() -> Self {
@@ -40,12 +41,13 @@ impl Default for AuthUi {
             sender,
             receiver,
             status: Default::default(),
-            message: "Browser or Device code signs in through Grok CLI.".into(),
+            message: "Browser or Device code signs in through Grok.".into(),
             progress: vec![],
             usage: None,
             usage_error: None,
             usage_refreshing: false,
             usage_request: 0,
+            usage_waking: false,
         }
     }
 }
@@ -61,11 +63,12 @@ pub(super) struct AccountPage {
     pub confirm_logout: bool,
     pub scroll: u16,
 }
-const ACTIONS: [&str; 6] = [
+const ACTIONS: [&str; 7] = [
     "Browser (b)",
     "Device code (d)",
     "Use OAuth (u)",
     "Refresh (r)",
+    "Wake (w)",
     "Sign out (x)",
     "Back (Esc)",
 ];
@@ -151,7 +154,7 @@ impl App {
                     "Enter to configure"
                 }
             ),
-            "     Credential: Grok CLI OAuth".into(),
+            "     Credential: Grok OAuth".into(),
         ] {
             lines.extend(wrap_styled_segments(
                 vec![(text, Style::default().fg(MUTED))],
@@ -198,6 +201,36 @@ impl App {
         self.grok_auth.usage_error = None;
         self.spawn_grok_usage();
     }
+    fn wake_grok_usage(&mut self) -> Result<()> {
+        if self.grok_auth.busy || self.grok_auth.usage_refreshing {
+            return Ok(());
+        }
+        let id = usage::account(&self.grok_home)?
+            .ok_or_else(|| anyhow::anyhow!("Sign in before waking this account"))?;
+        self.grok_auth.usage_request = self.grok_auth.usage_request.wrapping_add(1);
+        self.grok_auth.usage_refreshing = true;
+        self.grok_auth.usage_waking = true;
+        self.grok_auth.usage_error = None;
+        self.spawn_grok_wake(id);
+        Ok(())
+    }
+    #[cfg(not(test))]
+    fn spawn_grok_wake(&self, id: String) {
+        let home = self.grok_home.clone();
+        let sender = self.grok_auth.sender.clone();
+        let request = self.grok_auth.usage_request;
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                usage::wake(&home, &id)?;
+                usage::fetch(&home)
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("Grok wake worker stopped")))
+            .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(Update::Usage(request, result));
+        });
+    }
+    #[cfg(test)]
+    fn spawn_grok_wake(&self, _: String) {}
     #[cfg(not(test))]
     fn spawn_grok_usage(&self) {
         let home = self.grok_home.clone();
@@ -250,6 +283,7 @@ impl App {
         }
         self.grok_auth.usage_request = self.grok_auth.usage_request.wrapping_add(1);
         self.grok_auth.usage_refreshing = false;
+        self.grok_auth.usage_waking = false;
         self.grok_auth.usage = None;
         self.grok_auth.usage_error = None;
         self.grok_auth.busy = true;
@@ -290,6 +324,7 @@ impl App {
                     if request != self.grok_auth.usage_request {
                         continue;
                     }
+                    let waking = std::mem::take(&mut self.grok_auth.usage_waking);
                     self.grok_auth.usage_refreshing = false;
                     self.load_grok_auth_status();
                     match result {
@@ -297,6 +332,9 @@ impl App {
                             if usage::account(&self.grok_home).ok().flatten().as_ref()
                                 == Some(&snapshot.account) =>
                         {
+                            if waking {
+                                self.grok_auth.message = "Wake complete · usage refreshed".into();
+                            }
                             self.grok_auth.usage = Some(snapshot);
                             self.grok_auth.usage_error = None;
                         }
@@ -326,7 +364,7 @@ impl App {
                     self.grok_auth.progress.clear();
                     match result {
                         Ok(status) => {
-                            self.grok_auth.message = if status.saved { "OAuth login saved by Grok CLI · Use OAuth selects the native startup model" } else { "Grok signed out · API provider configurations retained" }.into();
+                            self.grok_auth.message = if status.saved { "OAuth login saved by Grok · Use OAuth selects the native startup model" } else { "Grok signed out · API provider configurations retained" }.into();
                             self.grok_auth.status = status;
                             self.status_error = false;
                         }
@@ -380,11 +418,11 @@ impl App {
         match key.code {
             KeyCode::Esc => return Ok(true),
             KeyCode::Tab | KeyCode::Down => {
-                dialog.selected = (dialog.selected + 1) % 7;
+                dialog.selected = (dialog.selected + 1) % 8;
                 return Ok(false);
             }
             KeyCode::BackTab | KeyCode::Up => {
-                dialog.selected = (dialog.selected + 6) % 7;
+                dialog.selected = (dialog.selected + 7) % 8;
                 return Ok(false);
             }
             KeyCode::PageDown => {
@@ -410,8 +448,9 @@ impl App {
             KeyCode::Char('d') => 2,
             KeyCode::Char('u') => 3,
             KeyCode::Char('r' | 's') => 4,
-            KeyCode::Char('x') => 5,
-            KeyCode::Char('q') => 6,
+            KeyCode::Char('w') => 5,
+            KeyCode::Char('x') => 6,
+            KeyCode::Char('q') => 7,
             KeyCode::Enter => dialog.selected,
             _ => return Ok(false),
         };
@@ -446,8 +485,9 @@ impl App {
                 self.status_error = false;
             }
             4 => self.refresh_grok_usage(),
-            5 => dialog.confirm_logout = true,
-            6 => return Ok(true),
+            5 => self.wake_grok_usage()?,
+            6 => dialog.confirm_logout = true,
+            7 => return Ok(true),
             _ => {}
         }
         Ok(false)
@@ -507,7 +547,7 @@ impl App {
             .position(|r| contains(*r, mouse.column, mouse.row))
         {
             if self.grok_auth.busy {
-                if i == 5 {
+                if i == 6 {
                     self.cancel_grok_auth();
                 }
                 return Ok(());
@@ -626,7 +666,11 @@ impl App {
         } else {
             if self.grok_auth.usage_refreshing {
                 lines.push(Line::styled(
-                    "Refreshing usage… cached data remains visible",
+                    if self.grok_auth.usage_waking {
+                        "Waking account… · consumes a little quota"
+                    } else {
+                        "Refreshing usage… cached data remains visible"
+                    },
                     Style::default().fg(ROUTE),
                 ));
             }
@@ -677,7 +721,7 @@ impl App {
         );
         for (i, rect) in account_actions(screen).into_iter().enumerate() {
             frame.render_widget(
-                Paragraph::new(if self.grok_auth.busy && i == 5 {
+                Paragraph::new(if self.grok_auth.busy && i == 6 {
                     "Cancel/Esc"
                 } else {
                     ACTIONS[i]
@@ -685,8 +729,10 @@ impl App {
                 .alignment(Alignment::Center)
                 .style(button_style(
                     page.selected == i + 1,
-                    self.grok_auth.busy && i != 5,
-                    i == 4,
+                    (self.grok_auth.busy && i != 6)
+                        || (matches!(i, 3 | 4)
+                            && (self.grok_auth.usage_refreshing || !self.grok_auth.status.saved)),
+                    i == 5,
                 )),
                 rect,
             );
@@ -696,7 +742,7 @@ impl App {
             frame.render_widget(Clear, area);
             frame.render_widget(panel(" Sign out of Grok? ", true), area);
             let inner = panel_inner(area);
-            frame.render_widget(Paragraph::new("Grok CLI will clear its cached login credentials.\nAPI provider configurations are retained.\n\nEnter/y confirms · n/Esc cancels").wrap(Wrap { trim: false }), Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
+            frame.render_widget(Paragraph::new("Grok will clear its cached login credentials.\nAPI provider configurations are retained.\n\nEnter/y confirms · n/Esc cancels").wrap(Wrap { trim: false }), Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
             draw_modal_buttons(frame, area, &["Sign out", "Cancel"]);
         }
     }
@@ -739,6 +785,33 @@ mod usage_tests {
             .unwrap();
         assert!(app.poll_grok_auth());
         assert!(!app.grok_auth.usage_refreshing);
+        app.grok_auth.page.as_mut().unwrap().selected = 5;
+        app.grok_auth_page_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.grok_auth.usage_waking && app.grok_auth.usage_refreshing);
+        assert!(app.grok_auth.usage.is_some());
+        let wake_request = app.grok_auth.usage_request;
+        app.grok_auth_page_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.grok_auth.usage_request, wake_request);
+        let mut waking_terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        waking_terminal.draw(|frame| app.draw(frame)).unwrap();
+        let waking_text: String = waking_terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(waking_text.contains("Waking account") && waking_text.contains("75% used"));
+        assert!(waking_text.contains("Wake (w)"));
+        app.grok_auth
+            .sender
+            .send(Update::Usage(wake_request, Ok(snapshot.clone())))
+            .unwrap();
+        app.poll_grok_auth();
+        assert!(!app.grok_auth.usage_waking && !app.grok_auth.usage_refreshing);
+        assert!(app.grok_auth.message.contains("Wake complete"));
         app.refresh_grok_usage();
         let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
