@@ -314,6 +314,25 @@ impl CachedFile {
                 encoded.replace("%2F", "/").replace("%2f", "/")
             ))
             .ok()
+            .filter(|url| {
+                // url::to_file_path asserts absoluteness on Windows. Grok
+                // directories may encode Unix projects or non-project names.
+                #[cfg(windows)]
+                {
+                    let path = url.path().as_bytes();
+                    url.host_str().is_some_and(|host| !host.is_empty())
+                        || (path.len() >= 4
+                            && path[0] == b'/'
+                            && path[1].is_ascii_alphabetic()
+                            && path[2] == b':'
+                            && path[3] == b'/')
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = url;
+                    true
+                }
+            })
             .and_then(|url| url.to_file_path().ok())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| encoded.into_owned());
