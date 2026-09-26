@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex、Pi Agent 与 Grok 的多厂商、多模型配置�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.16。新增 Codex 账号删除、Usage token 视图和 Pulse Session token 刷新改进；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
+> 本文对应 v0.1.17。新增 Codex 后台账号切换适配，并改进 Grok 与 Codex 的账号用量、token 和 Pulse 展示；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok 配置](#grok-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -42,14 +42,14 @@ Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并�
 指定 CCSW 发布版本：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.16 bash -s -- ccsw
+curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.17 bash -s -- ccsw
 ```
 
 以上在线命令需要本脚本已合并到 GitHub 的 main 分支。本地源码安装方式见下文。
 
 ### 下载 Release
 
-v0.1.16 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.17 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -809,4 +809,4 @@ command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
 ```
 
-也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.16`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。
+也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.17`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。

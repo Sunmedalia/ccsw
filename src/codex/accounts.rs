@@ -360,7 +360,13 @@ pub fn activate_and_sync(paths: &AppPaths, id: &str) -> Result<&'static str> {
     }
     let binary_name =
         crate::platform::nonempty_env("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
-    let binary = crate::platform::resolve_program(&binary_name)?;
+    let binary = match crate::platform::resolve_program(&binary_name) {
+        Ok(binary) => binary,
+        Err(_) if std::env::var_os("CCSW_CODEX_BIN").is_none() => {
+            return Ok("Account saved on disk; install Codex CLI to start a session.");
+        }
+        Err(error) => return Err(error),
+    };
     let home = home()?;
     let version = std::process::Command::new(&binary)
         .args(["app-server", "daemon", "version"])
