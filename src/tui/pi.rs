@@ -52,7 +52,7 @@ impl App {
                 FooterControl::DeleteProfile => {
                     !self.home_all_selected && self.selected_profile().is_some()
                 }
-                FooterControl::Proxy => !self.pi_enabled,
+                FooterControl::Proxy => !self.pi_enabled && !self.grok_enabled,
                 _ => true,
             })
             .collect();
@@ -82,7 +82,9 @@ impl App {
                 *control != FooterControl::DeleteProfile
                     || (!self.home_all_selected && self.selected_profile().is_some())
             })
-            .filter(|(control, _)| !self.pi_enabled || *control != FooterControl::Proxy)
+            .filter(|(control, _)| {
+                !(self.pi_enabled || self.grok_enabled) || *control != FooterControl::Proxy
+            })
             .map(|(control, _)| {
                 let (label, _) = self.footer_control_style(
                     control,

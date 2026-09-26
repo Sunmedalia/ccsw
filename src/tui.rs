@@ -3,6 +3,8 @@ mod background;
 mod codex;
 mod events;
 mod forms;
+mod grok;
+mod grok_auth;
 mod help;
 mod layout;
 mod models;
@@ -111,6 +113,9 @@ pub struct App {
     provider_card_selected: bool,
     background: Background,
     codex_ui: codex::CodexUi,
+    grok_auth: grok_auth::AuthUi,
+    grok_enabled: bool,
+    grok_home: std::path::PathBuf,
     pi_enabled: bool,
     pi_home: std::path::PathBuf,
     screen: Rect,
@@ -138,6 +143,9 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         provider_editor: None,
         provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
+        grok_auth: grok_auth::AuthUi::default(),
+        grok_enabled: false,
+        grok_home: crate::grok::home()?,
         pi_enabled: false,
         pi_home: crate::pi::home()?,
         background: Background::default(),

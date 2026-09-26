@@ -705,3 +705,21 @@ pub(super) fn unique_profile_id(base: &str, profiles: &BTreeMap<String, Profile>
         .find(|id| !profiles.contains_key(id))
         .unwrap()
 }
+
+/// Account pages share the same header, account list, details and action footer.
+pub(super) fn account_page_rows(area: Rect, login_busy: bool) -> [Rect; 4] {
+    let rows = Layout::vertical([
+        Constraint::Length(if login_busy || area.height < 16 { 3 } else { 4 }),
+        if login_busy {
+            Constraint::Length(0)
+        } else if area.height < 16 {
+            Constraint::Length(3)
+        } else {
+            Constraint::Percentage(40)
+        },
+        Constraint::Min(3),
+        Constraint::Length(3),
+    ])
+    .split(area);
+    [rows[0], rows[1], rows[2], rows[3]]
+}

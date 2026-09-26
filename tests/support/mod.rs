@@ -35,6 +35,7 @@ pub fn isolate(command: &mut Command, root: &Path) {
         "CCSW_CONFIG",
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
+        "GROK_HOME",
         "PI_CODING_AGENT_DIR",
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
@@ -68,6 +69,7 @@ pub fn isolate(command: &mut Command, root: &Path) {
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("CLAUDE_CONFIG_DIR", root.join("claude"))
         .env("CODEX_HOME", root.join("codex"))
+        .env("GROK_HOME", root.join("grok"))
         .env("PI_CODING_AGENT_DIR", root.join("pi"))
         .env("TMP", root.join("tmp"))
         .env("TEMP", root.join("tmp"))

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use url::Url;
 
-pub const CONFIG_VERSION: u32 = 5;
+pub const CONFIG_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
@@ -24,6 +24,8 @@ pub struct Config {
     #[serde(default)]
     pub pi: crate::pi::Settings,
     #[serde(default)]
+    pub grok: crate::grok::Settings,
+    #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
 }
 
@@ -34,6 +36,7 @@ impl Default for Config {
             claude: Default::default(),
             codex: Default::default(),
             pi: Default::default(),
+            grok: Default::default(),
             profiles: BTreeMap::new(),
         }
     }
@@ -381,7 +384,7 @@ pub fn load(path: &Path) -> Result<Config> {
         .unwrap_or(1);
     if version == 1 {
         migrate_v1(&mut raw)?;
-    } else if version == 2 || version == 3 || version == 4 {
+    } else if version == 2 || version == 3 || version == 4 || version == 5 {
         raw["version"] = toml::Value::Integer(i64::from(CONFIG_VERSION));
     } else if version != i64::from(CONFIG_VERSION) {
         bail!(
@@ -401,6 +404,7 @@ pub fn load(path: &Path) -> Result<Config> {
             .profiles
             .values_mut()
             .chain(config.pi.profiles.values_mut())
+            .chain(config.grok.profiles.values_mut())
         {
             for id in profile.required_model_ids() {
                 if canonical_model_id(&id) != canonical_model_id(&profile.default_model)
@@ -423,6 +427,7 @@ pub fn load(path: &Path) -> Result<Config> {
         .values_mut()
         .chain(config.codex.profiles.values_mut())
         .chain(config.pi.profiles.values_mut())
+        .chain(config.grok.profiles.values_mut())
     {
         profile.models = deduplicate_model_entries(std::mem::take(&mut profile.models));
     }
@@ -431,6 +436,7 @@ pub fn load(path: &Path) -> Result<Config> {
         .iter()
         .chain(config.codex.profiles.iter())
         .chain(config.pi.profiles.iter())
+        .chain(config.grok.profiles.iter())
     {
         validate_profile_id(id).with_context(|| format!("invalid profile id {id}"))?;
         profile
@@ -439,6 +445,7 @@ pub fn load(path: &Path) -> Result<Config> {
     }
     suspend_codex_api_providers(&mut config);
     config.claude.validate()?;
+    config.grok.preferences.validate()?;
     Ok(config)
 }
 
@@ -545,11 +552,13 @@ fn update_locked(
         .iter()
         .chain(latest.codex.profiles.iter())
         .chain(latest.pi.profiles.iter())
+        .chain(latest.grok.profiles.iter())
     {
         validate_profile_id(id)?;
         profile.validate()?;
     }
     latest.claude.validate()?;
+    latest.grok.preferences.validate()?;
     write_unlocked(path, &latest)?;
     FileExt::unlock(&lock).ok();
     Ok(latest)
@@ -648,12 +657,14 @@ pub enum Client {
     Claude,
     Codex,
     Pi,
+    Grok,
 }
 fn swap_scope(config: &mut Config, client: Client) {
     match client {
         Client::Claude => {}
         Client::Codex => std::mem::swap(&mut config.profiles, &mut config.codex.profiles),
         Client::Pi => std::mem::swap(&mut config.profiles, &mut config.pi.profiles),
+        Client::Grok => std::mem::swap(&mut config.profiles, &mut config.grok.profiles),
     }
 }
 pub fn load_client(path: &Path, client: Client) -> Result<Config> {
@@ -924,5 +935,35 @@ mod windows_file_tests {
         drop(handle);
         write_unlocked(&path, &config).unwrap();
         assert_ne!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod grok_tests {
+    use super::*;
+    #[test]
+    fn v5_migrates_with_empty_grok_and_scoped_writes_preserve_other_clients() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        fs::write(&path, "version=5\n[profiles.old]\nname='Old'\nbase_url='https://example.invalid'\ndefault_model='old'\n").unwrap();
+        let before = load(&path).unwrap();
+        assert_eq!(before.version, 6);
+        assert!(before.grok.profiles.is_empty());
+        update_client(&path, Client::Grok, |c| {
+            c.profiles
+                .insert("new".into(), before.profiles["old"].clone());
+            c.grok.preferences.permission_mode = Some("ask".into());
+            Ok(())
+        })
+        .unwrap();
+        let after = load(&path).unwrap();
+        assert_eq!(after.profiles, before.profiles);
+        assert_eq!(after.codex, before.codex);
+        assert_eq!(after.pi, before.pi);
+        assert!(after.grok.profiles.contains_key("new"));
+        assert_eq!(
+            load_client(&path, Client::Grok).unwrap().profiles,
+            after.grok.profiles
+        );
     }
 }

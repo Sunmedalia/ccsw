@@ -371,6 +371,10 @@ impl App {
             KeyCode::Char('c')
                 if key.modifiers.is_empty() && !self.pi_enabled && !self.codex_ui.enabled =>
             {
+                if self.grok_enabled {
+                    self.open_grok_preferences(Some(form.clone()));
+                    return Ok(true);
+                }
                 self.open_preferences();
                 if let Some(Modal::Preferences(preferences)) = self.modal.as_mut() {
                     preferences.return_theme = Some(form.theme);
@@ -441,7 +445,12 @@ pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
         .collect()
 }
 
-pub(super) fn draw(frame: &mut ratatui::Frame, area: Rect, form: &Appearance, claude: bool) {
+pub(super) fn draw(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    form: &Appearance,
+    client_settings: Option<&str>,
+) {
     frame.render_widget(panel(" Settings · TUI appearance ", true), area);
     let inner = panel_inner(area);
     frame.render_widget(
@@ -490,13 +499,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame, area: Rect, form: &Appearance, cl
             inner.height.saturating_sub(11),
         ),
     );
-    draw_modal_buttons(
-        frame,
-        area,
-        if claude {
-            &["Save", "Claude settings (c)", "Cancel"]
-        } else {
-            &["Save", "Cancel"]
-        },
-    );
+    let buttons = if let Some(label) = client_settings {
+        vec!["Save", label, "Cancel"]
+    } else {
+        vec!["Save", "Cancel"]
+    };
+    draw_modal_buttons(frame, area, &buttons);
 }

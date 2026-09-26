@@ -20,6 +20,7 @@ impl App {
                     if self.view_mode == ViewMode::Home
                         && self.modal.is_none()
                         && !self.codex_ui.accounts
+                        && self.grok_auth.page.is_none()
                     {
                         "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit"
                     } else {
@@ -43,6 +44,13 @@ impl App {
         }
         if self.codex_ui.enabled && self.codex_ui.accounts {
             self.draw_codex_accounts(frame, area);
+            if let Some(modal) = &self.modal {
+                self.draw_modal(frame, modal);
+            }
+            return;
+        }
+        if self.grok_enabled && self.grok_auth.page.is_some() {
+            self.draw_grok_accounts(frame, area);
             if let Some(modal) = &self.modal {
                 self.draw_modal(frame, modal);
             }
@@ -93,7 +101,8 @@ impl App {
                 Span::styled(
                     format!(
                         "  ·  {} providers",
-                        self.config.profiles.len() + usize::from(self.codex_ui.enabled)
+                        self.config.profiles.len()
+                            + usize::from(self.codex_ui.enabled || self.grok_enabled)
                     ),
                     Style::default().fg(MUTED),
                 ),
@@ -149,6 +158,11 @@ impl App {
                 item_heights.push(account.len());
                 items.push(ListItem::new(account));
             }
+        }
+        if is_home && self.grok_enabled {
+            let account = self.grok_oauth_provider_lines(content_width);
+            item_heights.push(account.len());
+            items.push(ListItem::new(account));
         }
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];
@@ -791,6 +805,7 @@ impl App {
                     ClientTab::Claude => "Claude /model",
                     ClientTab::Codex => "Codex models",
                     ClientTab::Pi => "Pi /model",
+                    ClientTab::Grok => "Grok /model",
                     ClientTab::Usage => unreachable!(),
                 },
                 &format!(
@@ -818,6 +833,9 @@ impl App {
                 ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
                 ClientTab::Codex => "Sync with p, restart to load models, then switch with /model.",
                 ClientTab::Pi => "Sync changes, then open /model in Pi.",
+                ClientTab::Grok => {
+                    "Press p to connect; saved changes sync automatically. Restart Grok."
+                }
                 ClientTab::Usage => unreachable!(),
             },
             Style::default().fg(MUTED),
@@ -827,6 +845,11 @@ impl App {
     }
 
     pub(super) fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
+        if self.home_grok_oauth_selected() {
+            frame.render_widget(Paragraph::new(format!("Grok OAuth Account\n\n{}\n\nEnter / click again to configure browser or device-code login, select a native model, or sign out.\nExisting API providers are retained.", self.grok_auth_status_description()))
+                .block(panel(" Grok OAuth provider ", active)).wrap(Wrap { trim: false }), area);
+            return;
+        }
         if self.home_account_selected() {
             frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nSpace: enable / disable subscription (confirmation required).\nEnabling pauses API providers; disabling restores their previous states.")
                 .block(panel(" ChatGPT provider ", active)).wrap(Wrap { trim: false }), area);
@@ -904,6 +927,8 @@ impl App {
                     " {} · ",
                     if self.pi_enabled {
                         "Pi · direct API"
+                    } else if self.grok_enabled {
+                        "Grok · o OAuth · p connect · i import"
                     } else if self.codex_ui.enabled {
                         "Codex · /model switches loaded models"
                     } else {
@@ -950,7 +975,7 @@ impl App {
             FooterControl::Sync => (
                 if self.pi_enabled {
                     "Set default"
-                } else if self.codex_ui.enabled {
+                } else if self.codex_ui.enabled || self.grok_enabled {
                     "Apply"
                 } else {
                     "Sync"
@@ -977,11 +1002,16 @@ impl App {
         let area = modal_area_for(modal, frame.area());
         frame.render_widget(Clear, area);
         match modal {
+            Modal::Grok(dialog) => grok::draw_dialog(frame, area, dialog),
             Modal::Appearance(form) => theme::draw(
                 frame,
                 area,
                 form,
-                !self.pi_enabled && !self.codex_ui.enabled,
+                (!self.pi_enabled && !self.codex_ui.enabled).then_some(if self.grok_enabled {
+                    "Grok settings (c)"
+                } else {
+                    "Claude settings (c)"
+                }),
             ),
             Modal::Import(candidate) => {
                 let mut lines = vec![

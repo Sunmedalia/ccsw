@@ -1,4 +1,4 @@
-//! Paths and process lookup shared by the three clients. Values are never shell-expanded.
+//! Paths and process lookup shared by the clients. Values are never shell-expanded.
 use anyhow::{Context, Result, bail};
 use std::{
     env,

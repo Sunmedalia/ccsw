@@ -8,16 +8,19 @@ impl App {
         loop {
             redraw |= self.poll_background();
             redraw |= self.poll_codex();
+            redraw |= self.poll_grok_auth();
             redraw |= self.poll_usage();
             if redraw {
                 terminal.draw(|frame| self.draw(frame))?;
                 redraw = false;
             }
             if closing {
+                self.cancel_grok_auth();
                 if !self.background.sync_running
                     && !self.background.proxy_running
                     && self.background.queued_sync.is_none()
                     && !self.codex_ui.busy
+                    && !self.grok_auth.busy
                 {
                     return Ok(());
                 }
@@ -63,15 +66,24 @@ impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
         self.provider_card_selected = false;
         let before = self.config.clone();
+        let before_client = self.config_client();
         let result = self.handle_key_inner(key);
-        if before != self.config {
+        if before != self.config && before_client == self.config_client() {
             self.queue_sync(false, None);
             self.sync_pi_after_edit();
+            self.sync_grok_after_edit();
         }
         result
     }
 
     pub(super) fn handle_key_inner(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.grok_auth.busy
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
+        {
+            self.cancel_grok_auth();
+            return Ok(false);
+        }
         if matches!(self.modal, Some(Modal::Appearance(_))) {
             self.handle_modal(key)?;
             return Ok(false);
@@ -87,6 +99,16 @@ impl App {
             self.open_usage();
             return Ok(false);
         }
+        if self.grok_enabled && self.grok_auth.page.is_some() && self.modal.is_none() {
+            if key.code == KeyCode::F(2) && !self.grok_auth.busy {
+                self.select_client_tab(self.client_tab().next());
+            } else if key.code == KeyCode::Char('?') {
+                self.open_help();
+            } else {
+                self.grok_auth_page_key(key)?;
+            }
+            return Ok(false);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
             && self.view_mode == ViewMode::Home
@@ -99,6 +121,9 @@ impl App {
             return Ok(true);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Ok(false);
+        }
+        if self.modal.is_none() && self.handle_grok_key(key)? {
             return Ok(false);
         }
         if self.modal.is_none()
@@ -390,14 +415,15 @@ impl App {
                 {
                     form.pulse_selected = mouse.column >= panel_inner(modal_area).x + 11;
                 } else {
-                    let claude = !self.pi_enabled && !self.codex_ui.enabled;
-                    if let Some(index) = modal_button_rects(modal_area, if claude { 3 } else { 2 })
-                        .iter()
-                        .position(|rect| contains(*rect, mouse.column, mouse.row))
+                    let client_settings = !self.pi_enabled && !self.codex_ui.enabled;
+                    if let Some(index) =
+                        modal_button_rects(modal_area, if client_settings { 3 } else { 2 })
+                            .iter()
+                            .position(|rect| contains(*rect, mouse.column, mouse.row))
                     {
                         let code = if index == 0 {
                             KeyCode::Enter
-                        } else if claude && index == 1 {
+                        } else if client_settings && index == 1 {
                             KeyCode::Char('c')
                         } else {
                             KeyCode::Esc
@@ -443,10 +469,12 @@ impl App {
             }
         }
         let before = self.config.clone();
+        let before_client = self.config_client();
         let result = self.handle_mouse_inner(mouse, area);
-        if before != self.config {
+        if before != self.config && before_client == self.config_client() {
             self.queue_sync(false, None);
             self.sync_pi_after_edit();
+            self.sync_grok_after_edit();
         }
         result
     }
@@ -461,6 +489,10 @@ impl App {
             return Ok(MouseAction::None);
         }
 
+        if self.grok_enabled && self.grok_auth.page.is_some() {
+            self.grok_auth_page_mouse(mouse, area)?;
+            return Ok(MouseAction::None);
+        }
         let pi = self.pi_enabled;
         let ui = ui_areas(area, self.focus, self.view_mode);
         match mouse.kind {
@@ -1016,6 +1048,10 @@ impl App {
             }
             return Ok(());
         }
+        if matches!(self.modal, Some(Modal::Grok(_))) {
+            self.grok_dialog_mouse(mouse, area)?;
+            return Ok(());
+        }
         if matches!(self.modal, Some(Modal::Preferences(_))) {
             if let Some(action) = preference_actions(area)
                 .iter()
@@ -1256,6 +1292,11 @@ impl App {
             return Ok(());
         };
         match &mut modal {
+            Modal::Grok(dialog) => {
+                if self.grok_dialog_key(dialog, key)? {
+                    return Ok(());
+                }
+            }
             Modal::Appearance(form) => {
                 if self.appearance_key(form, key)? {
                     return Ok(());
@@ -1320,9 +1361,12 @@ impl App {
                                 Ok(())
                             },
                         )?;
-                        let cache_result = discovery::update_cache(&self.paths.cache, |cache| {
-                            cache.profiles.remove(&id);
-                        });
+                        let cache_result = discovery::update_cache(
+                            &self.client_cache_path(self.config_client()),
+                            |cache| {
+                                cache.profiles.remove(&id);
+                            },
+                        );
                         self.cache.profiles.remove(&id);
                         self.profile_idx = self
                             .profile_idx
@@ -1633,13 +1677,16 @@ impl App {
                             if let Some(original) = &form.original_id
                                 && (original != &id || connection_changed)
                             {
-                                let result = discovery::update_cache(&self.paths.cache, |cache| {
-                                    if let Some(cached) = cache.profiles.remove(original)
-                                        && !connection_changed
-                                    {
-                                        cache.profiles.insert(id.clone(), cached);
-                                    }
-                                });
+                                let result = discovery::update_cache(
+                                    &self.client_cache_path(self.config_client()),
+                                    |cache| {
+                                        if let Some(cached) = cache.profiles.remove(original)
+                                            && !connection_changed
+                                        {
+                                            cache.profiles.insert(id.clone(), cached);
+                                        }
+                                    },
+                                );
                                 match result {
                                     Ok(cache) => self.cache = cache,
                                     Err(error) => {

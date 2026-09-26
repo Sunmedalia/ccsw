@@ -234,7 +234,7 @@ fn distinct_workspaces_and_bad_imports_do_not_overwrite_accounts() {
     assert!(!String::from_utf8_lossy(&result.stderr).contains("secret"));
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(s.root.path().join("config.toml")).unwrap()).unwrap();
-    assert_eq!(config["version"].as_integer(), Some(5));
+    assert_eq!(config["version"].as_integer(), Some(6));
     assert_eq!(config["codex"]["accounts"].as_table().unwrap().len(), 2);
 }
 #[test]

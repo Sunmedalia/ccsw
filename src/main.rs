@@ -3,6 +3,7 @@ mod claude_preferences;
 mod codex;
 mod config;
 mod discovery;
+mod grok;
 mod herdr_install;
 mod import;
 mod managed_process;
@@ -32,7 +33,7 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 #[command(
     name = "ccsw",
     version,
-    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration"
+    about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration; Grok CLI native configuration"
 )]
 struct Cli {
     #[command(subcommand)]

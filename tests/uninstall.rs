@@ -245,3 +245,45 @@ fn uninstall_preserves_github_managed_herdr_plugin() {
             .contains("plugin unlink")
     );
 }
+
+#[test]
+fn uninstall_restores_grok_owned_fields_and_preserves_external_settings_and_login() {
+    let sandbox = Sandbox::new();
+    let grok = sandbox.root.path().join("grok");
+    let state = sandbox.root.path().join("state/ccsw");
+    fs::create_dir_all(&grok).unwrap();
+    fs::create_dir_all(&state).unwrap();
+    fs::write(
+        grok.join("config.toml"),
+        "[models]\ndefault='ccsw::test::model'\n[ui]\ncompact_mode=false\ntheme='auto'\n",
+    )
+    .unwrap();
+    fs::write(grok.join("auth.json"), "{\"keep\":true}").unwrap();
+    let binding = serde_json::json!({
+        "home": grok, "config": sandbox.root.path().join("config.toml"),
+        "fields": [
+            { "path": ["models", "default"], "original": "grok-4.7", "expected": "ccsw::test::model" },
+            { "path": ["ui", "compact_mode"], "original": null, "expected": true }
+        ]
+    });
+    fs::write(
+        state.join("grok-binding.json"),
+        serde_json::to_vec(&binding).unwrap(),
+    )
+    .unwrap();
+    let before = fs::read(grok.join("config.toml")).unwrap();
+    sandbox.ok(&["uninstall", "--dry-run"]);
+    assert_eq!(fs::read(grok.join("config.toml")).unwrap(), before);
+    sandbox.ok(&["uninstall", "--yes"]);
+    let value: toml::Value =
+        toml::from_str(&fs::read_to_string(grok.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(value["models"]["default"].as_str(), Some("grok-4.7"));
+    assert_eq!(value["ui"]["compact_mode"].as_bool(), Some(false));
+    assert_eq!(value["ui"]["theme"].as_str(), Some("auto"));
+    assert_eq!(
+        fs::read_to_string(grok.join("auth.json")).unwrap(),
+        "{\"keep\":true}"
+    );
+    assert!(!state.join("grok-binding.json").exists());
+    sandbox.ok(&["uninstall", "--yes"]);
+}

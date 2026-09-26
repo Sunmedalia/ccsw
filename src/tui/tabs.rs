@@ -5,6 +5,7 @@ pub(super) enum ClientTab {
     Claude,
     Codex,
     Pi,
+    Grok,
     Usage,
 }
 
@@ -13,7 +14,8 @@ impl ClientTab {
         match self {
             Self::Claude => Self::Codex,
             Self::Codex => Self::Pi,
-            Self::Pi => Self::Usage,
+            Self::Pi => Self::Grok,
+            Self::Grok => Self::Usage,
             Self::Usage => Self::Claude,
         }
     }
@@ -23,18 +25,20 @@ impl ClientTab {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Pi => "Pi",
+            Self::Grok => "Grok CLI",
             Self::Usage => "Usage",
         }
     }
 }
 
-pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 4] {
+pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 5] {
     let mut x = area.x.saturating_add(1);
     [
-        (ClientTab::Claude, if area.width < 48 { 12 } else { 15 }),
-        (ClientTab::Codex, if area.width < 48 { 7 } else { 9 }),
-        (ClientTab::Pi, if area.width < 48 { 4 } else { 6 }),
-        (ClientTab::Usage, 8),
+        (ClientTab::Claude, if area.width < 64 { 12 } else { 15 }),
+        (ClientTab::Codex, if area.width < 64 { 7 } else { 9 }),
+        (ClientTab::Pi, if area.width < 64 { 2 } else { 6 }),
+        (ClientTab::Grok, if area.width < 64 { 4 } else { 10 }),
+        (ClientTab::Usage, if area.width < 64 { 5 } else { 8 }),
     ]
     .map(|(tab, width)| {
         let rect = Rect::new(
@@ -55,7 +59,9 @@ impl App {
         self.config_tab()
     }
     pub(super) fn config_tab(&self) -> ClientTab {
-        if self.pi_enabled {
+        if self.grok_enabled {
+            ClientTab::Grok
+        } else if self.pi_enabled {
             ClientTab::Pi
         } else if self.codex_ui.enabled {
             ClientTab::Codex
@@ -64,7 +70,11 @@ impl App {
         }
     }
     pub(super) fn select_client_tab(&mut self, tab: ClientTab) {
-        if self.modal.is_some() || self.codex_navigation_blocked() || tab == self.client_tab() {
+        if self.modal.is_some()
+            || self.codex_navigation_blocked()
+            || self.grok_auth.busy
+            || tab == self.client_tab()
+        {
             return;
         }
         if tab == ClientTab::Usage {
@@ -86,6 +96,7 @@ impl App {
             ClientTab::Claude => config::Client::Claude,
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
+            ClientTab::Grok => config::Client::Grok,
             ClientTab::Usage => unreachable!(),
         };
         let config = match if tab == ClientTab::Pi {
@@ -112,6 +123,12 @@ impl App {
         self.home_all_selected = false;
         self.codex_ui.home_models = tab == ClientTab::Codex;
         self.pi_enabled = tab == ClientTab::Pi;
+        self.grok_enabled = tab == ClientTab::Grok;
+        self.grok_auth.home_selected = false;
+        self.grok_auth.page = None;
+        if self.grok_enabled {
+            self.load_grok_auth_status();
+        }
         self.codex_ui.enabled = tab == ClientTab::Codex;
         self.return_home();
         self.initialize_background();
@@ -119,6 +136,9 @@ impl App {
             ClientTab::Claude => "Claude Code · p sync · F2 next tab",
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
+            ClientTab::Grok => {
+                "Grok CLI · o OAuth · i import · p connect · s status · D disconnect"
+            }
             ClientTab::Usage => unreachable!(),
         }
         .into();
@@ -137,7 +157,11 @@ impl App {
             } else {
                 Style::default().fg(Color::White).bg(SELECTION)
             };
-            let label = tab.label();
+            let label = if tab == ClientTab::Grok && rect.width < 8 {
+                "Grok"
+            } else {
+                tab.label()
+            };
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)
@@ -154,6 +178,7 @@ impl App {
             ClientTab::Claude => config::Client::Claude,
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
+            ClientTab::Grok => config::Client::Grok,
             ClientTab::Usage => unreachable!(),
         }
     }
@@ -162,6 +187,7 @@ impl App {
             config::Client::Claude => self.paths.cache.clone(),
             config::Client::Codex => self.paths.cache.with_file_name("codex-models.json"),
             config::Client::Pi => self.paths.cache.with_file_name("pi-models.json"),
+            config::Client::Grok => self.paths.cache.with_file_name("grok-models.json"),
         }
     }
 }

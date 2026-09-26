@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Sunmedalia/ccsw)](https://github.com/Sunmedalia/ccsw/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
+CCSW 是 Claude Code、Codex、Pi Agent 与 Grok CLI 的多厂商、多模型配置管理器，支持保存和切换 Codex 订阅账号。它负责维护 Endpoint、凭据、模型映射和本地协议代理，但不会启动 Claude；同步完成后，直接在自己的终端运行 `claude` 即可。
 
 它提供三个核心能力：
 
@@ -14,7 +14,7 @@ CCSW 是 Claude Code、Codex 与 Pi Agent 的多厂商、多模型配置管理�
 
 > 本文对应 v0.1.16。新增 Codex 账号删除、Usage token 视图和 Pulse Session token 刷新改进；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
 
-[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
+[快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok CLI 配置](#grok-cli-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
@@ -220,9 +220,32 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 ## 客户端配置隔离
 
-配置版本为 v4：Claude 厂商保存在 `[profiles]`，Codex 保存在 `[codex.profiles]`。Pi TUI 直接读取 Pi 的 `models.json` 和 `settings.json`；旧的 `[pi.profiles]` 仅供兼容 CLI 导入/同步使用，不再作为 Pi 页面数据源。三个客户端的模型缓存分别保存。
+配置版本为 v6：Claude 厂商保存在 `[profiles]`，Codex 保存在 `[codex.profiles]`，Grok 保存在 `[grok.profiles]`。Pi TUI 直接读取 Pi 的 `models.json` 和 `settings.json`；旧的 `[pi.profiles]` 仅供兼容 CLI 导入/同步使用，不再作为 Pi 页面数据源。四个客户端的模型缓存分别保存。
 
-旧版 v1–v3 的共享厂商会在迁移时复制为三份独立列表，以保留已添加的模型；之后编辑不再互相影响。Codex/Pi 副本不保留 Claude 角色别名。已有账号和接入快照保留，首次保存写入 v4；旧版本 CCSW 不能编辑 v4 文件。
+旧版 v1–v3 的共享厂商会在迁移时复制为三份独立列表，以保留已添加的模型；之后编辑不再互相影响。Codex/Pi 副本不保留 Claude 角色别名。已有账号和接入快照保留，首次保存写入 v6；v4/v5 配置迁移后 Grok 列表为空，旧版本 CCSW 不能编辑 v6 文件。
+
+## Grok CLI 配置
+
+点击顶部 **Grok CLI**，或按 `F2` 切换。页面沿用 Claude Code 的厂商和模型管理操作，支持三种 API 协议，由 Grok 直接连接厂商。
+
+1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `n` 新增厂商。
+2. 编辑厂商、模型、启用状态及 token 参数。新增模型在 Grok 中使用 `ccsw::厂商ID::模型ID`，请求发送实际上游模型 ID；导入模型保留原有配置键。
+3. 选择厂商或模型，按 `p` 接入全部启用模型并设置启动默认值。接入后，保存的修改自动同步。禁用当前默认模型时，改用其他启用模型；全部禁用时恢复可用的原生默认设置。
+4. 重启 Grok 加载配置，再使用 `/model` 选择模型。`s` 查看接入状态，`D` 断开并恢复管理字段。
+
+配置目标为 `$GROK_HOME/config.toml`，默认 `~/.grok/config.toml`；Windows 默认 `%USERPROFILE%\.grok\config.toml`。API Key 在界面和导入预览中脱敏，保存文件使用私有权限。
+
+按 `F4`，再按 `c` 打开 **Grok settings**：默认模型、搜索模型、分叉子代理模型、推理强度、权限模式、紧凑显示和思考内容显示。模型字段可手动输入原生模型 ID，`Alt+M` 循环选择已配置模型键；推理强度使用左右键选择，`Alt+E` 切换为自定义输入。空值或 `inherit` 保留原生设置，`Ctrl+S` 保存，`Esc` 取消；未保存变更会提示是否丢弃。
+
+外部修改了 CCSW 管理字段时，自动同步暂停。按 `p` 查看冲突字段，确认后重新接入。断开和卸载仅恢复未被外部修改的管理字段；无关配置、MCP、插件、Hooks 和登录凭据保留。不管理 Grok 多账号切换或任意高级 TOML 字段。仅包含继承端点的模型条目会在导入预览中标记并保留，需手动添加完整端点后管理。
+
+Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`（或再次点击）进入独立的 OAuth Accounts 管理页面；也可按 `o` 直接进入。页面沿用 Codex Accounts 的上下布局：上方账号列表、下方详情与原生模型配置、底部登录和退出操作，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok CLI 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
+
+登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。登录本身不会修改已选 API 模型；已有厂商和模型保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
+
+进入账号页或登录成功后自动获取用量：显示当前周期的已用比例、剩余比例、额度进度条、重置时间，以及服务返回的预付余额和按需用量/上限。共享额度会标为 **Shared account credit allowance**。这些数据是账号额度，不是本地会话 token 统计；缺失字段不会显示为零。`PgUp/PgDn` 查看较长详情。刷新失败时保留本次运行中同一账号的上次结果并提示缓存状态；退出登录或更换账号会清除对应缓存。访问令牌过期时，先在 Grok CLI 刷新登录或重新授权，再按 `r`。接口依据 [Grok 官方账单实现](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/extensions/billing.rs)。
+
+实现依据 [Grok 原生设置说明](https://docs.x.ai/build/settings)，兼容验证基准为 Grok Build CLI `1.0.41`。
 
 ## Pi Agent 配置
 
@@ -287,7 +310,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 > Codex 配置随 v0.1.7 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。CCSW 显示的是磁盘配置状态；真实 App 的账号切换与新会话请求仍需在目标版本上验证，不能将“已写入”视为 App 已生效。
 
-在 TUI 中点击顶部 **Claude Code / Codex / Pi** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。三个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
+在 TUI 中点击顶部 **Claude Code / Codex / Pi / Grok CLI** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。四个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
 ### Codex API
 

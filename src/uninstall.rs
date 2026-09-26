@@ -30,6 +30,9 @@ const STATE_FILES: &[&str] = &[
     "codex.lock",
     "codex-binding.json",
     "codex-transaction.json",
+    "grok.lock",
+    "grok-binding.json",
+    "grok-transaction.json",
     "pi.lock",
     "pi-binding.json",
     "pi-transaction.json",
@@ -202,6 +205,7 @@ struct Settings {
     replacement: Option<Value>,
 }
 struct Plan {
+    grok: Option<crate::grok::DetachPlan>,
     pi: Option<crate::pi::DetachPlan>,
     codex: Option<crate::codex::DetachPlan>,
     account_dirs: Vec<PathBuf>,
@@ -348,7 +352,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
     for name in STATE_FILES {
         names.insert(paths.state_dir.join(name));
     }
-    for client in ["codex", "pi"] {
+    for client in ["codex", "pi", "grok"] {
         let cache = paths.cache.with_file_name(format!("{client}-models.json"));
         names.insert(checked(&cache)?);
         names.insert(checked(&cache.with_extension("json.lock"))?);
@@ -392,6 +396,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         checked(&home.join("auth.json"))?;
     }
     let codex = crate::codex::prepare_detach(&paths)?;
+    let grok = crate::grok::prepare_detach(&paths)?;
     let pi = crate::pi::prepare_detach(&paths)?;
     let mut files = Vec::new();
     for name in names {
@@ -559,6 +564,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         }
     }
     Ok(Plan {
+        grok,
         pi,
         codex,
         account_dirs,
@@ -618,6 +624,9 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     }
     if let Some(pi) = &plan.pi {
         println!("Restore managed Pi settings: {}", pi.home.display());
+    }
+    if let Some(grok) = &plan.grok {
+        println!("Restore managed Grok settings: {}", grok.home.display());
     }
     if let Some(codex) = &plan.codex {
         println!(
@@ -741,6 +750,9 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
             temp.persist(&settings.original.path).map_err(|e| e.error)?;
         }
     }
+    if let Some(grok) = &plan.grok {
+        crate::grok::execute_detach(grok)?;
+    }
     if let Some(pi) = &plan.pi {
         crate::pi::execute_detach(pi)?;
     }
@@ -752,7 +764,11 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     for file in &plan.files {
         if !file.path.exists()
             && file.path.file_name().is_some_and(|n| {
-                n == "proxy.pid" || n == "usage.sqlite3-wal" || n == "usage.sqlite3-shm"
+                n == "proxy.pid"
+                    || n == "usage.sqlite3-wal"
+                    || n == "usage.sqlite3-shm"
+                    || (plan.grok.is_some()
+                        && (n == "grok-binding.json" || n == "grok-transaction.json"))
             })
         {
             continue;

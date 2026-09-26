@@ -39,6 +39,7 @@ fn tui_theme_settings_mouse_and_keyboard_work_on_every_client() {
         ClientTab::Claude,
         ClientTab::Codex,
         ClientTab::Pi,
+        ClientTab::Grok,
         ClientTab::Usage,
     ] {
         app.select_client_tab(tab);
@@ -434,6 +435,9 @@ fn renders_empty_state_in_narrow_terminal() {
         provider_editor: None,
         provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
+        grok_auth: grok_auth::AuthUi::default(),
+        grok_enabled: false,
+        grok_home: std::path::PathBuf::from("/nonexistent-ccsw-test-grok"),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
@@ -1752,6 +1756,9 @@ fn interactive_test_app() -> App {
         provider_editor: None,
         provider_card_selected: false,
         codex_ui: codex::CodexUi::default(),
+        grok_auth: grok_auth::AuthUi::default(),
+        grok_enabled: false,
+        grok_home: std::path::PathBuf::from("/nonexistent-ccsw-test-grok"),
         pi_enabled: false,
         pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
         background: Background::default(),
@@ -2456,6 +2463,9 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
+    assert_eq!(app.client_tab(), ClientTab::Grok);
+    app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+        .unwrap();
     assert_eq!(app.client_tab(), ClientTab::Usage);
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
@@ -2511,6 +2521,7 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
             ClientTab::Claude,
             ClientTab::Codex,
             ClientTab::Pi,
+            ClientTab::Grok,
             ClientTab::Usage,
         ] {
             app.select_client_tab(tab);
@@ -2522,7 +2533,7 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
                 let first_row = (0..width)
                     .map(|x| buffer[(x, 0)].symbol())
                     .collect::<String>();
-                for label in ["Claude Code", "Codex", "Pi", "Usage"] {
+                for label in ["Claude Code", "Codex", "Pi", "Grok", "Usage"] {
                     assert!(first_row.contains(label));
                 }
                 for (candidate, rect) in client_tabs(Rect::new(0, 0, width, height)) {
@@ -2842,7 +2853,7 @@ fn pi_uses_provider_layout_without_proxy_controls() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Providers · F2 Usage"));
+        assert!(text.contains("Providers · F2 Grok CLI"));
         let area = Rect::new(0, 0, width, height);
         let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
         assert!(
@@ -3607,4 +3618,532 @@ fn repeated_model_click_edits_and_reasoning_arrows_cycle() {
         panic!()
     };
     assert_eq!(form.fields[index].value, "high");
+}
+
+#[test]
+fn grok_tabs_import_settings_sync_and_client_isolation() {
+    let (temp, mut app) = persisted_app();
+    app.grok_home = temp.path().join("grok");
+    std::fs::create_dir_all(&app.grok_home).unwrap();
+    let native = app.grok_home.join("config.toml");
+    std::fs::write(&native, "[models]\ndefault='custom'\n[model.custom]\nmodel='upstream'\nbase_url='https://example.invalid/v1'\napi_key='private-import-key'\n[ui]\npermission_mode='ask'\n").unwrap();
+    let before = config::load(&app.paths.config).unwrap();
+    app.select_client_tab(ClientTab::Grok);
+    assert!(app.grok_enabled);
+    assert!(app.config.profiles.is_empty());
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_key(key(KeyCode::Char('i'))).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(rendered.contains("Import Grok"));
+    assert!(!rendered.contains("private-import-key"));
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.config.profiles.len(), 1);
+    assert_eq!(
+        app.config.grok.preferences.permission_mode.as_deref(),
+        Some("ask")
+    );
+    assert!(!crate::grok::connected(&app.paths));
+    app.handle_key(key(KeyCode::Char('p'))).unwrap();
+    assert!(crate::grok::connected(&app.paths));
+    assert!(!app.status_error, "{}", app.status);
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Char('c'))).unwrap();
+    if let Some(Modal::Grok(dialog)) = app.modal.as_mut() {
+        if let grok::Dialog::Settings { fields, .. } = dialog.as_mut() {
+            fields[3].value = "high".into();
+            fields[5].value = "true".into();
+        } else {
+            panic!("settings expected");
+        }
+    } else {
+        panic!("Grok settings expected");
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Appearance(_))));
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    let v: toml::Value = toml::from_str(&std::fs::read_to_string(&native).unwrap()).unwrap();
+    assert_eq!(
+        v["models"]["default_reasoning_effort"].as_str(),
+        Some("high")
+    );
+    assert_eq!(v["ui"]["compact_mode"].as_bool(), Some(true));
+    app.toggle_selected_provider().unwrap();
+    app.sync_grok_after_edit();
+    let v: toml::Value = toml::from_str(&std::fs::read_to_string(&native).unwrap()).unwrap();
+    assert!(
+        v["models"]["disabled_models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some("custom"))
+    );
+    assert!(!app.status_error, "{}", app.status);
+    assert!(app.config.grok.preferences.default.is_none());
+    app.handle_key(key(KeyCode::Char('D'))).unwrap();
+    assert!(!crate::grok::connected(&app.paths));
+    let after = config::load(&app.paths.config).unwrap();
+    assert_eq!(before.profiles, after.profiles);
+    assert_eq!(before.codex, after.codex);
+    assert_eq!(before.pi, after.pi);
+    app.select_client_tab(ClientTab::Claude);
+    assert!(!app.grok_enabled);
+    assert_eq!(app.config.profiles, before.profiles);
+}
+
+#[test]
+fn grok_narrow_tabs_settings_discard_mouse_and_reconnect() {
+    let (temp, mut app) = persisted_app();
+    app.grok_home = temp.path().join("grok");
+    app.select_client_tab(ClientTab::Grok);
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    for (width, height) in [(40, 12), (80, 24)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let row: String = (0..width)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect();
+        for label in ["Claude Code", "Codex", "Pi", "Grok", "Usage"] {
+            assert!(row.contains(label), "{row}");
+        }
+    }
+    app.open_grok_preferences(None);
+    app.handle_key(key(KeyCode::Char('x'))).unwrap();
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Grok(ref d)) if matches!(d.as_ref(), grok::Dialog::Settings { discard: true, .. }))
+    );
+    app.handle_key(key(KeyCode::Char('n'))).unwrap();
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert!(app.modal.is_none());
+    app.open_grok_preferences(None);
+    let screen = Rect::new(0, 0, 80, 24);
+    let area = modal_area(screen);
+    let inner = panel_inner(area);
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 4,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(app.modal.is_none());
+    assert_eq!(
+        app.config.grok.preferences.permission_mode.as_deref(),
+        Some("default")
+    );
+    app.apply_grok(false);
+    assert!(!app.status_error, "{}", app.status);
+    let path = app.grok_home.join("config.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("default", "ask");
+    std::fs::write(&path, &text).unwrap();
+    app.apply_grok(false);
+    assert!(
+        matches!(app.modal, Some(Modal::Grok(ref d)) if matches!(d.as_ref(), grok::Dialog::Reconnect { .. }))
+    );
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    app.apply_grok(false);
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(
+        crate::grok::conflicts(&app.paths, &app.grok_home)
+            .unwrap()
+            .is_empty()
+    );
+    app.handle_key(key(KeyCode::F(2))).unwrap();
+    assert_eq!(app.client_tab(), ClientTab::Usage);
+}
+
+#[test]
+fn grok_default_action_and_model_form_use_native_capabilities() {
+    let (_temp, mut app) = persisted_app();
+    let template = app.config.profiles["one"].clone();
+    app.select_client_tab(ClientTab::Grok);
+    app.config = app
+        .update_client_config(|c| {
+            let mut p = template;
+            p.default_model = "first".into();
+            p.models.clear();
+            p.enabled_models = vec!["second".into()];
+            c.profiles.insert("test".into(), p);
+            Ok(())
+        })
+        .unwrap();
+    app.open_add_model_modal();
+    assert!(
+        matches!(app.modal, Some(Modal::Model(ref f)) if !f.fields.iter().any(|f| f.label == "Reasoning max") && f.fields.iter().any(|f| f.label == "Enable now"))
+    );
+    app.modal = None;
+    app.enter_provider_view();
+    let editor = app.provider_editor.as_mut().unwrap();
+    editor.selected = editor
+        .catalog
+        .iter()
+        .position(|m| m.id == "second")
+        .unwrap();
+    app.set_selected_as_default();
+    assert_eq!(
+        app.config.grok.preferences.default.as_deref(),
+        Some("ccsw::test::second")
+    );
+    app.open_grok_preferences(None);
+    if let Some(Modal::Grok(d)) = app.modal.as_mut()
+        && let grok::Dialog::Settings { selected, .. } = d.as_mut()
+    {
+        *selected = 3;
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+        .unwrap();
+    for ch in "custom-effort".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert_eq!(
+        app.config.grok.preferences.reasoning_effort.as_deref(),
+        Some("custom-effort")
+    );
+}
+
+#[test]
+fn grok_oauth_native_default_preserves_providers_and_credentials() {
+    let (temp, mut app) = persisted_app();
+    let provider = app.config.profiles["one"].clone();
+    app.grok_home = temp.path().join("grok");
+    std::fs::create_dir_all(&app.grok_home).unwrap();
+    let auth_path = app.grok_home.join("auth.json");
+    let credentials =
+        r#"{"issuer":{"auth_mode":"oidc","key":"SECRET","email":"user@example.com"}}"#;
+    std::fs::write(&auth_path, credentials).unwrap();
+    app.select_client_tab(ClientTab::Grok);
+    app.config = app
+        .update_client_config(|c| {
+            c.profiles.insert("one".into(), provider);
+            Ok(())
+        })
+        .unwrap();
+    let before = app.config.profiles.clone();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_key(key(KeyCode::Char('o'))).unwrap();
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
+    for (width, height) in [(40, 12), (100, 30)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for label in ["Browser", "Device code", "Use OAuth", "Sign out"] {
+            assert!(rendered.contains(label), "{width}x{height}: {label}");
+        }
+        assert!(!rendered.contains("SECRET"));
+    }
+    app.handle_key(key(KeyCode::Char('u'))).unwrap();
+    assert_eq!(
+        app.config.grok.preferences.default.as_deref(),
+        Some("grok-build")
+    );
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&app.config.profiles).unwrap()
+    );
+    assert!(
+        std::fs::read_to_string(app.grok_home.join("config.toml"))
+            .unwrap()
+            .contains("grok-build")
+    );
+    app.handle_key(key(KeyCode::Char('x'))).unwrap();
+    assert!(
+        app.grok_auth
+            .page
+            .as_ref()
+            .is_some_and(|a| a.confirm_logout)
+    );
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.grok_auth.busy);
+    assert_eq!(std::fs::read_to_string(auth_path).unwrap(), credentials);
+}
+
+#[test]
+fn grok_oauth_rejects_api_overrides_and_missing_login() {
+    let home = tempfile::tempdir().unwrap();
+    assert!(crate::grok::validate_oauth_model(home.path(), "grok-build").is_err());
+    std::fs::write(
+        home.path().join("auth.json"),
+        r#"{"auth_mode":"oidc","key":"SECRET"}"#,
+    )
+    .unwrap();
+    assert!(crate::grok::validate_oauth_model(home.path(), "grok-build").is_ok());
+    assert!(crate::grok::validate_oauth_model(home.path(), "ccsw::provider::model").is_err());
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[model.grok-build]\napi_key='api-key'\n",
+    )
+    .unwrap();
+    assert!(crate::grok::validate_oauth_model(home.path(), "grok-build").is_err());
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[endpoints]\nmodels_base_url='https://example.invalid'\n",
+    )
+    .unwrap();
+    assert!(crate::grok::validate_oauth_model(home.path(), "grok-build").is_err());
+}
+
+#[test]
+fn grok_oauth_provider_row_uses_home_keyboard_and_mouse_navigation() {
+    let (temp, mut app) = persisted_app();
+    app.grok_home = temp.path().join("grok");
+    std::fs::create_dir_all(&app.grok_home).unwrap();
+    std::fs::write(
+        app.grok_home.join("auth.json"),
+        r#"{"auth_mode":"oidc","key":"SECRET","email":"grok@example.com"}"#,
+    )
+    .unwrap();
+    app.select_client_tab(ClientTab::Grok);
+    assert_eq!(app.home_prefix_count(), 2);
+    let before = std::fs::read(&app.paths.config).unwrap();
+    let area = Rect::new(0, 0, 120, 36);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Grok OAuth Account"));
+    assert!(text.contains("grok@example.com"));
+    assert!(!text.contains("SECRET"));
+    assert!(
+        !app.client_footer_controls(ui_areas(area, app.focus, app.view_mode).footer, false)
+            .iter()
+            .any(|(control, _)| *control == FooterControl::Proxy)
+    );
+    app.select_home_index(0);
+    app.move_selection(1);
+    assert_eq!(app.home_selected_index(), 1);
+    assert!(app.home_grok_oauth_selected());
+    assert!(app.selected_profile_id().is_none());
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.home_grok_oauth_selected());
+    assert_eq!(app.view_mode, ViewMode::Home);
+    app.select_home_index(0);
+    let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: panel.x + 2,
+        row: panel_inner(panel).y + app.home_profile_item_heights(panel)[0] as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse, area).unwrap();
+    assert!(app.home_grok_oauth_selected());
+    assert!(app.modal.is_none());
+    app.handle_mouse(mouse, area).unwrap();
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(std::fs::read(&app.paths.config).unwrap(), before);
+    app.select_client_tab(ClientTab::Claude);
+    assert_eq!(app.home_prefix_count(), 1);
+    assert!(!app.home_grok_oauth_selected());
+    app.select_client_tab(ClientTab::Grok);
+    assert_eq!(app.home_selected_index(), 0);
+}
+
+#[test]
+fn grok_oauth_row_does_not_shift_api_provider_selection_or_edits() {
+    let (temp, mut app) = persisted_app();
+    let provider = app.config.profiles["one"].clone();
+    app.grok_home = temp.path().join("grok");
+    app.select_client_tab(ClientTab::Grok);
+    app.config = app
+        .update_client_config(|c| {
+            c.profiles.insert("one".into(), provider);
+            Ok(())
+        })
+        .unwrap();
+    app.select_home_index(1);
+    app.move_selection(1);
+    assert_eq!(app.home_selected_index(), 2);
+    assert_eq!(app.selected_profile_id().as_deref(), Some("one"));
+    app.enter_provider_view();
+    assert_eq!(app.view_mode, ViewMode::Provider);
+    assert!(app.provider_editor.is_some());
+    app.return_home();
+    app.move_selection(-1);
+    assert!(app.home_grok_oauth_selected());
+    app.edit_profile();
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
+}
+
+#[test]
+fn grok_account_management_is_a_page_with_back_navigation_and_visible_errors() {
+    let (temp, mut app) = persisted_app();
+    app.grok_home = temp.path().join("grok");
+    app.select_client_tab(ClientTab::Grok);
+    app.select_home_index(1);
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(app.modal.is_none());
+    assert!(app.grok_auth.page.is_some());
+    for (width, height) in [(40, 12), (120, 36)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Grok OAuth Accounts"));
+        assert!(text.contains("Account configuration"));
+        assert!(!text.contains("Providers · F2"));
+        assert!(text.contains("Grok accounts"));
+    }
+    assert!(
+        !app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+            .unwrap()
+    );
+    assert!(app.grok_auth.page.is_some());
+    assert!(app.handle_key(key(KeyCode::Char('u'))).is_err());
+    assert!(app.grok_auth.page.is_some());
+    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Sign in to Grok OAuth first"));
+    // Refresh and Back operate on the account page, without opening a modal.
+    let area = Rect::new(0, 0, 120, 36);
+    let refresh = grok_auth::account_actions(area)[3];
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: refresh.x,
+        row: refresh.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse, area).unwrap();
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
+    app.grok_auth.busy = true;
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.grok_auth.page.is_some());
+    app.select_client_tab(ClientTab::Claude);
+    assert!(app.grok_enabled);
+    app.grok_auth.busy = false;
+    app.handle_mouse(
+        MouseEvent {
+            column: 3,
+            row: 1,
+            ..mouse
+        },
+        area,
+    )
+    .unwrap();
+    assert!(app.grok_auth.page.is_none());
+    assert!(app.home_grok_oauth_selected());
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    app.handle_key(key(KeyCode::F(2))).unwrap();
+    assert!(app.usage.active);
+    app.select_client_tab(ClientTab::Claude);
+    assert!(!app.grok_enabled);
+    assert!(app.grok_auth.page.is_none());
+}
+
+#[test]
+fn grok_accounts_match_codex_vertical_layout_and_footer_at_all_sizes() {
+    let (temp, mut app) = persisted_app();
+    app.grok_home = temp.path().join("grok");
+    std::fs::create_dir_all(&app.grok_home).unwrap();
+    std::fs::write(
+        app.grok_home.join("auth.json"),
+        r#"{"auth_mode":"oidc","key":"SECRET","email":"account@example.com"}"#,
+    )
+    .unwrap();
+    app.select_client_tab(ClientTab::Grok);
+    app.open_grok_auth();
+    for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+        let screen = Rect::new(0, 0, width, height);
+        let rows = account_page_rows(screen, false);
+        for row in rows {
+            assert_eq!(row.x, 0);
+            assert_eq!(row.width, width);
+        }
+        assert_eq!(rows[1].bottom(), rows[2].y);
+        assert_eq!(rows[2].bottom(), rows[3].y);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let line = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(line(rows[1].y).contains("Grok accounts"));
+        assert!(line(rows[1].y + 1).contains("account@example.com"));
+        assert!(line(rows[2].y).contains("Account configuration"));
+        if height >= 16 {
+            assert!(line(rows[2].y + 1).contains("Native model"));
+        }
+        let buttons = grok_auth::account_actions(screen);
+        for button in &buttons {
+            assert!(button.y >= rows[3].y && button.bottom() <= screen.bottom());
+            assert!(button.right() <= screen.right());
+        }
+        let refresh = buttons[3];
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: refresh.x,
+                row: refresh.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+        assert!(app.grok_auth.page.is_some());
+    }
+    app.grok_auth.busy = true;
+    let screen = Rect::new(0, 0, 40, 12);
+    assert_eq!(account_page_rows(screen, true)[1].height, 0);
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Login progress"));
+    assert!(text.contains("Cancel/Esc"));
+    assert!(!text.contains("Grok accounts"));
+    app.grok_auth.busy = false;
 }

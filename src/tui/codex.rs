@@ -665,20 +665,17 @@ impl App {
             MouseEventKind::ScrollUp => {
                 self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1)
             }
-            MouseEventKind::Down(MouseButton::Left) if mouse.row > area.y + 4 => {
-                let rows = Layout::vertical([
-                    Constraint::Length(4),
-                    Constraint::Percentage(40),
-                    Constraint::Min(3),
-                    Constraint::Length(3),
-                ])
-                .split(area);
+            MouseEventKind::Down(MouseButton::Left) => {
+                let rows = account_page_rows(area, false);
                 let visible = rows[1].height.saturating_sub(2) as usize;
                 let offset = self
                     .codex_ui
                     .selected
                     .saturating_sub(visible.saturating_sub(1));
-                if mouse.row >= rows[1].bottom().saturating_sub(1) {
+                if mouse.row <= rows[1].y
+                    || mouse.row >= rows[1].bottom().saturating_sub(1)
+                    || !contains(rows[1], mouse.column, mouse.row)
+                {
                     return Ok(true);
                 }
                 let index = (mouse.row - rows[1].y - 1) as usize + offset;
@@ -692,17 +689,7 @@ impl App {
     }
     pub(super) fn draw_codex_accounts(&self, frame: &mut ratatui::Frame, area: Rect) {
         let login_busy = self.codex_ui.busy && !self.codex_ui.refreshing;
-        let rows = Layout::vertical([
-            Constraint::Length(if login_busy { 3 } else { 4 }),
-            if login_busy {
-                Constraint::Length(0)
-            } else {
-                Constraint::Percentage(40)
-            },
-            Constraint::Min(3),
-            Constraint::Length(3),
-        ])
-        .split(area);
+        let rows = account_page_rows(area, login_busy);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -999,7 +986,7 @@ impl App {
     }
 }
 
-fn usage_display_lines(details: &str, width: u16) -> Vec<Line<'static>> {
+pub(super) fn usage_display_lines(details: &str, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for line in details.lines() {
         if let Some((label, rest)) = line.split_once(": ")

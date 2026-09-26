@@ -14,7 +14,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("F4", "TUI theme; Claude presets and custom environment"),
             (
                 "Click top tabs / F2",
-                "Switch independent Claude Code / Codex / Pi configurations",
+                "Switch independent Claude Code / Codex / Pi / Grok configurations",
             ),
             ("q", "Quit CCSW"),
         ],
@@ -163,6 +163,8 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
     };
     let title = if help.codex {
         title.replacen("Help", "Codex Help", 1)
+    } else if help.grok {
+        title.replacen("Help", "Grok Help", 1)
     } else if help.pi {
         title.replacen("Help", "Pi Help", 1)
     } else {
@@ -253,6 +255,8 @@ pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal
                 if help.section == HelpSection::AllEnabled && !help.codex_accounts {
                     vec![Line::raw("All Models · enabled models across API providers"), Line::raw("↑↓ select · Enter open provider · Space disable model"), Line::raw("p sync catalog and set startup default · Esc back"), Line::raw("ChatGPT enabled: API models pause; the ChatGPT Account card shows the subscription state."), Line::raw("Home → ChatGPT Account → Space: confirm enable or disable and restore API models.")]
                 } else { codex_help_content(help.section) }
+            } else if help.grok {
+                grok_help_content(help.section)
             } else if help.pi {
                 pi_help_content(help.section)
             } else {
@@ -408,4 +412,41 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
             ])
         })
         .collect()
+}
+
+fn grok_help_content(section: HelpSection) -> Vec<Line<'static>> {
+    let mut lines = help_content(section, true);
+    for line in &mut lines {
+        for span in &mut line.spans {
+            span.content = span
+                .content
+                .replace("Claude", "Grok")
+                .replace(
+                    "Connect or sync all models / manage proxy",
+                    "Connect/sync models; direct API",
+                )
+                .into();
+        }
+    }
+    lines.extend([
+        Line::raw("i import native models/settings (preview) · s connection status · D disconnect"),
+        Line::raw(
+            "p connects all enabled models and sets the selected default; saves then auto-sync.",
+        ),
+        Line::raw("Grok OAuth Account: Enter / click again opens the account page; Esc returns."),
+        Line::raw(
+            "OAuth: b browser · d device code · u use native model · r refresh usage · x sign out.",
+        ),
+        Line::raw("Account usage: credits, resets, prepaid/on-demand amounts · PgUp/PgDn scroll."),
+        Line::raw("Failed refresh retains the current account's cached usage; expired login needs reauth."),
+        Line::raw("F4 → c: Grok defaults, reasoning, permissions, compact mode and thinking."),
+        Line::raw("Settings: Alt+M cycles configured model keys; model IDs may also be typed."),
+        Line::raw(
+            "Uses $GROK_HOME/config.toml or ~/.grok/config.toml; restart Grok after syncing.",
+        ),
+        Line::raw(
+            "External managed-field edits pause automatic sync; p previews reconnect conflicts.",
+        ),
+    ]);
+    lines
 }

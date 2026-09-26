@@ -71,6 +71,7 @@ pub(super) enum ProxyControl {
 
 #[derive(Clone)]
 pub(super) enum Modal {
+    Grok(Box<grok::Dialog>),
     Appearance(theme::Appearance),
     Preferences(PreferencesForm),
     Import(Box<ImportCandidate>),
@@ -112,6 +113,7 @@ impl HelpSection {
 
 #[derive(Clone)]
 pub(super) struct HelpModal {
+    pub(super) grok: bool,
     pub(super) pi: bool,
     pub(super) codex: bool,
     pub(super) codex_accounts: bool,
@@ -127,6 +129,7 @@ impl HelpModal {
             ViewMode::Provider => HelpSection::Provider,
         };
         Self {
+            grok: false,
             pi: false,
             codex: false,
             codex_accounts: false,

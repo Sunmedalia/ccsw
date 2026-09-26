@@ -30,6 +30,12 @@ impl App {
                     .len(),
             );
         }
+        if self.grok_enabled {
+            heights.push(
+                self.grok_oauth_provider_lines(panel.width.saturating_sub(2))
+                    .len(),
+            );
+        }
         heights.extend(self.profile_ids().iter().map(|id| {
             self.provider_home_lines(id, panel.width.saturating_sub(2))
                 .len()
@@ -84,12 +90,20 @@ impl App {
     }
 
     pub(super) fn home_prefix_count(&self) -> usize {
-        if self.codex_ui.enabled { 2 } else { 1 }
+        if self.codex_ui.enabled || self.grok_enabled {
+            2
+        } else {
+            1
+        }
     }
 
     pub(super) fn home_selected_index(&self) -> usize {
         if self.home_all_selected || self.config.profiles.is_empty() {
-            usize::from(self.codex_ui.enabled && !self.codex_ui.home_models)
+            if self.grok_enabled {
+                usize::from(self.grok_auth.home_selected)
+            } else {
+                usize::from(self.codex_ui.enabled && !self.codex_ui.home_models)
+            }
         } else {
             self.profile_idx.saturating_add(self.home_prefix_count())
         }
@@ -97,6 +111,7 @@ impl App {
 
     pub(super) fn select_home_index(&mut self, index: usize) {
         self.codex_ui.home_models = self.codex_ui.enabled && index == 0;
+        self.grok_auth.home_selected = self.grok_enabled && index == 1;
         if index < self.home_prefix_count() {
             self.home_all_selected = true;
             self.model_idx = 0;
@@ -250,7 +265,9 @@ impl App {
             let next = ((current as isize + delta).rem_euclid(len as isize)) as usize;
             self.select_home_index(next);
             self.status_error = false;
-            self.status = if self.home_account_selected() {
+            self.status = if self.home_grok_oauth_selected() {
+                "Grok OAuth Account · Enter to configure login and native model".into()
+            } else if self.home_account_selected() {
                 "ChatGPT Account · Enter to import or switch accounts".into()
             } else if self.home_all_selected {
                 format!(
@@ -507,6 +524,9 @@ impl App {
             form.fields
                 .retain(|field| field.label != "Enable now" && field.label != "Reasoning max");
         }
+        if self.grok_enabled {
+            form.fields.retain(|field| field.label != "Reasoning max");
+        }
         form.original_profile = self.selected_profile().cloned().map(Box::new);
         self.modal = Some(Modal::Model(form));
     }
@@ -562,6 +582,10 @@ impl App {
     }
 
     pub(super) fn enter_provider_view(&mut self) {
+        if self.home_grok_oauth_selected() {
+            self.open_grok_auth();
+            return;
+        }
         self.provider_card_selected = false;
         self.view_mode = ViewMode::Provider;
         self.focus = Focus::Models;
@@ -582,6 +606,10 @@ impl App {
     }
 
     pub(super) fn enter_all_enabled_view(&mut self) {
+        if self.home_grok_oauth_selected() {
+            self.open_grok_auth();
+            return;
+        }
         if self.home_account_selected() {
             self.open_codex_accounts();
             return;
@@ -658,6 +686,10 @@ impl App {
     }
 
     pub(super) fn edit_profile(&mut self) {
+        if self.home_grok_oauth_selected() {
+            self.open_grok_auth();
+            return;
+        }
         self.reload_for_edit();
         self.status_error = false;
         let Some(id) = self.selected_profile_id() else {
@@ -672,6 +704,9 @@ impl App {
     }
 
     pub(super) fn open_proxy_manager(&mut self) {
+        if self.grok_enabled {
+            return;
+        }
         if self.pi_enabled {
             return;
         }
@@ -686,6 +721,7 @@ impl App {
 
     pub(super) fn open_help(&mut self) {
         let mut help = HelpModal::for_view(self.view_mode);
+        help.grok = self.grok_enabled;
         help.pi = self.pi_enabled;
         help.codex = self.codex_ui.enabled;
         help.codex_accounts = self.codex_ui.accounts;
@@ -742,8 +778,9 @@ impl App {
                 self.model_idx = self.model_idx.min(self.models().len().saturating_sub(1));
                 self.status_error = false;
                 self.status = format!(
-                    "Enabled all {} models in {profile_id} · click Sync all to Claude",
-                    self.models().len()
+                    "Enabled all {} models in {profile_id} · press p to sync {}",
+                    self.models().len(),
+                    self.config_tab().label()
                 );
             }
             Err(error) => self.set_error(format!("Could not enable all models: {error:#}")),
@@ -751,6 +788,10 @@ impl App {
     }
 
     pub(super) fn sync_all_to_claude(&mut self) {
+        if self.grok_enabled {
+            self.apply_grok(false);
+            return;
+        }
         if self.pi_enabled {
             self.apply_pi();
             return;
@@ -858,6 +899,21 @@ impl App {
                 .as_ref()
                 .map(|e| e.default_model.clone())
                 .unwrap_or_default();
+            if self.grok_enabled
+                && let Some(id) = self.selected_profile_id()
+            {
+                let key = crate::grok::model_key(&self.config.grok, &id, &def);
+                match self.update_client_config(|c| {
+                    c.grok.preferences.default = Some(key);
+                    Ok(())
+                }) {
+                    Ok(config) => self.config = config,
+                    Err(error) => {
+                        self.set_error(format!("Could not save Grok default: {error:#}"));
+                        return;
+                    }
+                }
+            }
             self.status = format!("Default model set to {def}");
             return;
         }
