@@ -320,7 +320,7 @@ impl CachedFile {
                 #[cfg(windows)]
                 {
                     let path = url.path().as_bytes();
-                    url.host_str().is_some_and(|host| !host.is_empty())
+                    (url.host_str().is_some_and(|host| !host.is_empty()) && path.len() > 1)
                         || (path.len() >= 4
                             && path[0] == b'/'
                             && path[1].is_ascii_alphabetic()
