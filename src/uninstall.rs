@@ -786,7 +786,18 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
         } else {
             file.verify_with_locks(&locks)?;
         }
-        fs::remove_file(&file.path).with_context(|| {
+        let removal = fs::remove_file(&file.path);
+        if removal.as_ref().is_err_and(|error| {
+            error.kind() == std::io::ErrorKind::NotFound
+                && file
+                    .path
+                    .file_name()
+                    .is_some_and(|name| name == "usage.sqlite3-wal" || name == "usage.sqlite3-shm")
+        }) {
+            // SQLite may remove its sidecars while the proxy finishes closing.
+            continue;
+        }
+        removal.with_context(|| {
             format!(
                 "could not remove {}; uninstall incomplete",
                 file.path.display()
