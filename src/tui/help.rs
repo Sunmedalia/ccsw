@@ -431,7 +431,7 @@ fn grok_help_content(section: HelpSection) -> Vec<Line<'static>> {
     lines.extend([
         Line::raw("i import native models/settings (preview) · s connection status · D disconnect"),
         Line::raw(
-            "p connects all enabled models and sets the selected default; saves then auto-sync.",
+            "p syncs enabled models from every provider; selected model only sets the default.",
         ),
         Line::raw("Grok OAuth Account: Enter / click again opens the account page; Esc returns."),
         Line::raw(
@@ -439,6 +439,7 @@ fn grok_help_content(section: HelpSection) -> Vec<Line<'static>> {
         ),
         Line::raw("Account usage: credits, resets, prepaid/on-demand amounts · PgUp/PgDn scroll."),
         Line::raw("Failed refresh retains the current account's cached usage; expired login needs reauth."),
+        Line::raw("Restart Grok, then /model lists all synced models; grok models verifies the catalog."),
         Line::raw("F4 → c: Grok defaults, reasoning, permissions, compact mode and thinking."),
         Line::raw("Settings: Alt+M cycles configured model keys; model IDs may also be typed."),
         Line::raw(

@@ -248,9 +248,15 @@ impl App {
         })();
         match result {
             Ok(()) => {
-                self.status =
-                    "Grok synced · restart Grok, then use /model · saves now sync automatically"
-                        .into();
+                let count: usize = self
+                    .config
+                    .profiles
+                    .values()
+                    .map(|profile| crate::discovery::active_models(profile, &[]).len())
+                    .sum();
+                self.status = format!(
+                    "Grok synced {count} enabled models · restart Grok, then use /model · saves sync automatically"
+                );
                 self.status_error = false;
             }
             Err(e) => self.set_error(format!("Local changes saved; Grok sync failed: {e:#}")),

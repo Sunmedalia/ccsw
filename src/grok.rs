@@ -1062,6 +1062,11 @@ mod tests {
         ] {
             let mut p = profile(format);
             p.base_url = url.clone();
+            let mut second = p.models[0].clone();
+            second.id = "test-other".into();
+            second.label = Some("Another model".into());
+            p.models.push(second);
+            p.enabled_models.push("test-other".into());
             c.profiles.insert(id.into(), p);
         }
         c.grok.preferences = Preferences {
@@ -1089,6 +1094,11 @@ mod tests {
         let inspect = run("inspect");
         let models = run("models");
         c.profiles.get_mut("a").unwrap().enabled = false;
+        c.profiles
+            .get_mut("b")
+            .unwrap()
+            .disabled_models
+            .push("test-other".into());
         apply(&paths, &home, &c, None, false).unwrap();
         let disabled = run("models");
         stop.store(true, Ordering::Relaxed);
@@ -1100,9 +1110,14 @@ mod tests {
         assert!(list.contains("ccsw::a::test"));
         assert!(list.contains("ccsw::b::test"));
         assert!(list.contains("ccsw::c::test"));
+        for provider in ["a", "b", "c"] {
+            assert!(list.contains(&format!("ccsw::{provider}::test-other")));
+        }
         let list = String::from_utf8_lossy(&disabled.stdout);
         assert!(!list.contains("ccsw::a::test"));
+        assert!(!list.contains("ccsw::b::test-other"));
         assert!(list.contains("ccsw::b::test"));
+        assert!(list.contains("ccsw::c::test-other"));
     }
     #[test]
     fn invalid_native_toml_does_not_expose_credentials_in_errors() {
@@ -1116,5 +1131,73 @@ mod tests {
         let sync_error = apply(&paths, &home, &c, None, false).unwrap_err();
         assert!(!format!("{import_error:#}").contains("private-sensitive-value"));
         assert!(!format!("{sync_error:#}").contains("private-sensitive-value"));
+    }
+}
+
+#[cfg(test)]
+mod picker_catalog_tests {
+    use super::*;
+    #[test]
+    fn selected_default_keeps_all_enabled_models_from_every_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("grok");
+        fs::create_dir_all(&home).unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("ccsw.toml"),
+            state_dir: temp.path().join("state"),
+            cache: temp.path().join("cache.json"),
+        };
+        fs::write(
+            home.join("config.toml"),
+            "[model.native]\nmodel='native-upstream'\nbase_url='https://native.example/v1'\n",
+        )
+        .unwrap();
+        let mut config = config::Config::default();
+        for (id, format) in [
+            ("one", ApiFormat::Anthropic),
+            ("two", ApiFormat::OpenaiChat),
+            ("three", ApiFormat::OpenaiResponses),
+        ] {
+            let profile: Profile = serde_json::from_value(serde_json::json!({
+                "name": id, "enabled": true, "base_url": format!("https://{id}.example/v1"),
+                "api_format": format, "credential": {"kind":"bearer", "value":format!("test-{id}")},
+                "default_model": "first", "enabled_models": ["second"],
+                "models": [{"id":"first"}, {"id":"second"}, {"id":"unselected"}],
+            }))
+            .unwrap();
+            config.profiles.insert(id.into(), profile);
+        }
+        apply(
+            &paths,
+            &home,
+            &config,
+            Some("ccsw::one::first".into()),
+            false,
+        )
+        .unwrap();
+        let doc: toml::Value =
+            toml::from_str(&fs::read_to_string(home.join("config.toml")).unwrap()).unwrap();
+        let models = doc["model"].as_table().unwrap();
+        assert_eq!(models.len(), 7); // Six managed models plus the existing native model.
+        for provider in ["one", "two", "three"] {
+            for model in ["first", "second"] {
+                let entry = &models[&format!("ccsw::{provider}::{model}")];
+                assert_eq!(entry["model"].as_str(), Some(model));
+                assert_eq!(
+                    entry["base_url"].as_str(),
+                    Some(format!("https://{provider}.example/v1").as_str())
+                );
+                assert_eq!(
+                    entry["api_key"].as_str(),
+                    Some(format!("test-{provider}").as_str())
+                );
+            }
+            assert!(!models.contains_key(&format!("ccsw::{provider}::unselected")));
+        }
+        assert_eq!(doc["models"]["default"].as_str(), Some("ccsw::one::first"));
+        disconnect(&paths, &home).unwrap();
+        let restored: toml::Value =
+            toml::from_str(&fs::read_to_string(home.join("config.toml")).unwrap()).unwrap();
+        assert_eq!(restored["model"].as_table().unwrap().len(), 1);
     }
 }
