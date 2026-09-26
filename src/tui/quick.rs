@@ -18,12 +18,15 @@ pub(super) const RED: Color = Color::Rgb(236, 139, 131);
 pub(super) const GREEN: Color = Color::Rgb(147, 204, 178);
 pub(super) const RAIL: Color = Color::Rgb(48, 67, 84);
 const LABEL: &str = "CCSW Pulse";
+mod accounts;
+const CLIENTS: [&str; 4] = ["Claude", "Codex", "Grok CLI", "All"];
 
 fn initial_client(agent: Option<&str>) -> usize {
     match agent.unwrap_or("").to_ascii_lowercase().as_str() {
         "claude" | "claude-code" | "claudecode" | "claude code" => 0,
         "codex" => 1,
-        _ => 2,
+        "grok" | "grokcli" | "grok-cli" | "grok cli" => 2,
+        _ => 3,
     }
 }
 
@@ -60,6 +63,7 @@ fn agent_session(pane: &serde_json::Value) -> Option<AgentSession> {
     let client = match (pane["agent"].as_str()?, session["agent"].as_str()?) {
         ("codex", "codex") => "Codex",
         ("claude", "claude") => "Claude",
+        ("grok", "grok") => "Grok",
         _ => return None,
     };
     let value = session["value"].as_str()?;
@@ -91,7 +95,7 @@ fn focused_agent(panes: &serde_json::Value, tab_id: &str) -> Option<FocusedAgent
             }
             let pane_id = pane["pane_id"].as_str()?;
             let client = initial_client(pane["agent"].as_str());
-            (client != 2).then(|| FocusedAgent {
+            (client != 3).then(|| FocusedAgent {
                 pane_id: pane_id.into(),
                 client,
                 session: agent_session(pane),
@@ -126,7 +130,7 @@ fn focused_pane(
     }
     let pane_id = pane["pane_id"].as_str()?;
     let client = initial_client(pane["agent"].as_str());
-    (client != 2).then(|| FocusedAgent {
+    (client != 3).then(|| FocusedAgent {
         pane_id: pane_id.into(),
         client,
         session: agent_session(pane),
@@ -212,6 +216,7 @@ fn stable_agent_session(
 
 #[derive(Default)]
 struct Monitor {
+    accounts: accounts::Accounts,
     pulse_theme: theme::PulseTheme,
     snapshot: Snapshot,
     sessions: crate::sessions::Snapshot,
@@ -838,7 +843,245 @@ impl Monitor {
             }
         }
     }
+    fn account_content(&self, width: u16) -> Vec<Line<'static>> {
+        let (title, info) = match self.client {
+            1 => ("CODEX ACCOUNT", &self.accounts.codex),
+            2 => ("GROK CLI ACCOUNT", &self.accounts.grok),
+            _ => return vec![],
+        };
+        let mut out = vec![section(title, width)];
+        let Some(card) = &info.card else {
+            out.push(line(
+                if info.lines.is_empty() {
+                    "◌ Loading…"
+                } else {
+                    "○ Account unavailable"
+                },
+                SOFT,
+            ));
+            out.push(Line::default());
+            return out;
+        };
+        out.push(pair(&card.name, &card.badge, width, GREEN));
+        if !card.email.is_empty() {
+            out.push(line(clipped(&card.email, width.into()), INK));
+        }
+        for (label, percent, reset) in &card.gauges {
+            out.push(Line::default());
+            out.push(pair(label, format!("{percent:.0}% used"), width, GOLD));
+            let filled = (percent.clamp(0.0, 100.0) / 100.0 * f64::from(width)).round() as usize;
+            out.push(Line::from(vec![
+                Span::styled(
+                    "━".repeat(filled),
+                    Style::default().fg(if *percent >= 90.0 { RED } else { GOLD }),
+                ),
+                Span::styled(
+                    "━".repeat(usize::from(width).saturating_sub(filled)),
+                    Style::default().fg(RAIL),
+                ),
+            ]));
+            if !reset.is_empty() {
+                out.push(pair(
+                    "Reset",
+                    clipped(reset, width.saturating_sub(7).into()),
+                    width,
+                    SOFT,
+                ));
+            }
+        }
+        for (label, value) in &card.rows {
+            out.push(pair(
+                label,
+                clipped(value, width.saturating_sub(label.len() as u16 + 1).into()),
+                width,
+                INK,
+            ));
+        }
+        if !card.models.is_empty() {
+            out.push(Line::default());
+            out.push(section("MODELS", width));
+            for model in &card.models {
+                out.push(line(clipped(&format!("· {model}"), width.into()), SOFT));
+            }
+        }
+        out.push(Line::default());
+        out
+    }
+    fn grok_gateway_tokens(&self, width: u16) -> Vec<Line<'static>> {
+        let totals = metrics(&self.snapshot, Some("Grok")).total;
+        let ready = self.refreshed.is_some();
+        let unknown = !ready || (totals.calls > 0 && totals.unknown == totals.calls);
+        let value = if unknown {
+            "—".into()
+        } else {
+            short(totals.input + totals.output)
+        };
+        let mut out = vec![
+            pair("GATEWAY TOKENS", self.snapshot.today(), width, BLUE),
+            Line::default(),
+        ];
+        out.extend(if width < 30 {
+            mini_token_total(&value, width, BLUE)
+        } else {
+            token_digits(&value, BLUE)
+        });
+        let input = if unknown {
+            "—".into()
+        } else {
+            short(totals.input)
+        };
+        let output = if unknown {
+            "—".into()
+        } else {
+            short(totals.output)
+        };
+        out.push(duo_line(
+            width,
+            ("↑ Input", "↑", &input, BLUE),
+            ("↓ Output", "↓", &output, GOLD),
+        ));
+        if ready {
+            out.extend(gateway_cache_meter(&totals, unknown, width));
+            out.push(pair("Requests", totals.calls.to_string(), width, INK));
+            if totals.unknown > 0 {
+                out.push(pair(
+                    "Unknown tokens",
+                    totals.unknown.to_string(),
+                    width,
+                    GOLD,
+                ));
+            }
+            if totals.calls == 0 {
+                out.push(line("○ No gateway traffic", SOFT));
+            }
+        } else {
+            out.push(line("◌ Loading gateway…", SOFT));
+        }
+        out.push(Line::default());
+        out
+    }
+    fn grok_tokens(&self, width: u16) -> Vec<Line<'static>> {
+        let selected = self.active_session.as_ref().filter(|s| s.client == "Grok");
+        let row = if selected.is_some() {
+            self.active_row()
+        } else {
+            self.sessions
+                .rows
+                .iter()
+                .filter(|s| s.client == "Grok")
+                .max_by_key(|s| s.updated)
+        };
+        let mut out = vec![
+            pair(
+                "SESSION TOKENS",
+                if selected.is_some() {
+                    "● Active"
+                } else {
+                    "Recent"
+                },
+                width,
+                GREEN,
+            ),
+            Line::default(),
+        ];
+        let value = row
+            .filter(|s| s.tokens.known)
+            .map(|s| short(s.tokens.total()))
+            .unwrap_or("—".into());
+        out.extend(if width < 30 {
+            mini_token_total(&value, width, BLUE)
+        } else {
+            token_digits(&value, BLUE)
+        });
+        if let Some(row) = row.filter(|s| s.tokens.known) {
+            let t = &row.tokens;
+            out.push(duo_line(
+                width,
+                ("↑ Input", "↑", &short(t.input), BLUE),
+                ("↓ Output", "↓", &short(t.output), GOLD),
+            ));
+            let total = t.total().max(1);
+            let split = (t.input as f64 / total as f64 * f64::from(width)).round() as usize;
+            out.push(Line::from(vec![
+                Span::styled(
+                    "━".repeat(split.min(width.into())),
+                    Style::default().fg(BLUE),
+                ),
+                Span::styled(
+                    "━".repeat(usize::from(width).saturating_sub(split)),
+                    Style::default().fg(GOLD),
+                ),
+            ]));
+            out.push(duo_line(
+                width,
+                ("↺ Read", "R", &short(t.read), GREEN),
+                ("Write", "W", &short(t.write), SOFT),
+            ));
+            out.push(pair(
+                "Cache hit",
+                t.cache_reuse_percent()
+                    .map(|p| format!("{p:.0}%"))
+                    .unwrap_or("—".into()),
+                width,
+                GREEN,
+            ));
+            out.push(line(
+                clipped(&row.id.chars().take(12).collect::<String>(), width.into()),
+                SOFT,
+            ));
+        } else {
+            out.push(line(
+                if self.sessions_refreshed.is_none() {
+                    "◌ Reading sessions…"
+                } else {
+                    "○ No token data yet"
+                },
+                SOFT,
+            ));
+        }
+        out.push(Line::default());
+        out
+    }
+    fn content(&self, width: u16) -> Vec<Line<'static>> {
+        if self.help {
+            return self.stats_content(width);
+        }
+        if self.client == 2 {
+            if self.sessions_mode {
+                return self.session_content(width);
+            }
+            if self.chart_mode {
+                return self.chart_content(width);
+            }
+            let mut out = self.grok_gateway_tokens(width);
+            out.extend(self.grok_tokens(width));
+            out.extend(self.account_content(width));
+            return out;
+        }
+        let mut out = if !self.sessions_mode && !self.chart_mode {
+            self.account_content(width)
+        } else {
+            vec![]
+        };
+        out.extend(self.stats_content(width));
+        out
+    }
     fn mini_content(&self, width: u16) -> Vec<Line<'static>> {
+        if self.help {
+            return self.mini_stats_content(width);
+        }
+        if self.client == 2 {
+            return self.content(width);
+        }
+        let mut out = if !self.sessions_mode && !self.chart_mode {
+            self.account_content(width)
+        } else {
+            vec![]
+        };
+        out.extend(self.mini_stats_content(width));
+        out
+    }
+    fn mini_stats_content(&self, width: u16) -> Vec<Line<'static>> {
         if self.help {
             let mut out = vec![
                 mini_line("↑ input  ↓ output", width, BLUE),
@@ -1157,15 +1400,15 @@ impl Monitor {
                 Rect::new(area.right().saturating_sub(4), area.y, 4, 1),
             );
         }
-        let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(Rect::new(
+        let tabs = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(Rect::new(
             area.x,
             area.y.saturating_add(1),
             area.width,
             1,
         ));
-        for (i, name) in ["Claude", "Codex", "All"].into_iter().enumerate() {
+        for (i, name) in CLIENTS.into_iter().enumerate() {
             let label = if area.width < 21 {
-                ["Cl", "Cx", "All"][i]
+                ["Cl", "Cx", "Gk", "All"][i]
             } else {
                 name
             };
@@ -1180,15 +1423,25 @@ impl Monitor {
         }
         let body = mini_body(area);
         let mut content = self.mini_content(body.width);
-        if self.visual_mode && !self.help && !self.sessions_mode && !self.chart_mode {
+        if self.client != 2
+            && self.visual_mode
+            && !self.help
+            && !self.sessions_mode
+            && !self.chart_mode
+        {
             let totals = metrics(&self.snapshot, self.client()).total;
-            content.insert(4, health_meter(&totals, body.width));
+            content.insert(
+                self.account_content(body.width).len() + 4,
+                health_meter(&totals, body.width),
+            );
         }
         self.limit = (content.len() as u16).saturating_sub(body.height);
         self.scroll = self.scroll.min(self.limit);
         f.render_widget(Paragraph::new(content).scroll((self.scroll, 0)), body);
         if area.height >= 4 {
-            let status = if let Some(error) = &self.error {
+            let status = if self.client == 2 && self.error.is_none() {
+                "● Auto-update · r refresh".into()
+            } else if let Some(error) = &self.error {
                 format!("! {error}")
             } else if let Some(notice) = &self.notice {
                 notice.clone()
@@ -1226,7 +1479,7 @@ impl Monitor {
         }
     }
     fn client(&self) -> Option<&'static str> {
-        [Some("Claude"), Some("Codex"), None][self.client]
+        [Some("Claude"), Some("Codex"), Some("Grok"), None][self.client]
     }
     fn provider_header_hit(&self, body: Rect, column: u16, row: u16) -> bool {
         if self.sessions_mode || self.chart_mode || !contains(body, column, row) {
@@ -1591,7 +1844,7 @@ impl Monitor {
         ));
         out
     }
-    fn content(&self, width: u16) -> Vec<Line<'static>> {
+    fn stats_content(&self, width: u16) -> Vec<Line<'static>> {
         if self.sessions_mode {
             return self.session_content(width);
         }
@@ -2124,7 +2377,11 @@ impl Monitor {
         } else if self.chart_mode {
             "◈ CHARTS / TODAY"
         } else {
-            "◈ GATEWAY / TODAY"
+            if self.client == 2 {
+                "◈ GROK / USAGE"
+            } else {
+                "◈ GATEWAY / TODAY"
+            }
         };
         f.render_widget(
             Paragraph::new(clipped(title, usize::from(inner.width.saturating_sub(10))))
@@ -2140,15 +2397,21 @@ impl Monitor {
             Paragraph::new("?(?)").style(Style::default().fg(SOFT)),
             Rect::new(inner.right() - 4, inner.y, 4, 1),
         );
-        let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(Rect::new(
+        let tabs = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(Rect::new(
             inner.x,
             inner.y + 2,
             inner.width,
             1,
         ));
-        for (i, name) in ["Claude", "Codex", "All"].into_iter().enumerate() {
+        for (i, name) in CLIENTS.into_iter().enumerate() {
             f.render_widget(
-                Paragraph::new(name).alignment(Alignment::Center).style(
+                Paragraph::new(if i == 2 && tabs[i].width < 8 {
+                    "Grok"
+                } else {
+                    name
+                })
+                .alignment(Alignment::Center)
+                .style(
                     Style::default()
                         .fg(if self.client == i { BG } else { SOFT })
                         .bg(if self.client == i { BLUE } else { BG }),
@@ -2195,6 +2458,8 @@ impl Monitor {
             } else {
                 "● Charts auto-update · c: Home".into()
             }
+        } else if self.client == 2 && self.error.is_none() {
+            "● Auto-update · r refresh".into()
         } else if let Some(error) = &self.error {
             format!("! STALE · {error}")
         } else if let Some(note) = &self.notice {
@@ -2423,6 +2688,10 @@ fn follow_focus_events(
 }
 
 pub(super) fn run(paths: AppPaths) -> Result<()> {
+    let initial = initial_client(std::env::var("CCSW_MONITOR_CLIENT").ok().as_deref());
+    let (account_send, account_updates) = mpsc::sync_channel(1);
+    let (account_refresh, account_requests) = mpsc::sync_channel(1);
+    accounts::spawn(paths.clone(), account_send, account_requests, initial);
     let (send, updates) = mpsc::sync_channel(1);
     let (refresh, requests) = mpsc::sync_channel(1);
     let (session_send, session_updates) = mpsc::sync_channel(1);
@@ -2489,7 +2758,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let (mut terminal, _guard) = setup_terminal()?;
     let mut monitor = Monitor {
         pulse_theme: theme::PulseTheme::load(&theme_paths),
-        client: initial_client(std::env::var("CCSW_MONITOR_CLIENT").ok().as_deref()),
+        client: initial,
         source_pane,
         ..Default::default()
     };
@@ -2501,6 +2770,8 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let mut redraw = true;
     let mut last_theme_check = Instant::now();
     let mut last_clock_redraw = Instant::now();
+    let mut account_client = initial;
+    let mut account_force = false;
     loop {
         if last_theme_check.elapsed() >= Duration::from_secs(2) {
             let theme = theme::PulseTheme::load(&theme_paths);
@@ -2531,6 +2802,18 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                 Err(error) => monitor.error = Some(error),
             }
             redraw = true;
+        }
+        while let Ok(accounts) = account_updates.try_recv() {
+            monitor.accounts = accounts;
+            redraw = true;
+        }
+        if (monitor.client != account_client || account_force)
+            && account_refresh
+                .try_send((monitor.client, account_force))
+                .is_ok()
+        {
+            account_client = monitor.client;
+            account_force = false;
         }
         if last_clock_redraw.elapsed() >= Duration::from_secs(1) {
             redraw = true;
@@ -2611,7 +2894,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                             MouseEventKind::Down(MouseButton::Left)
                                 if m.row == if mini { 1 } else { 2 } =>
                             {
-                                let tabs = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(
+                                let tabs = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(
                                     Rect::new(area.x, if mini { 1 } else { 2 }, area.width, 1),
                                 );
                                 if let Some(i) =
@@ -2712,6 +2995,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     }
                 }
                 KeyCode::Char('r') => {
+                    account_force = true;
                     let _ = refresh.try_send(());
                     if session_reader_started {
                         let _ = session_refresh.try_send(());
@@ -2719,10 +3003,10 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     monitor.notice = None;
                 }
                 KeyCode::Tab => {
-                    monitor.client = (monitor.client + 1) % 3;
+                    monitor.client = (monitor.client + 1) % CLIENTS.len();
                     monitor.scroll = 0;
                 }
-                KeyCode::Char(c @ '1'..='3') => {
+                KeyCode::Char(c @ '1'..='4') => {
                     monitor.client = (c as u8 - b'1') as usize;
                     monitor.scroll = 0;
                 }
@@ -2773,7 +3057,7 @@ pub(super) fn open_pane() -> Result<()> {
     let current = herdr(&["pane", "current", "--current"])?;
     let pane = &current["result"]["pane"];
     // Capture the invoking agent before creating the new, agent-free monitor pane.
-    let client = ["claude", "codex", "all"][initial_client(pane["agent"].as_str())];
+    let client = ["claude", "codex", "grok", "all"][initial_client(pane["agent"].as_str())];
     let client_env = format!("CCSW_MONITOR_CLIENT={client}");
     let workspace = pane["workspace_id"].as_str().context("Missing workspace")?;
     let tab = pane["tab_id"].as_str().context("Missing tab")?;
@@ -3036,7 +3320,7 @@ mod tests {
     fn sessions_filter_follows_focused_agent_even_when_session_id_is_missing() {
         let mut monitor = Monitor {
             sessions_mode: true,
-            client: 2,
+            client: 3,
             ..Default::default()
         };
         monitor.sessions.rows = vec![
@@ -3061,7 +3345,7 @@ mod tests {
         });
         assert_eq!(monitor.client(), Some("Codex"));
         assert_eq!(monitor.session_rows().len(), 1);
-        monitor.client = 2; // A manual All selection lasts until focus changes.
+        monitor.client = 3; // A manual All selection lasts until focus changes.
         monitor.apply_focus(FocusUpdate {
             pane_id: "claude-pane".into(),
             client: 0,
@@ -3075,7 +3359,7 @@ mod tests {
     #[test]
     fn gateway_filter_follows_focus_and_keeps_manual_selection_until_focus_moves() {
         let mut monitor = Monitor {
-            client: 2,
+            client: 3,
             ..Default::default()
         };
         monitor.apply_focus(FocusUpdate {
@@ -3084,7 +3368,7 @@ mod tests {
             session: None,
         });
         assert_eq!(monitor.client(), Some("Codex"));
-        monitor.client = 2;
+        monitor.client = 3;
         monitor.apply_focus(FocusUpdate {
             pane_id: "codex-pane".into(),
             client: 1,
@@ -3149,7 +3433,7 @@ mod tests {
     #[test]
     fn active_session_stays_first_across_sorts() {
         let mut m = Monitor {
-            client: 2,
+            client: 3,
             active_session: Some(AgentSession {
                 client: "Codex",
                 id: "current".into(),
@@ -3217,7 +3501,7 @@ mod tests {
         assert!(home.contains("↑ Input 800  ·  ↓ Output 200"));
         assert!(home.contains("↺ Read 300  ·  Write 100"));
         assert!(home.contains("37.5%"));
-        assert!(home.starts_with("TOKENS"));
+        assert!(home.starts_with("CODEX ACCOUNT"));
         assert!(home.contains("Reading gateway usage"));
         assert!(
             m.content(28).iter().all(|line| line.width() <= 28),
@@ -3240,7 +3524,7 @@ mod tests {
         assert!(history.contains("SESSION HISTORY"));
         assert!(history.contains("No local sessions for this client"));
         assert_eq!(history.matches(&digits("1000")[0]).count(), 1);
-        m.client = 2;
+        m.client = 3;
         let all_history = m
             .content(28)
             .iter()
@@ -3510,7 +3794,7 @@ mod tests {
         let mut m = Monitor {
             sessions_mode: true,
             sessions_refreshed: Some(Instant::now()),
-            client: 2,
+            client: 3,
             ..Default::default()
         };
         m.sessions.rows = vec![
@@ -3563,7 +3847,7 @@ mod tests {
         m.client = 0;
         assert_eq!(m.session_rows().len(), 1);
         assert_eq!(m.session_rows()[0].client, "Claude");
-        m.client = 2;
+        m.client = 3;
         m.sessions_sort_tokens = true;
         assert_eq!(m.session_rows()[0].id, "codex-session-123");
         let body = m
@@ -3635,7 +3919,7 @@ mod tests {
         }
         assert_eq!(initial_client(Some("codex")), 1);
         for agent in [None, Some(""), Some("pi"), Some("unknown"), Some("all")] {
-            assert_eq!(initial_client(agent), 2);
+            assert_eq!(initial_client(agent), 3);
         }
     }
     #[test]
@@ -3818,5 +4102,219 @@ mod tests {
         assert_eq!(m.compact, 2);
         assert_eq!(m.hours[9], 12);
         assert_eq!(metrics(&s, None).total.calls, 42);
+    }
+}
+
+#[cfg(test)]
+mod account_page_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn grok_pane_detection_selects_its_page_and_keeps_all_separate() {
+        for name in ["grok", "grokcli", "grok-cli", "Grok CLI"] {
+            assert_eq!(initial_client(Some(name)), 2);
+        }
+        assert_eq!(initial_client(Some("all")), 3);
+        let panes = serde_json::json!({"result":{"panes":[{"pane_id":"grok-pane","tab_id":"test-tab","focused":true,"agent":"grok","agent_session":{"agent":"grok","kind":"id","value":"grok-session"}}]}});
+        let focus = focused_agent(&panes, "test-tab").unwrap();
+        assert_eq!(focus.client, 2);
+        assert_eq!(focus.session.unwrap().client, "Grok");
+    }
+    #[test]
+    fn grok_gateway_tokens_are_today_only_and_independent_of_sessions() {
+        let mut monitor = Monitor {
+            client: 2,
+            refreshed: Some(Instant::now()),
+            ..Default::default()
+        };
+        for (client, day, input) in [
+            ("Grok", monitor.snapshot.today(), 12345),
+            ("Claude", monitor.snapshot.today(), 98765),
+            ("Grok", "2000-01-01".into(), 99999),
+        ] {
+            monitor.snapshot.rows.push(crate::usage::Row {
+                hour: 9,
+                model: "m".into(),
+                day,
+                client: client.into(),
+                provider: "p".into(),
+                name: "P".into(),
+                kind: "generation".into(),
+                totals: Totals {
+                    calls: 1,
+                    success: 1,
+                    input,
+                    output: 100,
+                    ..Default::default()
+                },
+            });
+        }
+        let text = monitor
+            .grok_gateway_tokens(48)
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("GATEWAY TOKENS") && text.contains("12.3K") && text.contains("100"));
+        assert!(!text.contains("98.8K") && !text.contains("100.0K"));
+        monitor.snapshot.rows[0].totals.unknown = 1;
+        let unknown = monitor
+            .grok_gateway_tokens(48)
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(unknown.contains("Unknown tokens") && !unknown.contains("12.3K"));
+        monitor.snapshot.rows.clear();
+        assert!(
+            monitor
+                .grok_gateway_tokens(48)
+                .iter()
+                .any(|l| l.to_string().contains("No gateway traffic"))
+        );
+        monitor.refreshed = None;
+        assert!(
+            monitor
+                .grok_gateway_tokens(48)
+                .iter()
+                .any(|l| l.to_string().contains("Loading gateway"))
+        );
+        for (width, height) in [(48, 40), (28, 32), (32, 24)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| monitor.draw(frame)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("GATEWAY TOKENS") && text.contains("SESSION TOKENS"));
+        }
+    }
+
+    #[test]
+    fn grok_dashboard_shows_real_session_tokens_and_separates_recent_from_active() {
+        let mut monitor = Monitor {
+            client: 2,
+            sessions_refreshed: Some(Instant::now()),
+            ..Default::default()
+        };
+        monitor.sessions.rows.push(crate::sessions::Session {
+            id: "grok-live".into(),
+            client: "Grok",
+            updated: 100,
+            tokens: crate::sessions::Tokens {
+                input: 1200,
+                output: 300,
+                read: 600,
+                known: true,
+                cache_known: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let recent = monitor
+            .content(48)
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            recent.contains("Recent")
+                && recent.contains("1200")
+                && recent.contains("300")
+                && recent.contains("50%")
+        );
+        monitor.active_session = Some(AgentSession {
+            client: "Grok",
+            id: "grok-live".into(),
+        });
+        let active = monitor
+            .content(48)
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(active.contains("● Active") && !active.contains("Recent"));
+        monitor.active_session.as_mut().unwrap().id = "missing".into();
+        let missing = monitor
+            .content(48)
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(missing.contains("No token data yet") && !missing.contains("1200"));
+    }
+
+    #[test]
+    fn account_pages_render_in_normal_and_mini_panes() {
+        let mut monitor = Monitor {
+            client: 1,
+            accounts: accounts::Accounts {
+                codex: accounts::Info {
+                    lines: vec![
+                        "Account: Personal".into(),
+                        "Email: codex@example.com".into(),
+                        "Plan: plus".into(),
+                        "State: Applied by CCSW".into(),
+                    ],
+                    card: Some(accounts::Card {
+                        name: "Personal".into(),
+                        email: "codex@example.com".into(),
+                        badge: "plus".into(),
+                        ..Default::default()
+                    }),
+                },
+                grok: accounts::Info {
+                    lines: vec![
+                        "Account: grok@example.com".into(),
+                        "Weekly credits: 25% used · resets tomorrow".into(),
+                        "Remaining allowance: 75%".into(),
+                        "API providers: 2 · 6 enabled models".into(),
+                    ],
+                    card: Some(accounts::Card {
+                        name: "Grok CLI".into(),
+                        email: "grok@example.com".into(),
+                        gauges: vec![("Weekly".into(), 25.0, "tomorrow".into())],
+                        ..Default::default()
+                    }),
+                },
+            },
+            ..Default::default()
+        };
+        for (width, height) in [(48, 40), (28, 32), (32, 24)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| monitor.draw(frame)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(
+                text.contains("CODEX ACCOUNT")
+                    && text.contains("Personal")
+                    && text.contains("plus")
+            );
+            monitor.client = 2;
+            monitor.scroll = (monitor.grok_gateway_tokens(width.saturating_sub(8)).len()
+                + monitor.grok_tokens(width.saturating_sub(8)).len())
+                as u16;
+            terminal.draw(|frame| monitor.draw(frame)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("GROK CLI ACCOUNT"));
+            assert!(text.contains("grok@example.com") && text.contains("25% used"));
+
+            monitor.client = 1;
+            monitor.scroll = 0;
+        }
     }
 }

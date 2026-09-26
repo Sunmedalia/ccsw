@@ -754,13 +754,15 @@ herdr plugin list --plugin ccsw
 快捷键在当前标签页最右边界的 pane 右侧打开常驻监控，保留原 pane 的焦点；
 再次触发会关闭当前标签页已有的监控，再按则重新打开。也可执行 `ccsw quick --open` 切换开关。
 首次打开时按触发快捷键的 pane 自动选择统计页：Codex → Codex，Claude Code → Claude，
-未识别到这两种 agent → All。打开后通过 Herdr 焦点事件跟随同一标签页当前聚焦的 Claude / Codex pane，Gateway、图表和 Sessions 均切换到对应客户端；事件连接不可用时每两秒检查一次。聚焦侧栏或普通终端时保留上一次 agent。手动选择 Claude / Codex / All 后，下一次切换 agent 焦点时恢复自动跟随。
+Grok / Grok CLI → Grok CLI；未识别到这些 agent → All。打开后通过 Herdr 焦点事件跟随同一标签页当前聚焦的 Claude / Codex / Grok pane，Gateway、图表和 Sessions 均切换到对应客户端；事件连接不可用时每两秒检查一次。聚焦侧栏或普通终端时保留上一次 agent。手动选择 Claude / Codex / Grok CLI / All 后，下一次切换 agent 焦点时恢复自动跟随。
 直接运行 `ccsw quick` 默认展示 All。
 
-- `Tab` 或 `1/2/3` 切换 Claude / Codex / 全部统计，鼠标点击同样可用。
+- `Tab` 或 `1/2/3/4` 切换 Claude / Codex / Grok CLI / 全部统计，鼠标点击同样可用。
 - 每 2 秒检查本地用量库；数据库版本未变化时跳过统计查询。`r` 立即检查。读取失败保留旧数据并标记 STALE。
 - 首页在 `PROVIDERS / TODAY` 标题右侧点击 `[Models m]`（或按 `m`）切换服务商与模型明细；不再使用 `d`。滚轮、方向键、PgUp/PgDn、鼠标点击或拖动滚动条均可滚动，Esc/Home 回到顶部。
-- 侧栏首页首屏先显示**今日 CCSW 网关用量**，再显示当前聚焦的 Claude / Codex pane 的**当前 session 累计 token**；两者均用大数字展示，互不相加，各自保留输入/输出、缓存读写和缓存率。session 缓存复用率 = 缓存读取 ÷ 总输入（不含输出；缓存写入不算命中）。当前会话来自本地日志；文件变化会触发更新，并每 30 秒兜底检查一次。文件监听不可用时改为每 2 秒检查。Codex 恢复同一 session 时会合并多份日志的累计计数，避免新日志尚未写入 token 事件时用量暂时消失。`s` / `Sessions` 打开会话页，顶部保留当前会话摘要，下方显示其他本地会话；沿用 Claude / Codex / All 筛选。焦点切换到另一 agent pane 或 agent 切换 session 时，侧栏随之切换对应客户端和当前会话。若 Herdr 尚未提供 session ID，会显示等待识别，不会把最近的日志误标为当前会话。会话页按 `t` 切换最近活动 / token 排序，`r` 刷新，`?` 查看统计说明。Fork 会话标记 `*`，可能包含继承用量。
+- **Codex** 页面顶部用紧凑账号卡显示名称、邮箱、套餐、本地登录状态及额度进度条。账号元数据每两秒更新；在线额度刷新仍在编辑器 Accounts 页面执行，Pulse 不切换或修改账号。
+- **Grok CLI** 页面先以独立的 Gateway token 区域显示今日 Grok 网关用量、输入/输出及缓存，再以 Session token 区域显示本地会话累计 token、缓存读写和命中率，两者不相加。下方以账号卡、额度进度条和模型列表显示 OAuth 账号、额度/重置时间/余额及模型配置。当前选择 Grok 时，每分钟自动刷新在线额度，`r` 立即刷新；失败保留同一账号缓存。Grok 直接 API 流量不计入 CCSW 网关统计，Pulse 只读索引 Grok 原生 `updates.jsonl` 中每个 prompt 的真实 usage，重复完成通知不会重复计数。聚焦的 Grok session 优先；没有聚焦 Grok session 时展示最近会话并标为 Recent，缺少 token 数据显示 `—`。
+- Claude / All 侧栏首页首屏先显示**今日 CCSW 网关用量**，再显示当前聚焦的 Claude / Codex pane 的**当前 session 累计 token**；两者均用大数字展示，互不相加，各自保留输入/输出、缓存读写和缓存率。session 缓存复用率 = 缓存读取 ÷ 总输入（不含输出；缓存写入不算命中）。当前会话来自本地日志；文件变化会触发更新，并每 30 秒兜底检查一次。文件监听不可用时改为每 2 秒检查。Codex 恢复同一 session 时会合并多份日志的累计计数，避免新日志尚未写入 token 事件时用量暂时消失。`s` / `Sessions` 打开会话页，顶部保留当前会话摘要，下方显示其他本地会话；沿用 Claude / Codex / All 筛选。焦点切换到另一 agent pane 或 agent 切换 session 时，侧栏随之切换对应客户端和当前会话。若 Herdr 尚未提供 session ID，会显示等待识别，不会把最近的日志误标为当前会话。会话页按 `t` 切换最近活动 / token 排序，`r` 刷新，`?` 查看统计说明。Fork 会话标记 `*`，可能包含继承用量。
 - `c` / `Chart` 切换首页与图表页：上方为今日网关每小时请求数，下方为当前 session 今日每小时 token 增量（输入+输出，来自本地日志）；两组图分别缩放，不应直接比较柱高。
 - `v`（或点击右上角 `V(v)` / `T(v)`）在文字版和简洁图形版之间切换，当前页面、客户端筛选和排序保持不变。简洁版仍保留网关与当前 session 的大 Token 数字；网关指标改为输入/输出双色条、请求/未知计数、缓存命中条（内含 R/W 读写量）及速率/测量流数的紧凑读数，保留各项数值而减少重复标签。健康条按已完成请求分为绿色成功、红色失败、金色中断，待完成请求不计入比例。图表页原本就是图形展示，切换后图表数据不变。
 - `e` / `↗ Edit` 新开 Herdr 标签页运行完整 CCSW，并立即切换到新标签页和编辑 pane；监控 pane 继续常驻。

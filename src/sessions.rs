@@ -122,6 +122,39 @@ struct CachedFile {
 }
 
 impl CachedFile {
+    fn observe_grok(&mut self, v: &Value) {
+        let Some(params) = v.get("params") else {
+            return;
+        };
+        let Some(usage) = params.pointer("/update/usage") else {
+            return;
+        };
+        let Some(prompt) = params.pointer("/update/prompt_id").and_then(Value::as_str) else {
+            self.session.incomplete = true;
+            return;
+        };
+        if let Some(id) = params.get("sessionId").and_then(Value::as_str) {
+            self.session.id = id.into();
+        }
+        let n = |key| usage.get(key).and_then(Value::as_i64).filter(|n| *n >= 0);
+        let tokens = Tokens {
+            input: n("inputTokens").unwrap_or(0),
+            output: n("outputTokens").unwrap_or(0),
+            read: n("cachedReadTokens").unwrap_or(0),
+            write: n("cacheCreationTokens").unwrap_or(0),
+            known: n("inputTokens").is_some() && n("outputTokens").is_some(),
+            cache_known: n("cachedReadTokens").is_some(),
+        };
+        let timestamp = v.get("timestamp").and_then(Value::as_i64).unwrap_or(0);
+        self.session.updated = self.session.updated.max(timestamp);
+        self.session.incomplete |= !tokens.known;
+        if let Some(models) = usage.get("modelUsage").and_then(Value::as_object) {
+            self.session.models.extend(models.keys().cloned());
+        }
+        // Usage is per prompt, with input already including cache buckets.
+        // Replayed completion notifications replace the same prompt, never add twice.
+        self.messages.insert(prompt.into(), (tokens, timestamp));
+    }
     fn observe(&mut self, v: &Value, claude: bool) {
         let s = &mut self.session;
         let timestamp = v
@@ -243,7 +276,36 @@ impl CachedFile {
         }
         self.identity = identity;
         self.modified = modified;
-        self.session.client = if claude { "Claude" } else { "Codex" };
+        let grok = path.file_name().is_some_and(|name| name == "updates.jsonl");
+        self.session.client = if grok {
+            "Grok"
+        } else if claude {
+            "Claude"
+        } else {
+            "Codex"
+        };
+        if grok {
+            self.session.id = path
+                .parent()
+                .and_then(Path::file_name)
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into();
+            let encoded = path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .unwrap_or_default()
+                .to_string_lossy();
+            self.session.project = url::Url::parse(&format!(
+                "file://{}",
+                encoded.replace("%2F", "/").replace("%2f", "/")
+            ))
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| encoded.into_owned());
+        }
         if self.session.id.is_empty() {
             self.session.id = path
                 .file_stem()
@@ -295,11 +357,17 @@ impl CachedFile {
             }
             self.offset += count as u64;
             match serde_json::from_slice::<Value>(&line) {
-                Ok(v) => self.observe(&v, claude),
+                Ok(v) => {
+                    if grok {
+                        self.observe_grok(&v)
+                    } else {
+                        self.observe(&v, claude)
+                    }
+                }
                 Err(_) => self.session.incomplete = true,
             }
         }
-        if claude {
+        if claude || grok {
             self.session.tokens = Tokens::default();
             self.session.activity.clear();
             for (tokens, timestamp) in self.messages.values() {
@@ -328,7 +396,13 @@ impl Reader {
         let mut result = Snapshot::default();
         let mut found = BTreeMap::new();
         for (root, claude) in roots {
-            discover(root, *claude, &mut found, &mut result.warnings);
+            discover(
+                root,
+                *claude,
+                crate::grok::home().is_ok_and(|home| root == &home.join("sessions")),
+                &mut found,
+                &mut result.warnings,
+            );
         }
         // A missing/deleted log is no longer presented as current data.
         self.files.retain(|path, _| found.contains_key(path));
@@ -393,7 +467,13 @@ impl Reader {
     }
 }
 
-fn discover(dir: &Path, claude: bool, files: &mut BTreeMap<PathBuf, bool>, warnings: &mut usize) {
+fn discover(
+    dir: &Path,
+    claude: bool,
+    grok: bool,
+    files: &mut BTreeMap<PathBuf, bool>,
+    warnings: &mut usize,
+) {
     let entries = match fs::read_dir(dir) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
@@ -412,8 +492,11 @@ fn discover(dir: &Path, claude: bool, files: &mut BTreeMap<PathBuf, bool>, warni
             continue;
         };
         if kind.is_dir() {
-            discover(&entry.path(), claude, files, warnings);
+            discover(&entry.path(), claude, grok, files, warnings);
         } else if kind.is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {
+            if grok && entry.file_name() != "updates.jsonl" {
+                continue;
+            }
             files.insert(entry.path(), claude);
         }
     }
@@ -423,6 +506,7 @@ pub fn roots() -> anyhow::Result<Vec<(PathBuf, bool)>> {
     let claude = crate::claude_config::settings_path()?;
     let codex = crate::codex::home()?;
     Ok(vec![
+        (crate::grok::home()?.join("sessions"), false),
         (claude.parent().unwrap().join("projects"), true),
         (codex.join("sessions"), false),
         (codex.join("archived_sessions"), false),
@@ -434,6 +518,36 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Write;
+
+    #[test]
+    fn grok_prompt_usage_is_incremental_deduplicated_and_cache_inclusive() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("updates.jsonl");
+        let event = |prompt: &str, input, output, timestamp| {
+            json!({
+                "timestamp": timestamp, "params": {"sessionId": "grok-session", "update": {
+                    "prompt_id": prompt, "usage": {"inputTokens": input, "outputTokens": output,
+                    "cachedReadTokens": 60, "cacheCreationTokens": 5, "modelUsage": {"grok-4": {}}}
+                }}
+            })
+        };
+        append(&path, event("one", 100, 10, 1000));
+        append(&path, event("one", 100, 10, 1000));
+        let mut cached = CachedFile::default();
+        cached.read(&path, false).unwrap();
+        assert_eq!(cached.session.client, "Grok");
+        assert_eq!(cached.session.id, "grok-session");
+        assert_eq!(cached.session.tokens.total(), 110);
+        append(&path, event("two", 200, 20, 2000));
+        cached.read(&path, false).unwrap();
+        assert_eq!(cached.session.tokens.input, 300);
+        assert_eq!(cached.session.tokens.total(), 330);
+        assert_eq!(cached.session.tokens.read, 120);
+        assert_eq!(cached.session.activity.values().sum::<i64>(), 330);
+        cached.read(&path, false).unwrap();
+        assert_eq!(cached.session.tokens.total(), 330);
+        assert!(cached.session.models.contains("grok-4"));
+    }
 
     #[test]
     fn watcher_wakes_when_a_session_log_changes() {
