@@ -371,8 +371,17 @@ pub fn activate_and_sync(paths: &AppPaths, id: &str) -> Result<&'static str> {
     let version = std::process::Command::new(&binary)
         .args(["app-server", "daemon", "version"])
         .env("CODEX_HOME", &home)
-        .output()
-        .context("Cannot inspect the Codex background service")?;
+        .output();
+    let version = match version {
+        Ok(version) => version,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::env::var_os("CCSW_CODEX_BIN").is_none() =>
+        {
+            return Ok("Account saved on disk; install Codex CLI to start a session.");
+        }
+        Err(error) => return Err(error).context("Cannot inspect the Codex background service"),
+    };
     if !version.status.success() {
         bail!(
             "Account saved on disk, but the Codex background service could not be checked. Restart it manually with `codex app-server daemon restart`."

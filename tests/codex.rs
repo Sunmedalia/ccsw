@@ -105,6 +105,32 @@ fn account_switch_restarts_running_codex_daemon() {
 }
 
 #[test]
+fn account_switch_saves_login_when_codex_cli_is_not_installed() {
+    let s = Sandbox::new();
+    let id = s.add("Saved", &auth("saved", "workspace", "refresh"));
+    let empty_path = s.root.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    let result = support::command(s.root.path())
+        .args(["codex", "accounts", "use", &id])
+        .env("HOME", s.root.path())
+        .env("CODEX_HOME", s.home())
+        .env("CCSW_CONFIG", s.root.path().join("config.toml"))
+        .env("XDG_STATE_HOME", s.root.path().join("state"))
+        .env("PATH", &empty_path)
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CCSW_CODEX_BIN")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stdout).contains("install Codex CLI"));
+    assert_eq!(s.auth(), auth("saved", "workspace", "refresh"));
+}
+
+#[test]
 fn subscription_pauses_and_restores_only_previously_enabled_providers() {
     let s = Sandbox::new();
     let path = s.root.path().join("config.toml");
