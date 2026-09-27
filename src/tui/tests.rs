@@ -2581,7 +2581,7 @@ fn client_tabs_are_visible_and_highlighted_on_all_clients_at_minimum_size() {
                 let first_row = (0..width)
                     .map(|x| buffer[(x, 0)].symbol())
                     .collect::<String>();
-                for label in ["Claude Code", "Codex", "Pi", "Grok", "Usage"] {
+                for label in ["Claude", "Codex", "Pi", "Grok", "Usage"] {
                     assert!(first_row.contains(label));
                 }
                 for (candidate, rect) in client_tabs(Rect::new(0, 0, width, height)) {
@@ -3759,7 +3759,7 @@ fn grok_narrow_tabs_settings_discard_mouse_and_reconnect() {
         let row: String = (0..width)
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect();
-        for label in ["Claude Code", "Codex", "Pi", "Grok", "Usage"] {
+        for label in ["Claude", "Codex", "Pi", "Grok", "Usage"] {
             assert!(row.contains(label), "{row}");
         }
     }
@@ -4194,4 +4194,116 @@ fn grok_accounts_match_codex_vertical_layout_and_footer_at_all_sizes() {
     assert!(text.contains("Cancel/Esc"));
     assert!(!text.contains("Grok accounts"));
     app.grok_auth.busy = false;
+}
+
+#[test]
+fn theme_gallery_and_usage_render_with_resolved_styles_at_all_sizes() {
+    let (_temp, mut app) = persisted_app();
+    let today = chrono::NaiveDate::parse_from_str(&app.usage.snapshot.today(), "%Y-%m-%d").unwrap();
+    for day in 0..7 {
+        for (provider, model, calls) in [
+            ("primary", "claude-sonnet-4.5", 128),
+            ("fallback", "gpt-5.4", 42),
+        ] {
+            app.usage.snapshot.rows.push(crate::usage::Row {
+                day: (today - chrono::Duration::days(day)).to_string(),
+                hour: 12,
+                client: "Claude".into(),
+                provider: provider.into(),
+                name: provider.into(),
+                model: model.into(),
+                kind: "generation".into(),
+                totals: crate::usage::Totals {
+                    calls: calls + day * 3,
+                    success: calls + day * 3 - 2,
+                    failed: 2,
+                    input: 96_000 + day * 1000,
+                    output: 32_400,
+                    cache_read: 42_000,
+                    ..Default::default()
+                },
+            });
+        }
+    }
+    app.open_usage();
+    app.usage_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    app.usage.updated = Some(std::time::Instant::now());
+    for theme in theme::Theme::ALL {
+        app.theme = theme;
+        for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+            for settings in [false, true] {
+                app.modal = None;
+                if settings {
+                    app.open_appearance();
+                }
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let buffer = terminal.backend().buffer();
+                assert!(
+                    buffer
+                        .content
+                        .iter()
+                        .all(|c| !matches!(c.fg, theme::EDGE | theme::ACTIVE_EDGE)
+                            && c.bg != theme::SURFACE)
+                );
+                let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+                if settings {
+                    assert!(text.contains("Save"));
+                } else if width == 120 {
+                    assert!(text.contains("Range overview"));
+                }
+                if let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+                    std::fs::create_dir_all(&directory).unwrap();
+                    let cells: Vec<_> = buffer.content.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
+                    let output =
+                        serde_json::json!({"width": width, "height": height, "cells": cells});
+                    std::fs::write(
+                        std::path::Path::new(&directory).join(format!(
+                            "{theme:?}-{width}-{}.json",
+                            if settings { "settings" } else { "usage" }
+                        )),
+                        serde_json::to_vec(&output).unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn appearance_save_preserves_client_scope_and_refresh_draft() {
+    let (_temp, mut app) = persisted_app();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.open_appearance();
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    app.handle_key(key(KeyCode::Right)).unwrap();
+    app.handle_key(key(KeyCode::Char('c'))).unwrap();
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(
+        matches!(&app.modal, Some(Modal::Appearance(form)) if form.usage_refresh_secs == 3 && form.refresh_selected)
+    );
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.config.usage_refresh_secs, 2);
+    config::update(&app.paths.config, |config| {
+        config.codex.profiles.clear();
+        Ok(())
+    })
+    .unwrap();
+    app.select_client_tab(ClientTab::Codex);
+    assert!(app.config.profiles.is_empty());
+    app.open_appearance();
+    for code in [KeyCode::Tab, KeyCode::Tab, KeyCode::Right, KeyCode::Enter] {
+        app.handle_key(key(code)).unwrap();
+    }
+    assert!(app.config.profiles.is_empty());
+    assert!(app.background.queued_sync.is_none());
+    assert_eq!(
+        config::load(&app.paths.config).unwrap().usage_refresh_secs,
+        3
+    );
+    app.select_client_tab(ClientTab::Pi);
+    assert_eq!(app.config.usage_refresh_secs, 3);
+    assert_eq!(app.load_client_config().unwrap().usage_refresh_secs, 3);
 }

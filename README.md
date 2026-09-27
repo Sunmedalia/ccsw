@@ -127,7 +127,7 @@ ccsw import --yes
 - `1`–`4`：直接打开对应分区。
 - `Esc`、`q`、`?` 或 `Enter`：关闭 Help。
 
-按钮统一使用青色主题，选中状态为青色底，删除操作为红色，不可用操作为灰色。厂商详情卡提供删除按钮；详情面板按 `x` 删除厂商，模型面板按 `x` 删除模型，删除前均需确认。
+按钮跟随当前主题的强调色和选中样式，删除操作使用错误色，不可用操作使用次级文字色。厂商详情卡提供删除按钮；详情面板按 `x` 删除厂商，模型面板按 `x` 删除模型，删除前均需确认。
 
 状态标记：`●` 已启用、`○` 已禁用、`◆` 默认模型、`◈` 角色依赖模型。
 
@@ -310,7 +310,7 @@ SMOKE_FORMAT=openai-responses python3 tests/fixtures/pi_cli_smoke.py
 
 > Codex 配置随 v0.1.7 发布。CLI 与 ChatGPT App 内的 Codex 使用同一套目标配置。切换账号时，CCSW 会在磁盘写入后重启正在运行的 Codex 后台服务，让普通 `codex` 的新会话读取新账号；这会断开服务中的现有会话，因此 TUI 会先提示。若 CCSW 本身运行在 Codex 任务中，切换只写入磁盘，并提示任务结束后运行 `codex app-server daemon restart`。真实 App 的账号切换与新会话请求仍需在目标版本上验证。
 
-在 TUI 中点击顶部 **Claude Code / Codex / Pi / Grok** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。四个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
+在 TUI 中点击顶部 **Claude / Codex / Pi / Grok** 标签，或按 `F2` 循环切换，按 `F3` 切换 Codex 的 API Providers / Accounts。四个标签分别读取独立的厂商和模型配置；修改只作用于当前客户端；Pi 直接管理原生配置文件，没有启用/禁用和代理同步操作。Codex 的 API 页面不显示 Claude 的角色别名设置。
 
 ### Codex API
 
@@ -511,11 +511,13 @@ ccsw proxy uninstall
 
 日期显示在 `‹ / ›` 之间。`1 day / 1 week / 1 month / All time` 分别统计所选日期当天、截至该日最近 7 天、最近 30 天和全部记录；快捷键为 `d / w / m / y`。摘要以 token 总量为主值，展示输入/输出明细和比例；宽屏并列显示所选范围与全部累计，窄屏保留所选范围主值。Provider、模型和历史表格优先显示 token。All time 时日期切换禁用。
 
+Usage 在宽屏中使用并列的范围用量、累计用量和请求健康卡片；右侧概览展示成功率、失败与进行中请求、活跃日期调用趋势和调用最多的模型。侧栏遵循当前日期、客户端和 provider 筛选。小屏自动收起侧栏，保留完整表格和键盘操作。
+
 点击 **Chart 5** 或按 `5` 查看时间用量柱状图，`Calls c / Tokens v` 切换调用次数和 tokens。1 day 按小时，其他范围按天；窗口较窄或数据较长时自动合并相邻时段，并标注每柱跨度，始终展示完整范围。无调用时段标记为 `0`，缺失 token 用量标记为 `?`。图表遵循当前客户端和 provider 筛选以及账本固定时区，旧记录也可按小时查看。Usage 按钮统一使用对称内边距和固定间隔，窄屏自动压缩。
 
 在 Usage 页点击 **Models 4** 或按 `4` 查看具体调用模型：按客户端、provider、模型分别展示当日/累计调用次数与 tokens，沿用当前日期和 provider 筛选。选中行下方显示模型及 provider 标识，窄屏也可查看 tokens。已有账本记录可以直接显示，无需重新开始统计；这里展示的是路由选择的上游模型，不是供应商内部实际执行模型的验证结果。
 
-Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude Code / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4/5/6` 切换 Provider、历史、指标、模型、图表、Sessions；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。较高终端的摘要下方显示成功率、缓存读取占比、平均每次调用 tokens 和上次刷新时间。按 **F4** 在 Settings 中调整 Usage refresh，范围 1–60 秒，默认 2 秒。
+Provider 详情显示今日/累计调用次数和 tokens。点击顶部 **Usage** 标签（与 Claude / Codex / Pi 并列）或按 **F6** 打开独立用量页，默认汇总全部客户端。**F2** 循环切换四个标签；切换后保留筛选和视图状态。`1/2/3/4/5/6` 切换 Provider、历史、指标、模型、图表、Sessions；选中 provider 或历史日期按 Enter 查看对应模型。第一次点击选中行，再次点击进入。`←/→` 切换日期（不能晚于今天），`t` / Today 回到今天并自动跟随跨日更新。`Tab` 切换客户端并清除 provider 筛选，`a` / All × 查看全部 provider；`↑↓` / `PgUp/PgDn` 滚动，`r` 刷新。`Esc` / Back 优先清除 provider 筛选并返回 Provider 表，再次返回原客户端。较高终端的摘要下方显示成功率、缓存读取占比、平均每次调用 tokens 和上次刷新时间。按 **F4** 在 Settings 中调整 Usage refresh，范围 1–60 秒，默认 2 秒。
 
 **Sessions（`6`）** 读取本机 Claude Code 和 Codex 会话日志，展示 session、项目、客户端、累计 tokens；较宽终端还显示输入、输出、缓存读取和最后活动时间。选中行后，下方显示完整 session ID、项目路径、模型列表及精确用量。`s` 或 Sort 按钮切换最近活动 / tokens 排序；`y` / All time 查看全部历史会话。
 
@@ -638,7 +640,11 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 
 点击 **Settings** 或按 **F4** 打开 TUI 设置。在 Claude 标签页选择 **Claude settings**（或按 `c`）进入客户端设置。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
 
-TUI 默认使用 **Graphite（石墨）**，沿用终端背景颜色，正文与数字使用暖象牙白、次级文字使用石灰灰、导航强调使用黄铜色。设置中还提供其他主题：**Tundra（苔原）**采用深松绿背景、羊皮纸文字和黄铜导航；**Paper（纸页）**采用浅纸色背景、深墨色文字和蓝墨导航；**Nightfall（夜航）**采用深海军蓝背景、淡紫导航与青绿成功状态；**Pulse** 与 Herdr 侧栏插件配色一致，采用蓝灰背景、青蓝导航和青绿状态色。除 Graphite 和 Classic 沿用终端背景外，其他主题统一背景、正文、选中块、边框和状态色。F4 设置页使用 `Tab`（或点击页签）切换 **CCSW UI** 与 **Pulse pane**，侧栏可独立选择 Pulse、Graphite、Tundra、Paper、Nightfall 五套主题。方向键或 `j/k` 切换当前页签的主题，`Enter` / Save 保存两项选择，`Esc` / Cancel 取消。运行中的侧栏会自动读取新配色。进入 Claude settings 后按 `Esc` 或点击 **Themes** 返回主题设置，保留之前的配色预览；有未保存的客户端设置时先确认放弃。主界面主题覆盖客户端页、模型表单、账号和用量图表。两项配色分别保存在状态目录的 `tui-theme.json` 和 `pulse-theme.json`，下次启动自动恢复；不会修改厂商配置或触发代理同步。所有客户端与用量页均可用 `F4` 打开。已有主题选择保留；默认值只影响尚未保存 TUI 主题的新用户。
+TUI 主题统一控制整个界面的画布、面板、边框、标题和选中状态，覆盖所有客户端、模型表单、账号页、弹窗与 Usage。默认 **Graphite（石墨）**使用固定石墨背景、浅色面板和简洁竖边；**Tundra（苔原）**使用森林色面板、粗边框和加粗选中态；**Paper（纸页）**使用浅纸色、细框和下划线选中态；**Nightfall（夜航）**使用深蓝画布、圆角框与淡紫强调；**Pulse**使用蓝灰面板、双线框和醒目的状态色；**Classic**保留终端背景与传统方框。已有主题 ID 和选择继续有效。
+
+按 **F4** 打开设置，`Tab` / `Shift+Tab` 或点击顶部标签切换 **CCSW UI**、**Pulse pane**、**Refresh**。方向键或 `j/k` 选择主题或调整刷新间隔；宽屏左侧显示主题列表，右侧使用真实面板和表格样式预览示例数据，Pulse 预览独立于主界面主题。小屏自动使用紧凑列表或双列列表。`Enter` / Save 保存，`Esc` / Cancel 取消预览。Usage 刷新间隔默认为 **2 秒**，支持 **1–60 秒**，也可点击 `−` / `+` 调整。进入 Claude settings 再返回时会保留主题和刷新间隔草稿。
+
+主界面和 Pulse 主题分别保存在状态目录的 `tui-theme.json` 和 `pulse-theme.json`，刷新间隔保存在主配置的 `usage_refresh_secs`。下次启动自动恢复，运行中的 Pulse 会自动读取主题。保存外观和刷新设置不会触发代理同步。
 
 - 六项预设：AI 署名、Teammates、Tool Search、思考强度、禁用自动升级、禁用 Artifact。默认 `inherit` 表示不覆盖已有配置。
 - 点击 **Fill presets**（窄屏显示 **Presets**），或按 **Alt+P**，填入隐藏署名、开启 Teammates / Tool Search、`max` 思考、禁用自动升级和 Artifact；这只修改草稿。

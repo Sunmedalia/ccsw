@@ -1,5 +1,11 @@
 use super::*;
 
+// Semantic paint tokens. Only marked panel edges are restyled; chart and text
+// glyphs are left intact. This keeps the same hit targets in every theme.
+pub(super) const SURFACE: Color = Color::Rgb(1, 2, 3);
+pub(super) const EDGE: Color = Color::Rgb(1, 2, 4);
+pub(super) const ACTIVE_EDGE: Color = Color::Rgb(1, 2, 5);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Theme {
@@ -22,14 +28,14 @@ impl Theme {
         Self::Pulse,
     ];
 
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
-            Self::Classic => "Classic",
-            Self::Slate => "Graphite / terminal bg & ivory",
-            Self::Moss => "Tundra / pine & brass",
-            Self::Sand => "Paper / parchment & blue ink",
-            Self::Plum => "Nightfall / navy & lilac",
-            Self::Pulse => "Pulse / blue gray & cyan",
+            Self::Classic => "Classic / terminal",
+            Self::Slate => "Graphite / quiet workspace",
+            Self::Moss => "Tundra / framed console",
+            Self::Sand => "Paper / light ledger",
+            Self::Plum => "Nightfall / soft panels",
+            Self::Pulse => "Pulse / instrument panel",
         }
     }
 
@@ -47,29 +53,89 @@ impl Theme {
         )
     }
 
-    // Translate semantic UI colors at the frame boundary so all pages and
-    // dialogs share the palette without mutable process-global theme state.
+    pub(super) fn description(self) -> &'static str {
+        match self {
+            Self::Classic => "Terminal background · square edges · compact highlights",
+            Self::Slate => "Graphite canvas · quiet rails · raised selection",
+            Self::Moss => "Forest panels · heavy frames · bold navigation",
+            Self::Sand => "Warm paper · ruled frames · underlined selection",
+            Self::Plum => "Midnight canvas · rounded panels · soft emphasis",
+            Self::Pulse => "Blue instruments · double frames · bright readouts",
+        }
+    }
+
+    fn edge(self, symbol: &str) -> &str {
+        let index = match symbol {
+            "┌" => 0,
+            "┐" => 1,
+            "└" => 2,
+            "┘" => 3,
+            "─" => 4,
+            "│" => 5,
+            _ => return symbol,
+        };
+        (match self {
+            Self::Classic => ["┌", "┐", "└", "┘", "─", "│"],
+            Self::Slate => ["▏", "▕", "▏", "▕", " ", "│"],
+            Self::Moss => ["┏", "┓", "┗", "┛", "━", "┃"],
+            Self::Sand => ["┌", "┐", "└", "┘", "─", "│"],
+            Self::Plum => ["╭", "╮", "╰", "╯", "─", "│"],
+            Self::Pulse => ["╔", "╗", "╚", "╝", "═", "║"],
+        })[index]
+    }
+
     pub(super) fn apply(self, buffer: &mut ratatui::buffer::Buffer) {
-        let Some(p) = self.palette() else { return };
-        for cell in &mut buffer.content {
-            // Graphite keeps the terminal's default background; other themes
-            // paint their own background.
-            cell.fg = if matches!(cell.fg, Color::Reset | Color::White)
-                && cell.modifier.contains(Modifier::BOLD)
-            {
-                p.heading
-            } else if cell.fg == Color::Reset {
-                p.text
-            } else if cell.fg == Color::Black {
-                p.on_accent
-            } else {
-                p.color(cell.fg)
-            };
-            cell.bg = if cell.bg == Color::Reset {
-                p.background
-            } else {
-                p.color(cell.bg)
-            };
+        self.apply_region(buffer, buffer.area);
+    }
+
+    fn apply_region(self, buffer: &mut ratatui::buffer::Buffer, region: Rect) {
+        let palette = self.palette();
+        for y in region.y..region.bottom() {
+            for x in region.x..region.right() {
+                let cell = &mut buffer[(x, y)];
+                let edge = matches!(cell.fg, EDGE | ACTIVE_EDGE);
+                if edge {
+                    let symbol = self.edge(cell.symbol()).to_owned();
+                    cell.set_symbol(&symbol);
+                    cell.fg = if cell.fg == ACTIVE_EDGE {
+                        ROUTE
+                    } else {
+                        Color::DarkGray
+                    };
+                }
+                let selected = cell.bg == SELECTION;
+                if selected {
+                    cell.modifier |= match self {
+                        Self::Sand => Modifier::UNDERLINED,
+                        Self::Moss | Self::Pulse => Modifier::BOLD,
+                        _ => Modifier::empty(),
+                    };
+                }
+                let Some(p) = &palette else {
+                    if cell.bg == SURFACE {
+                        cell.bg = Color::Reset;
+                    }
+                    continue;
+                };
+                cell.fg = if matches!(cell.fg, Color::Reset | Color::White)
+                    && cell.modifier.contains(Modifier::BOLD)
+                {
+                    p.heading
+                } else if cell.fg == Color::Reset {
+                    p.text
+                } else if cell.fg == Color::Black {
+                    p.on_accent
+                } else {
+                    p.color(cell.fg)
+                };
+                cell.bg = if cell.bg == SURFACE {
+                    p.surface
+                } else if cell.bg == Color::Reset {
+                    p.background
+                } else {
+                    p.color(cell.bg)
+                };
+            }
         }
     }
 
@@ -104,9 +170,14 @@ impl Theme {
             ],
         };
         let mut palette = Palette::new(values);
-        if self == Self::Slate {
-            palette.background = Color::Reset;
-        }
+        palette.surface = match self {
+            Self::Slate => Color::Rgb(31, 33, 37),
+            Self::Moss => Color::Rgb(25, 43, 33),
+            Self::Sand => Color::Rgb(249, 244, 231),
+            Self::Plum => Color::Rgb(29, 40, 63),
+            Self::Pulse => Color::Rgb(22, 35, 48),
+            Self::Classic => Color::Reset,
+        };
         Some(palette)
     }
 }
@@ -129,10 +200,20 @@ impl PulseTheme {
     fn name(self) -> &'static str {
         match self {
             Self::Pulse => "Pulse / blue gray & cyan",
-            Self::Slate => "Graphite / terminal bg & ivory",
-            Self::Moss => "Tundra / pine & brass",
-            Self::Sand => "Paper / parchment & blue ink",
-            Self::Plum => "Nightfall / navy & lilac",
+            Self::Slate => "Graphite / quiet workspace",
+            Self::Moss => "Tundra / framed console",
+            Self::Sand => "Paper / light ledger",
+            Self::Plum => "Nightfall / soft panels",
+        }
+    }
+
+    fn design(self) -> Theme {
+        match self {
+            Self::Pulse => Theme::Pulse,
+            Self::Slate => Theme::Slate,
+            Self::Moss => Theme::Moss,
+            Self::Sand => Theme::Sand,
+            Self::Plum => Theme::Plum,
         }
     }
 
@@ -164,6 +245,17 @@ impl PulseTheme {
     pub(super) fn apply(self, buffer: &mut ratatui::buffer::Buffer) {
         let Some(p) = self.palette() else { return };
         for cell in &mut buffer.content {
+            if cell.fg == quick::RAIL {
+                let symbol = self.design().edge(cell.symbol()).to_owned();
+                cell.set_symbol(&symbol);
+            }
+            if cell.bg == quick::RAIL {
+                cell.modifier |= if self == Self::Sand {
+                    Modifier::UNDERLINED
+                } else {
+                    Modifier::BOLD
+                };
+            }
             cell.fg = match cell.fg {
                 quick::INK => p.text,
                 quick::SOFT => p.muted,
@@ -197,6 +289,7 @@ impl PulseTheme {
 
 struct Palette {
     background: Color,
+    surface: Color,
     text: Color,
     muted: Color,
     selection: Color,
@@ -225,6 +318,7 @@ impl Palette {
             heading,
         ] = values.map(|v| Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8));
         Self {
+            surface: background,
             background,
             text,
             muted,
@@ -287,12 +381,7 @@ mod tests {
             Theme::Pulse,
         ] {
             let p = theme.palette().unwrap();
-            let backgrounds = if theme == Theme::Slate {
-                assert_eq!(p.background, Color::Reset);
-                vec![p.selection]
-            } else {
-                vec![p.background, p.selection]
-            };
+            let backgrounds = [p.background, p.surface, p.selection];
             for bg in backgrounds {
                 for fg in [
                     p.text, p.heading, p.muted, p.accent, p.success, p.warning, p.error,
@@ -324,18 +413,18 @@ mod tests {
     }
 
     #[test]
-    fn graphite_uses_terminal_background_in_main_and_pulse_views() {
+    fn graphite_uses_consistent_canvas_in_main_and_pulse_views() {
         let mut main = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
         main[(1, 0)].set_bg(SELECTION);
         Theme::Slate.apply(&mut main);
-        assert_eq!(main[(0, 0)].bg, Color::Reset);
+        assert_eq!(main[(0, 0)].bg, Theme::Slate.palette().unwrap().background);
         assert_eq!(main[(1, 0)].bg, Theme::Slate.palette().unwrap().selection);
 
         let mut pulse = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
         pulse[(0, 0)].set_fg(quick::INK).set_bg(quick::BG);
         pulse[(1, 0)].set_fg(quick::BG).set_bg(quick::BLUE);
         PulseTheme::Slate.apply(&mut pulse);
-        assert_eq!(pulse[(0, 0)].bg, Color::Reset);
+        assert_eq!(pulse[(0, 0)].bg, Theme::Slate.palette().unwrap().background);
         assert_eq!(pulse[(1, 0)].bg, Theme::Slate.palette().unwrap().accent);
         assert_eq!(pulse[(1, 0)].fg, Theme::Slate.palette().unwrap().on_accent);
     }
@@ -369,7 +458,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char('s') => {
                 if form.usage_refresh_secs != form.original_usage_refresh_secs {
                     let value = form.usage_refresh_secs;
-                    self.config = crate::config::try_update(&self.paths.config, |config| {
+                    crate::config::try_update(&self.paths.config, |config| {
                         if config.usage_refresh_secs != form.original_usage_refresh_secs {
                             anyhow::bail!(
                                 "usage refresh interval changed in another instance; reopen settings"
@@ -378,6 +467,8 @@ impl App {
                         config.usage_refresh_secs = value;
                         Ok(())
                     })?;
+                    self.config.usage_refresh_secs = value;
+                    form.original_usage_refresh_secs = value;
                 }
                 form.theme.save(&self.paths)?;
                 form.pulse_theme.save(&self.paths)?;
@@ -398,6 +489,7 @@ impl App {
                 }
                 self.open_preferences();
                 if let Some(Modal::Preferences(preferences)) = self.modal.as_mut() {
+                    preferences.return_appearance = Some(form.clone());
                     preferences.return_theme = Some(form.theme);
                     preferences.return_pulse_theme = Some(form.pulse_theme);
                     preferences.return_pulse_selected = form.pulse_selected;
@@ -457,6 +549,25 @@ impl App {
     }
 }
 
+fn gallery(area: Rect) -> bool {
+    area.width >= 64 && area.height >= 20
+}
+
+pub(super) fn target_tabs(area: Rect) -> [Rect; 3] {
+    let inner = panel_inner(area);
+    let widths = [
+        inner.width / 3,
+        inner.width / 3,
+        inner.width - 2 * (inner.width / 3),
+    ];
+    let mut x = inner.x;
+    widths.map(|width| {
+        let rect = Rect::new(x, inner.y, width, 1);
+        x += width;
+        rect
+    })
+}
+
 pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
     let inner = panel_inner(area);
     let count = if form.pulse_selected {
@@ -464,15 +575,25 @@ pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
     } else {
         Theme::ALL.len()
     };
+    let roomy = gallery(area);
     (0..count)
         .map(|index| {
+            let compact = area.height < 14;
+            let column = if compact { index % 2 } else { 0 };
+            let row = if compact { index / 2 } else { index };
             (
                 index,
                 Rect::new(
-                    inner.x,
-                    inner.y + if area.height <= 10 { 1 } else { 2 } + index as u16,
-                    inner.width,
-                    1,
+                    inner.x + column as u16 * (inner.width / 2),
+                    inner.y + if compact { 1 } else { 2 } + row as u16 * if roomy { 2 } else { 1 },
+                    if compact {
+                        inner.width / 2
+                    } else if roomy {
+                        inner.width * 44 / 100
+                    } else {
+                        inner.width
+                    },
+                    if roomy { 2 } else { 1 },
                 ),
             )
         })
@@ -481,12 +602,15 @@ pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
 
 pub(super) fn refresh_row(area: Rect) -> Rect {
     let inner = panel_inner(area);
-    Rect::new(
-        inner.x,
-        inner.y + if area.height <= 10 { 0 } else { 9 },
-        inner.width,
-        1,
-    )
+    Rect::new(inner.x, area.bottom().saturating_sub(3), inner.width, 1)
+}
+
+pub(super) fn refresh_buttons(area: Rect) -> [Rect; 2] {
+    let row = refresh_row(area);
+    [
+        Rect::new(row.right().saturating_sub(9), row.y, 3, 1),
+        Rect::new(row.right().saturating_sub(3), row.y, 3, 1),
+    ]
 }
 
 pub(super) fn draw(
@@ -495,77 +619,170 @@ pub(super) fn draw(
     form: &Appearance,
     client_settings: Option<&str>,
 ) {
-    frame.render_widget(panel(" Settings · appearance & usage ", true), area);
+    frame.render_widget(panel(" Settings / appearance & usage ", true), area);
     let inner = panel_inner(area);
-    frame.render_widget(
-        Paragraph::new(if form.refresh_selected {
-            "CCSW UI    Pulse pane    [Usage refresh] · Tab"
-        } else if form.pulse_selected {
-            "CCSW UI    [Pulse pane]    Usage refresh · Tab"
-        } else {
-            "[CCSW UI]    Pulse pane    Usage refresh · Tab"
-        })
-        .style(Style::default().fg(ROUTE).add_modifier(Modifier::BOLD)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-    if area.height > 10 {
+    for (index, rect) in target_tabs(area).into_iter().enumerate() {
+        let selected = match index {
+            0 => !form.pulse_selected && !form.refresh_selected,
+            1 => form.pulse_selected,
+            _ => form.refresh_selected,
+        };
         frame.render_widget(
-            Paragraph::new("Tab: switch setting · ↑↓: adjust · Enter: save")
+            Paragraph::new(["CCSW UI", "Pulse pane", "Refresh"][index])
+                .alignment(Alignment::Center)
+                .style(button_style(selected, false, false)),
+            rect,
+        );
+    }
+    if area.height >= 14 {
+        frame.render_widget(
+            Paragraph::new("Tab target · ↑↓ theme / interval · Enter save · Esc cancel")
                 .style(Style::default().fg(MUTED)),
             Rect::new(inner.x, inner.y + 1, inner.width, 1),
         );
     }
     for (index, rect) in rows(area, form) {
-        let (selected, name) = if form.pulse_selected {
+        let (selected, name, description) = if form.pulse_selected {
             let theme = PulseTheme::ALL[index];
-            (theme == form.pulse_theme, theme.name())
+            (
+                theme == form.pulse_theme,
+                theme.name(),
+                theme.design().description(),
+            )
         } else {
             let theme = Theme::ALL[index];
-            (theme == form.theme, theme.name())
+            (theme == form.theme, theme.name(), theme.description())
         };
+        let name = if gallery(area) || area.height < 14 {
+            name.split(" / ").next().unwrap_or(name)
+        } else {
+            name
+        };
+        let mut lines = vec![Line::styled(
+            format!(" {}  {}", if selected { "●" } else { "○" }, name),
+            Style::default()
+                .fg(if selected { ROUTE } else { Color::White })
+                .add_modifier(Modifier::BOLD),
+        )];
+        if gallery(area) {
+            lines.push(Line::styled(
+                format!(
+                    "    {}",
+                    description.split(" · ").nth(1).unwrap_or(description)
+                ),
+                Style::default().fg(MUTED),
+            ));
+        }
         frame.render_widget(
-            Paragraph::new(format!(" {} {}", if selected { "●" } else { "○" }, name)).style(
-                if selected {
-                    Style::default().fg(ROUTE).bg(SELECTION)
-                } else {
-                    Style::default().fg(MUTED)
-                },
-            ),
+            Paragraph::new(lines).style(Style::default().bg(if selected {
+                SELECTION
+            } else {
+                SURFACE
+            })),
             rect,
         );
     }
+    let row = refresh_row(area);
+    frame.render_widget(Clear, row);
     frame.render_widget(
-        Paragraph::new(if area.height <= 10 {
-            format!(" Tab · Usage refresh  ‹ {}s ›", form.usage_refresh_secs)
-        } else {
-            format!(
-                " {} Usage auto refresh     ‹  {}s  ›   (1–60s)",
-                if form.refresh_selected { "●" } else { "○" },
-                form.usage_refresh_secs
-            )
-        })
-        .style(if form.refresh_selected {
-            Style::default().fg(ROUTE).bg(SELECTION)
-        } else {
-            Style::default().fg(MUTED)
-        }),
-        refresh_row(area),
-    );
-    frame.render_widget(
-        Paragraph::new("Changes apply after saving. Esc cancels the preview.")
-            .wrap(Wrap { trim: false })
-            .style(Style::default().fg(MUTED)),
-        Rect::new(
-            inner.x,
-            inner.y + 10,
-            inner.width,
-            inner.height.saturating_sub(12),
+        Paragraph::new(format!(
+            " {}Usage refresh  {}s",
+            if form.refresh_selected { "● " } else { "" },
+            form.usage_refresh_secs
+        ))
+        .style(
+            Style::default()
+                .fg(if form.refresh_selected { ROUTE } else { MUTED })
+                .bg(SURFACE),
         ),
+        row,
     );
+    for (index, rect) in refresh_buttons(area).into_iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(if index == 0 { " − " } else { " + " }).style(button_style(
+                form.refresh_selected,
+                false,
+                false,
+            )),
+            rect,
+        );
+    }
+    if area.height >= 20 {
+        frame.render_widget(
+            Paragraph::new("Live preview · saves both themes and the 1–60s refresh interval")
+                .style(Style::default().fg(MUTED)),
+            Rect::new(inner.x, row.y - 2, inner.width, 1),
+        );
+    }
     let buttons = if let Some(label) = client_settings {
         vec!["Save", label, "Cancel"]
     } else {
         vec!["Save", "Cancel"]
     };
     draw_modal_buttons(frame, area, &buttons);
+}
+
+// Render after the surrounding UI has been themed, so the Pulse preview is
+// independent of the selected CCSW theme and all previews use real components.
+pub(super) fn draw_preview(frame: &mut ratatui::Frame, area: Rect, form: &Appearance) {
+    if !gallery(area) {
+        return;
+    }
+    let inner = panel_inner(area);
+    let split = inner.width * 44 / 100;
+    let preview = Rect::new(
+        inner.x + split + 1,
+        inner.y + 2,
+        inner.width - split - 1,
+        12,
+    );
+    frame.render_widget(Clear, preview);
+    frame.render_widget(panel(" Preview / sample usage ", true), preview);
+    let body = panel_inner(preview);
+    let lines = vec![
+        Line::styled(" TODAY / GATEWAY", Style::default().fg(MUTED)),
+        Line::styled(
+            " 128,400 TOKENS",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::from(vec![
+            Span::styled(" ━━━━━━━━━━━", Style::default().fg(ROUTE)),
+            Span::styled("━━━━", Style::default().fg(WARNING)),
+        ]),
+        Line::raw(" Input 96K    Output 32.4K"),
+        Line::raw(""),
+        Line::styled(
+            " Provider       Calls     Tokens",
+            Style::default().fg(MUTED),
+        ),
+        Line::styled(
+            " › Primary        128     98.2K",
+            Style::default().fg(ROUTE).bg(SELECTION),
+        ),
+        Line::raw("   Fallback        42     30.2K"),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(" ● Connected", Style::default().fg(CONNECTED)),
+            Span::styled("  ! 2 retries", Style::default().fg(WARNING)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines), body);
+    let design = if form.pulse_selected {
+        form.pulse_theme.design()
+    } else {
+        form.theme
+    };
+    design.apply_region(frame.buffer_mut(), preview);
+    if area.height >= 24 {
+        let info = Rect::new(preview.x, preview.bottom() + 1, preview.width, 3);
+        frame.render_widget(Clear, info);
+        frame.render_widget(
+            Paragraph::new(design.description().replace(" · ", "\n"))
+                .style(Style::default().fg(MUTED).bg(SURFACE)),
+            info,
+        );
+        form.theme.apply_region(frame.buffer_mut(), info);
+    }
 }

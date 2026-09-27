@@ -197,7 +197,7 @@ impl App {
         // Unknown buckets use '?' on the value baseline; zero buckets use '0'.
         let block = Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(MUTED))
+            .border_style(Style::default().fg(theme::EDGE))
             .title(title);
         let plot = block.inner(chart_area);
         frame.render_widget(block, chart_area);

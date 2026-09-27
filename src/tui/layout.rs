@@ -377,6 +377,11 @@ pub(super) fn modal_area(screen: Rect) -> Rect {
 
 pub(super) fn modal_area_for(modal: &Modal, screen: Rect) -> Rect {
     match modal {
+        Modal::Appearance(_) => centered_rect(
+            100.min(screen.width.saturating_sub(4)),
+            26.min(screen.height.saturating_sub(2)),
+            screen,
+        ),
         Modal::Help(_) => centered_rect(
             82.min(screen.width.saturating_sub(2)),
             22.min(screen.height.saturating_sub(2)),
@@ -467,8 +472,18 @@ pub(super) fn draw_scrollbar(
 pub(super) fn panel(title: &str, active: bool) -> Block<'_> {
     Block::default()
         .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(if active { ROUTE } else { MUTED }))
+        .title(Line::styled(
+            title,
+            Style::default()
+                .fg(if active { ROUTE } else { MUTED })
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE))
+        .border_style(Style::default().fg(if active {
+            theme::ACTIVE_EDGE
+        } else {
+            theme::EDGE
+        }))
 }
 
 pub(super) fn detail(label: &str, value: &str) -> Line<'static> {

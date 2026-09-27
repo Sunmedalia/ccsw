@@ -22,7 +22,7 @@ impl ClientTab {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Claude => "Claude Code",
+            Self::Claude => "Claude",
             Self::Codex => "Codex",
             Self::Pi => "Pi",
             Self::Grok => "Grok",
@@ -34,7 +34,7 @@ impl ClientTab {
 pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 5] {
     let mut x = area.x.saturating_add(1);
     [
-        (ClientTab::Claude, if area.width < 64 { 12 } else { 15 }),
+        (ClientTab::Claude, if area.width < 64 { 9 } else { 11 }),
         (ClientTab::Codex, if area.width < 64 { 7 } else { 9 }),
         (ClientTab::Pi, if area.width < 64 { 2 } else { 6 }),
         (ClientTab::Grok, if area.width < 64 { 4 } else { 10 }),
@@ -99,7 +99,7 @@ impl App {
             ClientTab::Grok => config::Client::Grok,
             ClientTab::Usage => unreachable!(),
         };
-        let config = match if tab == ClientTab::Pi {
+        let mut config = match if tab == ClientTab::Pi {
             crate::pi::native::load(&self.pi_home)
         } else {
             config::load_client(&self.paths.config, client)
@@ -110,6 +110,9 @@ impl App {
                 return;
             }
         };
+        if tab == ClientTab::Pi {
+            config.usage_refresh_secs = self.config.usage_refresh_secs;
+        }
         self.config = config;
         self.usage.active = false;
         self.cache = discovery::load_cache(&self.client_cache_path(client));
@@ -133,7 +136,7 @@ impl App {
         self.return_home();
         self.initialize_background();
         self.status = match tab {
-            ClientTab::Claude => "Claude Code · p sync · F2 next tab",
+            ClientTab::Claude => "Claude · p sync · F2 next tab",
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
             ClientTab::Grok => "Grok · o OAuth · i import · p connect · s status · D disconnect",

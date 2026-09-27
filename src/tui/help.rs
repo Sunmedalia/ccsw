@@ -14,7 +14,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("F4", "TUI theme; Claude presets and custom environment"),
             (
                 "Click top tabs / F2",
-                "Switch independent Claude Code / Codex / Pi / Grok configurations",
+                "Switch independent Claude / Codex / Pi / Grok configurations",
             ),
             ("q", "Quit CCSW"),
         ],

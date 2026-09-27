@@ -9,6 +9,13 @@ impl App {
             _ => self.theme,
         };
         theme.apply(frame.buffer_mut());
+        if let Some(Modal::Appearance(form)) = &self.modal {
+            theme::draw_preview(
+                frame,
+                modal_area_for(self.modal.as_ref().unwrap(), frame.area()),
+                form,
+            );
+        }
     }
 
     fn draw_content(&mut self, frame: &mut ratatui::Frame) {
@@ -132,13 +139,15 @@ impl App {
             ]),
         };
         frame.render_widget(
-            Paragraph::new(line)
-                .wrap(Wrap { trim: true })
-                .block(Block::default().borders(if area.height > 1 {
-                    Borders::BOTTOM
-                } else {
-                    Borders::NONE
-                })),
+            Paragraph::new(line).wrap(Wrap { trim: true }).block(
+                Block::default()
+                    .border_style(Style::default().fg(theme::EDGE))
+                    .borders(if area.height > 1 {
+                        Borders::BOTTOM
+                    } else {
+                        Borders::NONE
+                    }),
+            ),
             area,
         );
     }
@@ -1187,7 +1196,7 @@ impl App {
                 if self.codex_ui.enabled {
                     "Codex"
                 } else {
-                    "Claude Code"
+                    "Claude"
                 },
             ),
             Modal::DeleteProfile => {

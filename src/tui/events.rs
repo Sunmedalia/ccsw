@@ -404,6 +404,7 @@ impl App {
                 .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
                 {
                     if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
+                        form.refresh_selected = false;
                         if form.pulse_selected {
                             form.pulse_theme = theme::PulseTheme::ALL[index];
                         } else {
@@ -414,26 +415,25 @@ impl App {
                     if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
                         form.refresh_selected = true;
                         form.pulse_selected = false;
-                        let relative = mouse.column.saturating_sub(panel_inner(modal_area).x);
-                        if (modal_area.height <= 10 && (21..25).contains(&relative))
-                            || (modal_area.height > 10 && (26..33).contains(&relative))
+                        if let Some(index) = theme::refresh_buttons(modal_area)
+                            .iter()
+                            .position(|rect| contains(*rect, mouse.column, mouse.row))
                         {
-                            form.usage_refresh_secs =
-                                form.usage_refresh_secs.saturating_sub(1).max(1);
-                        } else if (modal_area.height <= 10 && relative >= 25)
-                            || (modal_area.height > 10 && relative >= 33)
-                        {
-                            form.usage_refresh_secs = (form.usage_refresh_secs + 1).min(60);
+                            form.usage_refresh_secs = if index == 0 {
+                                form.usage_refresh_secs.saturating_sub(1).max(1)
+                            } else {
+                                (form.usage_refresh_secs + 1).min(60)
+                            };
                         }
                     }
-                } else if let Some(Modal::Appearance(form)) = self.modal.as_mut()
-                    && mouse.row == panel_inner(modal_area).y
-                    && mouse.column >= panel_inner(modal_area).x
-                    && mouse.column < panel_inner(modal_area).right()
+                } else if let Some(index) = theme::target_tabs(modal_area)
+                    .iter()
+                    .position(|rect| contains(*rect, mouse.column, mouse.row))
                 {
-                    form.pulse_selected = mouse.column >= panel_inner(modal_area).x + 11
-                        && mouse.column < panel_inner(modal_area).x + 25;
-                    form.refresh_selected = mouse.column >= panel_inner(modal_area).x + 25;
+                    if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
+                        form.pulse_selected = index == 1;
+                        form.refresh_selected = index == 2;
+                    }
                 } else {
                     let client_settings = !self.pi_enabled && !self.codex_ui.enabled;
                     if let Some(index) =
@@ -1324,7 +1324,9 @@ impl App {
             }
             Modal::Preferences(form) => {
                 if self.preferences_key(form, key) {
-                    if let Some(theme) = form.return_theme {
+                    if let Some(appearance) = &form.return_appearance {
+                        self.modal = Some(Modal::Appearance(appearance.clone()));
+                    } else if let Some(theme) = form.return_theme {
                         self.modal = Some(Modal::Appearance(theme::Appearance {
                             theme,
                             pulse_theme: form.return_pulse_theme.unwrap_or_default(),

@@ -2,7 +2,10 @@ use super::*;
 impl App {
     pub(super) fn load_client_config(&self) -> Result<Config> {
         if self.pi_enabled {
-            crate::pi::native::load(&self.pi_home)
+            crate::pi::native::load(&self.pi_home).map(|mut config| {
+                config.usage_refresh_secs = self.config.usage_refresh_secs;
+                config
+            })
         } else {
             config::load_client(&self.paths.config, self.config_client())
         }
@@ -13,7 +16,10 @@ impl App {
         edit: impl FnOnce(&mut Config) -> Result<()>,
     ) -> Result<Config> {
         if self.pi_enabled {
-            crate::pi::native::update(&self.pi_home, edit)
+            crate::pi::native::update(&self.pi_home, edit).map(|mut config| {
+                config.usage_refresh_secs = self.config.usage_refresh_secs;
+                config
+            })
         } else {
             config::update_client(&self.paths.config, self.config_client(), edit)
         }

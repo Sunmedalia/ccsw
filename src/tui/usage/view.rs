@@ -11,6 +11,7 @@ struct Areas {
     insights: Rect,
     sections: Rect,
     body: Rect,
+    sidebar: Rect,
     footer: Rect,
 }
 fn areas(area: Rect) -> Areas {
@@ -23,13 +24,25 @@ fn areas(area: Rect) -> Areas {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(if inner.height >= 17 { 4 } else { 1 }),
+        Constraint::Length(if inner.height >= 26 && inner.width >= 90 {
+            6
+        } else if inner.height >= 17 {
+            4
+        } else {
+            1
+        }),
         Constraint::Length(u16::from(inner.height >= 20)),
         Constraint::Length(1),
         Constraint::Min(2),
         Constraint::Length(1),
     ])
     .split(inner);
+    let split = inner.width >= 110 && inner.height >= 24;
+    let columns = Layout::horizontal([
+        Constraint::Min(60),
+        Constraint::Length(if split { 29 } else { 0 }),
+    ])
+    .split(rows[6]);
     Areas {
         clients: rows[0],
         date: rows[1],
@@ -37,7 +50,8 @@ fn areas(area: Rect) -> Areas {
         summary: rows[3],
         insights: rows[4],
         sections: rows[5],
-        body: rows[6],
+        body: columns[0],
+        sidebar: columns[1],
         footer: rows[7],
     }
 }
@@ -809,31 +823,10 @@ impl App {
         let zone = chrono::FixedOffset::east_opt(snapshot.offset)
             .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
 
-        let a = areas(area);
-        for (label, action, rect) in controls(&a, page) {
-            let active = match action {
-                Action::Client(client) => page.client == client,
-                Action::Section(section) => page.section == section,
-                Action::Today => page.follow_today,
-                Action::Range(range) => page.range == range,
-                Action::Metric(tokens) => page.chart_tokens == tokens,
-                _ => false,
-            };
-            frame.render_widget(
-                Paragraph::new(label)
-                    .alignment(Alignment::Center)
-                    .style(button_style(
-                        active,
-                        (matches!(action, Action::Next) && page.day >= snapshot.today())
-                            || (page.range == 3
-                                && matches!(
-                                    action,
-                                    Action::Previous | Action::Next | Action::DateLabel
-                                )),
-                        false,
-                    )),
-                rect,
-            );
+        let mut a = areas(area);
+        if page.section == 5 {
+            a.body.width += a.sidebar.width;
+            a.sidebar = Rect::default();
         }
         let scope = page
             .provider
@@ -869,6 +862,31 @@ impl App {
             ),
             area,
         );
+        for (label, action, rect) in controls(&a, page) {
+            let active = match action {
+                Action::Client(client) => page.client == client,
+                Action::Section(section) => page.section == section,
+                Action::Today => page.follow_today,
+                Action::Range(range) => page.range == range,
+                Action::Metric(tokens) => page.chart_tokens == tokens,
+                _ => false,
+            };
+            frame.render_widget(
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(button_style(
+                        active,
+                        (matches!(action, Action::Next) && page.day >= snapshot.today())
+                            || (page.range == 3
+                                && matches!(
+                                    action,
+                                    Action::Previous | Action::Next | Action::DateLabel
+                                )),
+                        false,
+                    )),
+                rect,
+            );
+        }
         if page.section == 5 {
             self.draw_sessions(frame, &a, page);
             return;
@@ -919,14 +937,18 @@ impl App {
                 "—".into()
             };
             let refreshed = self.usage.updated.map_or("waiting".into(), |updated| {
-                format!("{}s ago", updated.elapsed().as_secs())
+                (chrono::Utc::now()
+                    - chrono::Duration::from_std(updated.elapsed()).unwrap_or_default())
+                .with_timezone(&zone)
+                .format("%H:%M:%S")
+                .to_string()
             });
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled("SUCCESS ", Style::default().fg(MUTED)),
-                    Span::styled(rate, Style::default().fg(CONNECTED)),
+                    Span::styled(rate.clone(), Style::default().fg(CONNECTED)),
                     Span::styled("  ·  CACHE READ ", Style::default().fg(MUTED)),
-                    Span::styled(cache, Style::default().fg(ROUTE)),
+                    Span::styled(cache.clone(), Style::default().fg(ROUTE)),
                     Span::styled("  ·  AVG ", Style::default().fg(MUTED)),
                     Span::styled(
                         format!("{average} tok/call"),
@@ -941,6 +963,21 @@ impl App {
                 ])),
                 a.insights,
             );
+            if a.insights.width < 90 {
+                frame.render_widget(Clear, a.insights);
+                let text = if a.insights.width >= 60 {
+                    format!(
+                        "Success {rate} · Cache {cache} · Avg {average} · Auto {}s",
+                        self.config.usage_refresh_secs
+                    )
+                } else {
+                    format!("Success {rate} · Auto {}s", self.config.usage_refresh_secs)
+                };
+                frame.render_widget(
+                    Paragraph::new(text).style(Style::default().fg(MUTED).bg(theme::SURFACE)),
+                    a.insights,
+                );
+            }
         }
         if !tracked {
             frame.render_widget(
@@ -960,6 +997,9 @@ impl App {
                 4 => self.draw_usage_chart(frame, a.body, page),
                 _ => self.draw_usage_details(frame, a.body, page, &daily, &total),
             }
+        }
+        if tracked && !a.sidebar.is_empty() {
+            self.draw_usage_sidebar(frame, a.sidebar, page, &daily);
         }
         let hint = if page.section == 0 || page.section == 1 {
             "↑↓ scroll · Enter models · Esc back"
@@ -989,6 +1029,117 @@ impl App {
             )]
         };
         frame.render_widget(Paragraph::new(lines), a.footer);
+    }
+
+    fn draw_usage_sidebar(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        page: &UsagePage,
+        total: &Totals,
+    ) {
+        use ratatui::widgets::{Gauge, Sparkline};
+        let area = Rect::new(
+            area.x + 1,
+            area.y,
+            area.width.saturating_sub(1),
+            area.height,
+        );
+        frame.render_widget(panel(" Range overview ", false), area);
+        let inner = panel_inner(area);
+        if inner.height < 6 {
+            return;
+        }
+        let completed = total.success + total.failed + total.interrupted;
+        let rate = if completed > 0 {
+            total.success as f64 / completed as f64
+        } else {
+            0.0
+        };
+        frame.render_widget(
+            Paragraph::new("REQUEST OUTCOMES").style(Style::default().fg(MUTED)),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        frame.render_widget(
+            Gauge::default()
+                .ratio(rate.clamp(0.0, 1.0))
+                .label(if completed > 0 {
+                    format!("{:.0}% success", rate * 100.0)
+                } else {
+                    "No completed calls".into()
+                })
+                .gauge_style(Style::default().fg(CONNECTED).bg(SELECTION)),
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    format!("Failed {:>5}  Pending {:>4}", total.failed, total.pending),
+                    Style::default().fg(if total.failed > 0 { ERROR } else { MUTED }),
+                ),
+                Line::styled(
+                    format!("Stopped {} · Unknown {}", total.interrupted, total.unknown),
+                    Style::default().fg(MUTED),
+                ),
+            ]),
+            Rect::new(inner.x, inner.y + 2, inner.width, 2),
+        );
+        let history = self.usage_history(page);
+        let values: Vec<u64> = history
+            .iter()
+            .rev()
+            .map(|(_, t)| t.calls.max(0) as u64)
+            .collect();
+        frame.render_widget(
+            Paragraph::new("DAILY CALLS / ACTIVE DAYS").style(Style::default().fg(MUTED)),
+            Rect::new(inner.x, inner.y + 5, inner.width, 1),
+        );
+        if inner.height >= 9 {
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&values)
+                    .style(Style::default().fg(ROUTE)),
+                Rect::new(inner.x, inner.y + 6, inner.width, 2),
+            );
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} days / {} calls",
+                    history.len(),
+                    compact(total.calls)
+                ))
+                .style(Style::default().fg(MUTED)),
+                Rect::new(inner.x, inner.y + 8, inner.width, 1),
+            );
+        }
+        if inner.height >= 13 {
+            frame.render_widget(
+                Paragraph::new("TOP MODEL / CALLS").style(Style::default().fg(MUTED)),
+                Rect::new(inner.x, inner.y + 10, inner.width, 1),
+            );
+            let models = self.usage_models(page);
+            let lines = models
+                .iter()
+                .filter(|m| m.daily.calls > 0)
+                .take(3)
+                .map(|m| {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{} ", compact(m.daily.calls)),
+                            Style::default().fg(ROUTE),
+                        ),
+                        Span::raw(m.model.clone()),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            frame.render_widget(
+                Paragraph::new(if lines.is_empty() {
+                    vec![Line::raw("No calls in this range")]
+                } else {
+                    lines
+                }),
+                Rect::new(inner.x, inner.y + 11, inner.width, inner.height - 11),
+            );
+        }
     }
 
     fn draw_usage_providers(&self, frame: &mut ratatui::Frame, area: Rect, page: &UsagePage) {
@@ -1256,7 +1407,45 @@ fn draw_summary(
         return;
     }
 
-    if area.width < 58 || range_label == "All time" {
+    if area.height >= 6 && area.width >= 90 {
+        let columns = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ])
+        .split(area);
+        draw_stat_card(frame, columns[0], range_label, daily, true);
+        draw_stat_card(frame, columns[1], "All time", total, false);
+        let completed = daily.success + daily.failed + daily.interrupted;
+        let rate = if completed > 0 {
+            format!("{:.1}%", daily.success as f64 * 100.0 / completed as f64)
+        } else {
+            "—".into()
+        };
+        let block = panel(" Request health ", false);
+        let inner = block.inner(columns[2]);
+        frame.render_widget(block, columns[2]);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    format!("{} calls", compact(daily.calls)),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::styled(format!("{rate} success"), Style::default().fg(CONNECTED)),
+                Line::styled(
+                    format!("{} failed / {} stopped", daily.failed, daily.interrupted),
+                    Style::default().fg(if daily.failed > 0 { ERROR } else { MUTED }),
+                ),
+                Line::styled(
+                    format!("{} in flight", daily.pending),
+                    Style::default().fg(ROUTE),
+                ),
+            ]),
+            inner,
+        );
+    } else if area.width < 58 || range_label == "All time" {
         draw_stat_card(frame, area, range_label, daily, true);
     } else {
         let columns = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1274,9 +1463,19 @@ fn draw_stat_card(
     featured: bool,
 ) {
     let accent = if featured { ROUTE } else { MUTED };
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(accent));
+    let title = format!(" {label} ");
+    let block = if area.height >= 6 {
+        panel(&title, featured)
+    } else {
+        Block::default()
+            .borders(Borders::LEFT)
+            .style(Style::default().bg(theme::SURFACE))
+            .border_style(Style::default().fg(if featured {
+                theme::ACTIVE_EDGE
+            } else {
+                theme::EDGE
+            }))
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.is_empty() {
@@ -1325,7 +1524,7 @@ fn draw_stat_card(
 }
 
 fn token_composition(totals: &Totals, width: u16) -> Line<'static> {
-    let width = usize::from(width).min(24);
+    let width = usize::from(width);
     let total = totals.input.saturating_add(totals.output);
     if width < 3 || total <= 0 {
         return Line::default();
@@ -1365,7 +1564,14 @@ fn draw_table(
         .with_offset(page.offset.get().min(selected))
         .with_selected(selected);
     let table = Table::new(rows, widths)
-        .header(Row::new(headers).style(Style::default().fg(MUTED)))
+        .header(
+            Row::new(headers).style(
+                Style::default()
+                    .fg(MUTED)
+                    .bg(theme::SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        )
         .column_spacing(1)
         .row_highlight_style(Style::default().bg(SELECTION));
     frame.render_stateful_widget(table, area, &mut state);
@@ -1404,7 +1610,7 @@ mod tests {
         assert!(row(1).contains("12,000 TOKENS"));
         assert!(row(2).contains("IN 9,000   OUT 3,000"));
         assert_eq!(buffer[(1, 3)].fg, ROUTE);
-        assert_eq!(buffer[(19, 3)].fg, WARNING);
+        assert_eq!(buffer[(31, 3)].fg, WARNING);
 
         let mut narrow = Terminal::new(TestBackend::new(40, 3)).unwrap();
         narrow
