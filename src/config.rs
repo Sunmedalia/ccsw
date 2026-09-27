@@ -451,6 +451,7 @@ pub fn load(path: &Path) -> Result<Config> {
             .with_context(|| format!("invalid profile {id}"))?;
     }
     suspend_codex_api_providers(&mut config);
+    suspend_grok_api_providers(&mut config);
     validate_usage_refresh_secs(config.usage_refresh_secs)?;
     config.claude.validate()?;
     config.grok.preferences.validate()?;
@@ -477,6 +478,25 @@ fn suspend_codex_api_providers(config: &mut Config) {
         );
     }
     for profile in config.codex.profiles.values_mut() {
+        profile.enabled = false;
+    }
+}
+
+fn suspend_grok_api_providers(config: &mut Config) {
+    if config.grok.active_mode != Some(crate::grok::Mode::Account) {
+        return;
+    }
+    if config.grok.suspended_providers.is_none() {
+        config.grok.suspended_providers = Some(
+            config
+                .grok
+                .profiles
+                .iter()
+                .map(|(id, profile)| (id.clone(), profile.enabled))
+                .collect(),
+        );
+    }
+    for profile in config.grok.profiles.values_mut() {
         profile.enabled = false;
     }
 }
@@ -699,6 +719,11 @@ pub fn update_client(
         swap_scope(config, client);
         if config.codex.suspended_providers.is_some() {
             for profile in config.codex.profiles.values_mut() {
+                profile.enabled = false;
+            }
+        }
+        if config.grok.active_mode == Some(crate::grok::Mode::Account) {
+            for profile in config.grok.profiles.values_mut() {
                 profile.enabled = false;
             }
         }

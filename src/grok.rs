@@ -69,6 +69,92 @@ pub struct Settings {
     /// CCSW provider/model route to the original Grok catalog key.
     #[serde(default)]
     pub imports: BTreeMap<String, String>,
+    #[serde(default)]
+    pub active_mode: Option<Mode>,
+    #[serde(default)]
+    pub suspended_providers: Option<BTreeMap<String, bool>>,
+    #[serde(default)]
+    pub last_api_default: Option<String>,
+    #[serde(default)]
+    pub last_api_web_search: Option<String>,
+    #[serde(default)]
+    pub last_api_fork_secondary_model: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Mode {
+    Api,
+    Account,
+}
+
+impl Settings {
+    pub(crate) fn managed_key(&self, key: &str) -> bool {
+        key.starts_with("ccsw::") || self.imports.values().any(|name| name == key)
+    }
+
+    pub fn use_account(&mut self, profiles: &mut BTreeMap<String, Profile>, model: String) {
+        if self.suspended_providers.is_none() {
+            self.suspended_providers = Some(
+                profiles
+                    .iter()
+                    .map(|(id, profile)| (id.clone(), profile.enabled))
+                    .collect(),
+            );
+            if let Some(default) = &self.preferences.default
+                && self.managed_key(default)
+            {
+                self.last_api_default = Some(default.clone());
+            }
+            if let Some(search) = &self.preferences.web_search
+                && self.managed_key(search)
+            {
+                self.last_api_web_search = Some(search.clone());
+                self.preferences.web_search = None;
+            }
+            if let Some(fork) = &self.preferences.fork_secondary_model
+                && self.managed_key(fork)
+            {
+                self.last_api_fork_secondary_model = Some(fork.clone());
+                self.preferences.fork_secondary_model = None;
+            }
+        }
+        for profile in profiles.values_mut() {
+            profile.enabled = false;
+        }
+        self.preferences.default = Some(model);
+        self.active_mode = Some(Mode::Account);
+    }
+
+    pub fn use_api(&mut self, profiles: &mut BTreeMap<String, Profile>, preferred: Option<String>) {
+        if let Some(saved) = self.suspended_providers.take() {
+            for (id, enabled) in saved {
+                if let Some(profile) = profiles.get_mut(&id) {
+                    profile.enabled = enabled;
+                }
+            }
+        }
+        self.preferences.default =
+            preferred
+                .or_else(|| self.last_api_default.clone())
+                .or_else(|| {
+                    profiles.iter().find_map(|(id, profile)| {
+                        profile
+                            .enabled
+                            .then(|| crate::discovery::active_models(profile, &[]))
+                            .and_then(|models| {
+                                models.first().map(|model| model_key(self, id, &model.id))
+                            })
+                    })
+                });
+        if let Some(search) = self.last_api_web_search.take() {
+            self.preferences.web_search = Some(search);
+        }
+        if let Some(fork) = self.last_api_fork_secondary_model.take() {
+            self.preferences.fork_secondary_model = Some(fork);
+        }
+        self.active_mode = Some(Mode::Api);
+    }
 }
 pub fn home() -> Result<PathBuf> {
     crate::platform::override_path("GROK_HOME", || Ok(crate::platform::home()?.join(".grok")))
@@ -337,6 +423,14 @@ pub fn apply(
             }
         }
     }
+    let active_models = config.profiles.values().any(|profile| {
+        profile.enabled && !crate::discovery::active_models(profile, &[]).is_empty()
+    });
+    let gateway = if config.grok.active_mode == Some(Mode::Api) && active_models {
+        Some(crate::proxy::prepare_grok_route(paths, config)?)
+    } else {
+        None
+    };
     let mut desired = BTreeMap::<Vec<String>, Option<toml::Value>>::new();
     let mut available = Vec::new();
     for (id, profile) in &config.profiles {
@@ -350,15 +444,32 @@ pub fn apply(
                 desired.insert(vec!["model".into(), key.clone(), name.into()], Some(v));
             };
             for (name, v) in [
-                ("model", model.id.as_str()),
-                ("base_url", profile.base_url.as_str()),
+                (
+                    "model",
+                    if gateway.is_some() {
+                        key.as_str()
+                    } else {
+                        model.id.as_str()
+                    },
+                ),
+                (
+                    "base_url",
+                    gateway
+                        .as_ref()
+                        .map(|(_, url, _)| url.as_str())
+                        .unwrap_or(&profile.base_url),
+                ),
                 ("name", &format!("{} · {}", profile.name, model.label())),
                 (
                     "api_backend",
-                    match profile.api_format {
-                        ApiFormat::Anthropic => "messages",
-                        ApiFormat::OpenaiChat => "chat_completions",
-                        ApiFormat::OpenaiResponses => "responses",
+                    if gateway.is_some() {
+                        "messages"
+                    } else {
+                        match profile.api_format {
+                            ApiFormat::Anthropic => "messages",
+                            ApiFormat::OpenaiChat => "chat_completions",
+                            ApiFormat::OpenaiResponses => "responses",
+                        }
                     },
                 ),
             ] {
@@ -376,14 +487,18 @@ pub fn apply(
                 }
             }
             if model.id.ends_with("[1m]") {
-                add(
-                    "model",
-                    toml::Value::String(config::canonical_model_id(&model.id).into()),
-                );
+                if gateway.is_none() {
+                    add(
+                        "model",
+                        toml::Value::String(config::canonical_model_id(&model.id).into()),
+                    );
+                }
                 add("context_window", toml::Value::Integer(1_000_000));
             }
             // Remove stale imported credential selectors before writing the selected auth.
-            for &name in if matches!(profile.credential, Credential::None) {
+            for &name in if gateway.is_some() {
+                &["api_key", "env_key", "auth_provider"][..]
+            } else if matches!(profile.credential, Credential::None) {
                 &["api_key"][..]
             } else {
                 &["api_key", "env_key", "auth_provider"][..]
@@ -401,22 +516,29 @@ pub fn apply(
                 !["authorization", "x-api-key", "api-key"]
                     .contains(&k.to_ascii_lowercase().as_str())
             });
-            match &profile.credential {
-                Credential::Bearer { value } => {
-                    desired.insert(
-                        vec!["model".into(), key.clone(), "api_key".into()],
-                        Some(toml::Value::String(value.clone())),
-                    );
+            if let Some((_, _, token)) = &gateway {
+                desired.insert(
+                    vec!["model".into(), key.clone(), "api_key".into()],
+                    Some(toml::Value::String(token.clone())),
+                );
+            } else {
+                match &profile.credential {
+                    Credential::Bearer { value } => {
+                        desired.insert(
+                            vec!["model".into(), key.clone(), "api_key".into()],
+                            Some(toml::Value::String(value.clone())),
+                        );
+                    }
+                    Credential::XApiKey { value } => {
+                        headers.insert("x-api-key".into(), toml::Value::String(value.clone()));
+                    }
+                    Credential::ApiKey { value } => {
+                        headers.insert("api-key".into(), toml::Value::String(value.clone()));
+                    }
+                    Credential::None => {}
                 }
-                Credential::XApiKey { value } => {
-                    headers.insert("x-api-key".into(), toml::Value::String(value.clone()));
-                }
-                Credential::ApiKey { value } => {
-                    headers.insert("api-key".into(), toml::Value::String(value.clone()));
-                }
-                Credential::None => {}
             }
-            if profile.api_format == ApiFormat::Anthropic {
+            if gateway.is_none() && profile.api_format == ApiFormat::Anthropic {
                 headers
                     .entry("anthropic-version")
                     .or_insert(toml::Value::String("2023-06-01".into()));
@@ -496,17 +618,32 @@ pub fn apply(
     }
     let applied_default = value(&doc, &["models".into(), "default".into()])?
         .and_then(|v| v.as_str().map(str::to_owned));
-    commit(
+    if let Some((plan, _, _)) = &gateway {
+        crate::proxy::apply_grok_route(paths, plan)?;
+    }
+    let after = doc.to_string();
+    let saved = commit(
         paths,
         home,
         before,
-        doc.to_string(),
+        after.clone(),
         Some(Binding {
             home: home.to_path_buf(),
             config: paths.config.clone(),
             fields,
         }),
-    )?;
+    );
+    if let Err(error) = saved {
+        if let Some((plan, _, _)) = &gateway
+            && read(&home.join("config.toml")).ok().as_deref() != Some(after.as_str())
+        {
+            crate::proxy::rollback_grok_route(paths, plan)?;
+        }
+        return Err(error);
+    }
+    if gateway.is_none() {
+        crate::proxy::remove_grok_route(paths)?;
+    }
     Ok(applied_default)
 }
 
@@ -552,7 +689,7 @@ pub fn prepare_import(home: &Path, current: &Settings) -> Result<Import> {
     let mut preview = Vec::new();
     if let Some(models) = raw.get("model").and_then(|v| v.as_table()) {
         for (key, entry) in models {
-            if key.starts_with("ccsw::") {
+            if key.starts_with("ccsw::") || current.imports.values().any(|name| name == key) {
                 continue;
             }
             let get = |name: &str| entry.get(name).and_then(|v| v.as_str());
@@ -720,6 +857,7 @@ pub fn disconnect(paths: &AppPaths, home: &Path) -> Result<Vec<String>> {
     let _locks = lock(paths, home)?;
     recover(paths, home)?;
     let Some(b) = binding(paths)? else {
+        crate::proxy::remove_grok_route(paths)?;
         return Ok(vec![]);
     };
     check_binding(&b, paths, home)?;
@@ -736,6 +874,7 @@ pub fn disconnect(paths: &AppPaths, home: &Path) -> Result<Vec<String>> {
         }
     }
     commit(paths, home, before, doc.to_string(), None)?;
+    crate::proxy::remove_grok_route(paths)?;
     Ok(conflicts)
 }
 
@@ -774,6 +913,43 @@ pub fn execute_detach(plan: &DetachPlan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_and_api_modes_restore_provider_and_model_choices() {
+        let mut settings = Settings::default();
+        let mut profiles = BTreeMap::from([
+            ("a".into(), profile(ApiFormat::OpenaiChat)),
+            ("b".into(), profile(ApiFormat::Anthropic)),
+        ]);
+        profiles.get_mut("b").unwrap().enabled = false;
+        let api_model = model_key(&settings, "a", "test");
+        settings.preferences.default = Some(api_model.clone());
+        settings.preferences.web_search = Some(api_model.clone());
+        settings.preferences.fork_secondary_model = Some(api_model.clone());
+        settings.use_account(&mut profiles, "grok-build".into());
+        assert_eq!(settings.active_mode, Some(Mode::Account));
+        assert!(profiles.values().all(|profile| !profile.enabled));
+        assert_eq!(settings.preferences.default.as_deref(), Some("grok-build"));
+        assert!(settings.preferences.web_search.is_none());
+        assert!(settings.preferences.fork_secondary_model.is_none());
+        settings.use_api(&mut profiles, None);
+        assert_eq!(settings.active_mode, Some(Mode::Api));
+        assert!(profiles["a"].enabled);
+        assert!(!profiles["b"].enabled);
+        assert_eq!(
+            settings.preferences.default.as_deref(),
+            Some(api_model.as_str())
+        );
+        assert_eq!(
+            settings.preferences.web_search.as_deref(),
+            Some(api_model.as_str())
+        );
+        assert_eq!(
+            settings.preferences.fork_secondary_model.as_deref(),
+            Some(api_model.as_str())
+        );
+    }
+
     fn fixture() -> (tempfile::TempDir, AppPaths, PathBuf, config::Config) {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths {

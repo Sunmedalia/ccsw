@@ -122,7 +122,9 @@ impl App {
                 !model.starts_with("ccsw::")
                     && !self.config.grok.imports.values().any(|key| key == model)
             });
-        let active = status.saved && native_default.is_some();
+        let active = status.saved
+            && self.config.grok.active_mode == Some(crate::grok::Mode::Account)
+            && native_default.is_some();
         let mut lines = wrap_styled_segments(
             vec![
                 (
@@ -269,7 +271,9 @@ impl App {
         match auth::status(&self.grok_home) {
             Ok(status) => {
                 self.grok_auth.status = status;
-                self.grok_auth.message = "Use OAuth selects a native model. Explicit model API keys still take precedence.".into();
+                self.grok_auth.message =
+                    "Use OAuth pauses API providers; selecting an API provider restores them."
+                        .into();
             }
             Err(error) => {
                 self.grok_auth.status = Default::default();
@@ -364,7 +368,14 @@ impl App {
                     self.grok_auth.progress.clear();
                     match result {
                         Ok(status) => {
-                            self.grok_auth.message = if status.saved { "OAuth login saved by Grok · Use OAuth selects the native startup model" } else { "Grok signed out · API provider configurations retained" }.into();
+                            self.grok_auth.message = if status.saved {
+                                "OAuth login saved by Grok · Use OAuth selects the native startup model"
+                            } else if self.config.grok.active_mode == Some(crate::grok::Mode::Account) {
+                                "Grok signed out · select an API provider with p to switch modes"
+                            } else {
+                                "Grok signed out · API provider configurations retained"
+                            }
+                            .into();
                             self.grok_auth.status = status;
                             self.status_error = false;
                         }
@@ -460,29 +471,7 @@ impl App {
             2 => self.start_grok_auth(Action::Device),
             3 => {
                 let model = dialog.model.value.trim().to_owned();
-                crate::grok::validate_oauth_model(&self.grok_home, &model)?;
-                self.config = self.update_client_config(|c| {
-                    c.grok.preferences.default = Some(model);
-                    Ok(())
-                })?;
-                // Always use the explicit native default, not the selected API provider.
-                match crate::grok::conflicts(&self.paths, &self.grok_home) {
-                    Ok(conflicts) if !conflicts.is_empty() => {
-                        self.modal = Some(Modal::Grok(Box::new(grok::Dialog::Reconnect {
-                            conflicts,
-                            preferred: self.config.grok.preferences.default.clone(),
-                            scroll: 0,
-                        })));
-                        return Ok(false);
-                    }
-                    Err(error) => return Err(error),
-                    _ => {}
-                }
-                crate::grok::apply(&self.paths, &self.grok_home, &self.config, None, false)?;
-                self.grok_auth.message =
-                    "Native OAuth model selected · restart Grok to load the startup default".into();
-                self.status = self.grok_auth.message.clone();
-                self.status_error = false;
+                self.select_grok_oauth(model, false)?;
             }
             4 => self.refresh_grok_usage(),
             5 => self.wake_grok_usage()?,
@@ -491,6 +480,53 @@ impl App {
             _ => {}
         }
         Ok(false)
+    }
+
+    pub(super) fn select_grok_oauth(&mut self, model: String, reconnect: bool) -> Result<()> {
+        crate::grok::validate_oauth_model(&self.grok_home, &model)?;
+        if !reconnect {
+            let conflicts = crate::grok::conflicts(&self.paths, &self.grok_home)?;
+            if !conflicts.is_empty() {
+                self.modal = Some(Modal::Grok(Box::new(grok::Dialog::Reconnect {
+                    conflicts,
+                    preferred: Some(model),
+                    api: false,
+                    scroll: 0,
+                })));
+                return Ok(());
+            }
+        }
+        let previous_grok = self.config.grok.clone();
+        let previous_profiles = self.config.profiles.clone();
+        self.config = self.update_client_config(|c| {
+            c.grok.use_account(&mut c.profiles, model.clone());
+            Ok(())
+        })?;
+        if let Err(error) =
+            crate::grok::apply(&self.paths, &self.grok_home, &self.config, None, reconnect)
+        {
+            let written_default = std::fs::read_to_string(self.grok_home.join("config.toml"))
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                .and_then(|doc| {
+                    doc.get("models")?
+                        .get("default")?
+                        .as_str()
+                        .map(str::to_owned)
+                });
+            if written_default.as_deref() != Some(model.as_str()) {
+                self.config = self.update_client_config(|c| {
+                    c.grok = previous_grok.clone();
+                    c.profiles = previous_profiles.clone();
+                    Ok(())
+                })?;
+            }
+            return Err(error);
+        }
+        self.grok_auth.message = "Grok OAuth selected · API providers paused · restart Grok".into();
+        self.status = self.grok_auth.message.clone();
+        self.status_error = false;
+        Ok(())
     }
     pub(super) fn grok_auth_page_key(&mut self, key: KeyEvent) -> Result<()> {
         let Some(mut page) = self.grok_auth.page.take() else {

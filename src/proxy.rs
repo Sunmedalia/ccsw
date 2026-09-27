@@ -44,6 +44,8 @@ struct RouteTarget {
     default_profile_id: Option<String>,
     #[serde(default)]
     codex: bool,
+    #[serde(default)]
+    grok: bool,
     config_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile_id: Option<String>,
@@ -187,7 +189,10 @@ pub fn aggregate_profile(
     let proxy_paths = ProxyPaths::from_app(paths)?;
     let route_id = update_registry(&proxy_paths, None, |registry| {
         if let Some((id, target)) = registry.routes.iter_mut().find(|(_, target)| {
-            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+            !target.codex
+                && !target.grok
+                && target.config_path == paths.config
+                && target.profile_id.is_none()
         }) {
             target.models = targets.clone();
             target.default_profile_id = Some(default_profile_id.into());
@@ -199,6 +204,7 @@ pub fn aggregate_profile(
             RouteTarget {
                 default_profile_id: Some(default_profile_id.into()),
                 codex: false,
+                grok: false,
                 config_path: paths.config.clone(),
                 profile_id: None,
                 models: targets.clone(),
@@ -243,7 +249,10 @@ pub fn aggregate_checkpoint(paths: &AppPaths) -> Result<AggregateCheckpoint> {
             .routes
             .into_iter()
             .filter(|(_, route)| {
-                !route.codex && route.config_path == paths.config && route.profile_id.is_none()
+                !route.codex
+                    && !route.grok
+                    && route.config_path == paths.config
+                    && route.profile_id.is_none()
             })
             .collect(),
     ))
@@ -252,7 +261,10 @@ pub fn aggregate_checkpoint(paths: &AppPaths) -> Result<AggregateCheckpoint> {
 pub fn restore_aggregate(paths: &AppPaths, checkpoint: AggregateCheckpoint) -> Result<()> {
     update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
         registry.routes.retain(|_, route| {
-            route.codex || route.config_path != paths.config || route.profile_id.is_some()
+            route.codex
+                || route.grok
+                || route.config_path != paths.config
+                || route.profile_id.is_some()
         });
         registry.routes.extend(checkpoint.0);
     })
@@ -265,6 +277,7 @@ pub fn owns_settings(paths: &AppPaths, value: &Value) -> Result<bool> {
     Ok(token == Some(registry.local_token.as_str())
         && registry.routes.iter().any(|(id, route)| {
             !route.codex
+                && !route.grok
                 && route.profile_id.is_none()
                 && route.config_path == paths.config
                 && endpoint == Some(format!("http://{}/r/{id}", registry.listen).as_str())
@@ -275,7 +288,10 @@ pub fn clear_aggregate_models(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     update_registry(&proxy_paths, None, |registry| {
         for target in registry.routes.values_mut().filter(|target| {
-            !target.codex && target.config_path == paths.config && target.profile_id.is_none()
+            !target.codex
+                && !target.grok
+                && target.config_path == paths.config
+                && target.profile_id.is_none()
         }) {
             target.models.clear();
         }
@@ -427,6 +443,7 @@ fn health_matches_build(value: &Value) -> bool {
     value["name"] == "ccsw-proxy"
         && value["config_version"].as_u64() == Some(u64::from(config::CONFIG_VERSION))
         && value["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+        && value["grok_gateway"] == true
 }
 
 fn health_document(paths: &AppPaths) -> Result<Value> {
@@ -802,7 +819,7 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             anyhow::anyhow!("invalid local proxy credential"),
         );
     }
-    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION")})).into_response()
+    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION"), "grok_gateway": true})).into_response()
 }
 
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -829,18 +846,23 @@ async fn authenticated_target(
     headers: &HeaderMap,
 ) -> Result<(RouteTarget, Registry)> {
     let registry = read_registry(&state.registry).await?;
-    let expected = format!("Bearer {}", registry.local_token);
-    let actual = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    if actual != Some(expected.as_str()) {
-        bail!("invalid local proxy credential");
-    }
     let target = registry
         .routes
         .get(route)
         .cloned()
         .with_context(|| format!("unknown CCSW route {route}"))?;
+    let expected = format!("Bearer {}", registry.local_token);
+    let actual = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    let grok_api_key = target.grok
+        && headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            == Some(registry.local_token.as_str());
+    if actual != Some(expected.as_str()) && !grok_api_key {
+        bail!("invalid local proxy credential");
+    }
     Ok((target, registry))
 }
 
@@ -891,7 +913,7 @@ fn role_target<'a>(
     config: &Config,
     requested: &str,
 ) -> Option<&'a AggregateModelTarget> {
-    if target.codex {
+    if target.codex || target.grok {
         return None;
     }
     let role = requested_role(requested)?;
@@ -907,10 +929,13 @@ fn role_target<'a>(
 async fn route_config(target: &RouteTarget) -> Result<config::Config> {
     let path = target.config_path.clone();
     let codex = target.codex;
+    let grok = target.grok;
     tokio::task::spawn_blocking(move || {
         config::load_client(
             &path,
-            if codex {
+            if grok {
+                config::Client::Grok
+            } else if codex {
                 config::Client::Codex
             } else {
                 config::Client::Claude
@@ -949,7 +974,9 @@ fn resolve_profile_from_config(
                     .map(|(_, mapped)| mapped)
             })
             .or_else(|| role_target(target, config, requested))
-            .with_context(|| if target.codex {
+            .with_context(|| if target.grok {
+                format!("model '{requested}' is not synced by CCSW; press p to reconnect Grok")
+            } else if target.codex {
                 format!("model '{requested}' is not synced by CCSW; press p to sync, then restart Codex to reload /model")
             } else {
                 format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p")
@@ -1019,6 +1046,7 @@ impl SessionProviders {
         let resolved = resolve_profile_from_config(&effective, config, requested)?;
         if remember
             && !target.codex
+            && !target.grok
             && target.profile_id.is_none()
             && let Some(key) = session
             && let Some(mapped) = requested.and_then(|requested| {
@@ -2355,6 +2383,94 @@ pub(crate) struct CodexRoutePlan {
     after: RouteTarget,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct GrokRoutePlan {
+    id: String,
+    before: Option<RouteTarget>,
+    after: RouteTarget,
+}
+
+pub(crate) fn prepare_grok_route(
+    paths: &AppPaths,
+    config: &Config,
+) -> Result<(GrokRoutePlan, String, String)> {
+    let mut models = BTreeMap::new();
+    for (profile_id, profile) in &config.profiles {
+        if !profile.enabled {
+            continue;
+        }
+        for model in crate::discovery::active_models(profile, &[]) {
+            models.insert(
+                crate::grok::model_key(&config.grok, profile_id, &model.id),
+                AggregateModelTarget {
+                    profile_id: profile_id.clone(),
+                    model_id: model.id,
+                },
+            );
+        }
+    }
+    if models.is_empty() {
+        bail!("Enable at least one Grok model before using CCSW Gateway");
+    }
+    start(paths, None)?;
+    let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
+    let existing = registry.routes.iter().find(|(_, target)| {
+        target.grok && target.config_path == paths.config && target.profile_id.is_none()
+    });
+    let plan = GrokRoutePlan {
+        id: existing
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+        before: existing.map(|(_, target)| target.clone()),
+        after: RouteTarget {
+            default_profile_id: None,
+            codex: false,
+            grok: true,
+            config_path: paths.config.clone(),
+            profile_id: None,
+            models,
+        },
+    };
+    let url = format!("http://{}/r/{}/v1", registry.listen, plan.id);
+    Ok((plan, url, registry.local_token))
+}
+
+pub(crate) fn apply_grok_route(paths: &AppPaths, plan: &GrokRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != plan.before.as_ref() {
+            bail!("Grok Gateway route changed during preparation; retry");
+        }
+        registry.routes.insert(plan.id.clone(), plan.after.clone());
+        Ok(())
+    })?
+}
+
+pub(crate) fn rollback_grok_route(paths: &AppPaths, plan: &GrokRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != Some(&plan.after) {
+            bail!("Grok Gateway route changed during rollback");
+        }
+        if let Some(before) = &plan.before {
+            registry.routes.insert(plan.id.clone(), before.clone());
+        } else {
+            registry.routes.remove(&plan.id);
+        }
+        Ok(())
+    })?
+}
+
+pub(crate) fn remove_grok_route(paths: &AppPaths) -> Result<()> {
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    if !proxy_paths.registry.exists() {
+        return Ok(());
+    }
+    update_registry(&proxy_paths, None, |registry| {
+        registry.routes.retain(|_, target| {
+            !(target.grok && target.config_path == paths.config && target.profile_id.is_none())
+        });
+    })
+}
+
 pub(crate) fn codex_model_id(profile_id: &str, model_id: &str) -> String {
     format!("{profile_id}::{}", config::canonical_model_id(model_id))
 }
@@ -2405,6 +2521,7 @@ pub(crate) fn prepare_codex_route(
         after: RouteTarget {
             default_profile_id: None,
             codex: true,
+            grok: false,
             config_path: paths.config.clone(),
             profile_id: None,
             models: targets,
@@ -2444,6 +2561,186 @@ pub(crate) fn restore_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Re
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn grok_gateway_routes_and_records_upstream_usage() {
+        use super::*;
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let sender = std::sync::Arc::new(std::sync::Mutex::new(Some(sent)));
+        let upstream_app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |headers: HeaderMap, Json(body): Json<Value>| {
+                let sender = sender.clone();
+                async move {
+                    sender.lock().unwrap().take().unwrap().send((headers, body)).unwrap();
+                    Json(json!({"id":"test","model":"upstream-model","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":13,"completion_tokens":7}}))
+                }
+            }),
+        );
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(upstream, upstream_app).await.unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state_dir: temp.path().join("state"),
+            cache: temp.path().join("cache.json"),
+        };
+        config::update_client(&paths.config, config::Client::Grok, |config| {
+            let mut profile: Profile = toml::from_str("name='Gateway provider'\nbase_url='http://localhost/v1'\ndefault_model='upstream-model'\n[[models]]\nid='upstream-model'\n")?;
+            profile.base_url = format!("http://{upstream_address}/v1");
+            profile.api_format = ApiFormat::OpenaiChat;
+            profile.credential = Credential::Bearer {
+                value: "upstream-secret".into(),
+            };
+            config.profiles.insert("provider".into(), profile);
+            config.grok.active_mode = Some(crate::grok::Mode::Api);
+            Ok(())
+        })
+        .unwrap();
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy_listener.local_addr().unwrap();
+        let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+        update_registry(&proxy_paths, Some(&proxy_address.to_string()), |_| ()).unwrap();
+        let token = load_registry(&proxy_paths).unwrap().local_token;
+        let server = tokio::spawn(async move {
+            serve_with_listener(proxy_paths.registry, Some(proxy_listener)).await
+        });
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .no_proxy()
+            .build()
+            .unwrap();
+        for _ in 0..100 {
+            if client
+                .get(format!("http://{proxy_address}/health"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let grok_home = temp.path().join("grok");
+        fs::create_dir_all(&grok_home).unwrap();
+        let sync_paths = paths.clone();
+        let sync_home = grok_home.clone();
+        tokio::task::spawn_blocking(move || {
+            let config = config::load_client(&sync_paths.config, config::Client::Grok).unwrap();
+            crate::grok::apply(&sync_paths, &sync_home, &config, None, false).unwrap();
+        })
+        .await
+        .unwrap();
+        let native: toml::Value = fs::read_to_string(grok_home.join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let model = &native["model"]["ccsw::provider::upstream-model"];
+        assert_eq!(
+            model["model"].as_str(),
+            Some("ccsw::provider::upstream-model")
+        );
+        assert_eq!(model["api_backend"].as_str(), Some("messages"));
+        let url = format!("{}/messages", model["base_url"].as_str().unwrap());
+        assert_eq!(model["api_key"].as_str(), Some(token.as_str()));
+        assert_eq!(
+            load_registry(&ProxyPaths::from_app(&paths).unwrap())
+                .unwrap()
+                .routes
+                .len(),
+            1
+        );
+        let response = client
+            .post(url)
+            .header("x-api-key", &token)
+            .json(&json!({"model":"ccsw::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "{}", response.status());
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["usage"]["output_tokens"], 7);
+        let (headers, forwarded) = received.await.unwrap();
+        assert_eq!(forwarded["model"], "upstream-model");
+        assert_eq!(headers[header::AUTHORIZATION], "Bearer upstream-secret");
+        let usage =
+            crate::usage::snapshot(&paths.state_dir.join(crate::usage::FILE), &paths.config)
+                .unwrap();
+        let totals = usage.total(Some("Grok"), Some("provider"), None, "generation");
+        assert_eq!((totals.calls, totals.input, totals.output), (1, 13, 7));
+        config::update_client(&paths.config, config::Client::Grok, |config| {
+            config
+                .grok
+                .use_account(&mut config.profiles, "grok-build".into());
+            Ok(())
+        })
+        .unwrap();
+        let sync_paths = paths.clone();
+        let sync_home = grok_home.clone();
+        tokio::task::spawn_blocking(move || {
+            let config = config::load_client(&sync_paths.config, config::Client::Grok).unwrap();
+            crate::grok::apply(&sync_paths, &sync_home, &config, None, false).unwrap();
+        })
+        .await
+        .unwrap();
+        let native: toml::Value = fs::read_to_string(grok_home.join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(native["models"]["default"].as_str(), Some("grok-build"));
+        assert!(
+            native
+                .get("model")
+                .and_then(|models| models.get("ccsw::provider::upstream-model"))
+                .and_then(|model| model.get("base_url"))
+                .is_none()
+        );
+        assert_eq!(
+            load_registry(&ProxyPaths::from_app(&paths).unwrap())
+                .unwrap()
+                .routes
+                .len(),
+            0
+        );
+        config::update_client(&paths.config, config::Client::Grok, |config| {
+            config.grok.use_api(&mut config.profiles, None);
+            Ok(())
+        })
+        .unwrap();
+        let sync_paths = paths.clone();
+        let sync_home = grok_home.clone();
+        tokio::task::spawn_blocking(move || {
+            let config = config::load_client(&sync_paths.config, config::Client::Grok).unwrap();
+            crate::grok::apply(&sync_paths, &sync_home, &config, None, false).unwrap();
+        })
+        .await
+        .unwrap();
+        let native: toml::Value = fs::read_to_string(grok_home.join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            native["models"]["default"].as_str(),
+            Some("ccsw::provider::upstream-model")
+        );
+        assert_eq!(
+            native["model"]["ccsw::provider::upstream-model"]["api_backend"].as_str(),
+            Some("messages")
+        );
+        assert_eq!(
+            load_registry(&ProxyPaths::from_app(&paths).unwrap())
+                .unwrap()
+                .routes
+                .len(),
+            1
+        );
+        server.abort();
+        upstream_task.abort();
+    }
+
     #[test]
     fn aggregate_operations_and_recovery_are_client_scoped() {
         let temp = tempfile::tempdir().unwrap();
@@ -2456,6 +2753,7 @@ mod tests {
         let claude = RouteTarget {
             default_profile_id: Some("local".into()),
             codex: false,
+            grok: false,
             config_path: paths.config.clone(),
             profile_id: None,
             models: BTreeMap::from([(
@@ -2470,9 +2768,14 @@ mod tests {
             codex: true,
             ..claude.clone()
         };
+        let grok = RouteTarget {
+            grok: true,
+            ..claude.clone()
+        };
         update_registry(&proxy_paths, None, |registry| {
             registry.routes.insert("claude".into(), claude.clone());
             registry.routes.insert("codex".into(), codex.clone());
+            registry.routes.insert("grok".into(), grok.clone());
         })
         .unwrap();
         let checkpoint = aggregate_checkpoint(&paths).unwrap();
@@ -2480,6 +2783,7 @@ mod tests {
         let cleared = load_registry(&proxy_paths).unwrap();
         assert!(cleared.routes["claude"].models.is_empty());
         assert_eq!(cleared.routes["codex"], codex);
+        assert_eq!(cleared.routes["grok"], grok);
 
         let changed = RouteTarget {
             models: BTreeMap::new(),
@@ -2495,6 +2799,7 @@ mod tests {
         let restored = load_registry(&proxy_paths).unwrap();
         assert_eq!(restored.routes["claude"], claude);
         assert_eq!(restored.routes["codex"], changed);
+        assert_eq!(restored.routes["grok"], grok);
         let settings = json!({"env":{
             "ANTHROPIC_BASE_URL":format!("http://{}/r/codex", restored.listen),
             "ANTHROPIC_AUTH_TOKEN":restored.local_token,
@@ -2507,8 +2812,11 @@ mod tests {
 
     #[test]
     fn proxy_health_requires_current_config_and_binary_versions() {
-        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION")});
+        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true});
         assert!(super::health_matches_build(&current));
+        let mut without_grok = current.clone();
+        without_grok.as_object_mut().unwrap().remove("grok_gateway");
+        assert!(!super::health_matches_build(&without_grok));
         assert!(!super::health_matches_build(
             &serde_json::json!({"name":"ccsw-proxy"})
         ));
@@ -2535,6 +2843,7 @@ mod tests {
         let mut target = RouteTarget {
             default_profile_id: Some("a".into()),
             codex: false,
+            grok: false,
             config_path: path.clone(),
             profile_id: None,
             models: BTreeMap::new(),
@@ -2733,6 +3042,7 @@ mod tests {
         let mut target = RouteTarget {
             default_profile_id: Some("one".into()),
             codex: false,
+            grok: false,
             config_path: path.clone(),
             profile_id: None,
             models: ["a", "b"]
@@ -3026,6 +3336,7 @@ mod tests {
                 RouteTarget {
                     default_profile_id: None,
                     codex: false,
+                    grok: false,
                     config_path: paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3235,6 +3546,7 @@ mod tests {
                 RouteTarget {
                     default_profile_id: None,
                     codex: false,
+                    grok: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3366,6 +3678,7 @@ mod tests {
                 RouteTarget {
                     default_profile_id: Some("anthropic".into()),
                     codex: false,
+                    grok: false,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3432,6 +3745,7 @@ enabled_models = ["b"]
         let target = RouteTarget {
             default_profile_id: None,
             codex: false,
+            grok: false,
             config_path: path.clone(),
             profile_id: None,
             models: ["a", "b"]
@@ -3750,6 +4064,7 @@ mod client_search_integration {
                             config_path: paths.config.clone(),
                             profile_id: Some("test".into()),
                             codex: false,
+                            grok: false,
                             default_profile_id: None,
                             models: BTreeMap::new(),
                         },

@@ -1147,7 +1147,7 @@ impl Monitor {
             self.sessions
                 .rows
                 .iter()
-                .filter(|s| s.client == "Grok")
+                .filter(|s| s.client == "Grok" && s.tokens.known)
                 .max_by_key(|s| s.updated)
         };
         let mut out = vec![
@@ -2914,8 +2914,6 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
             }
         });
     }
-    let mut session_worker = Some((session_send, session_requests));
-    let mut session_reader_started = false;
     std::thread::spawn(move || {
         let mut reader = Reader::new(paths.state_dir.join(crate::usage::FILE), paths.config);
         let mut snapshot = Snapshot::default();
@@ -2949,11 +2947,7 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
         source_pane,
         ..Default::default()
     };
-    if monitor.source_pane.is_some() {
-        session_reader_started = true;
-        let (session_send, session_requests) = session_worker.take().unwrap();
-        spawn_session_reader(session_send, session_requests, session_refresh.clone());
-    }
+    spawn_session_reader(session_send, session_requests, session_refresh.clone());
     let mut redraw = true;
     let mut last_theme_check = Instant::now();
     let mut last_clock_redraw = Instant::now();
@@ -3171,22 +3165,11 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
                     {
                         monitor.client = client;
                     }
-                    if monitor.sessions_mode && !session_reader_started {
-                        session_reader_started = true;
-                        let (session_send, session_requests) = session_worker.take().unwrap();
-                        spawn_session_reader(
-                            session_send,
-                            session_requests,
-                            session_refresh.clone(),
-                        );
-                    }
                 }
                 KeyCode::Char('r') => {
                     account_force = true;
                     let _ = refresh.try_send(());
-                    if session_reader_started {
-                        let _ = session_refresh.try_send(());
-                    }
+                    let _ = session_refresh.try_send(());
                     monitor.notice = None;
                 }
                 KeyCode::Tab => {
@@ -4544,6 +4527,12 @@ mod account_page_tests {
                 cache_known: true,
                 ..Default::default()
             },
+            ..Default::default()
+        });
+        monitor.sessions.rows.push(crate::sessions::Session {
+            id: "grok-empty".into(),
+            client: "Grok",
+            updated: 200,
             ..Default::default()
         });
         let recent = monitor

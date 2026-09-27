@@ -904,7 +904,11 @@ impl App {
             {
                 let key = crate::grok::model_key(&self.config.grok, &id, &def);
                 match self.update_client_config(|c| {
-                    c.grok.preferences.default = Some(key);
+                    if c.grok.active_mode == Some(crate::grok::Mode::Account) {
+                        c.grok.last_api_default = Some(key);
+                    } else {
+                        c.grok.preferences.default = Some(key);
+                    }
                     Ok(())
                 }) {
                     Ok(config) => self.config = config,

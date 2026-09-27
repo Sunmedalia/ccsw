@@ -3670,6 +3670,11 @@ fn repeated_model_click_edits_and_reasoning_arrows_cycle() {
 
 #[test]
 fn grok_tabs_import_settings_sync_and_client_isolation() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     let (temp, mut app) = persisted_app();
     app.grok_home = temp.path().join("grok");
     std::fs::create_dir_all(&app.grok_home).unwrap();
@@ -3699,6 +3704,42 @@ fn grok_tabs_import_settings_sync_and_client_isolation() {
         Some("ask")
     );
     assert!(!crate::grok::connected(&app.paths));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    std::fs::create_dir_all(&app.paths.state_dir).unwrap();
+    std::fs::write(
+        app.paths.state_dir.join("proxy.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "listen": listener.local_addr().unwrap().to_string(),
+            "local_token": "test-local-token",
+            "routes": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let server = std::thread::spawn(move || {
+        while !stopped.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0u8; 2048];
+                    let _ = stream.read(&mut request);
+                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true}).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
     app.handle_key(key(KeyCode::Char('p'))).unwrap();
     assert!(crate::grok::connected(&app.paths));
     assert!(!app.status_error, "{}", app.status);
@@ -3742,6 +3783,8 @@ fn grok_tabs_import_settings_sync_and_client_isolation() {
     assert_eq!(before.profiles, after.profiles);
     assert_eq!(before.codex, after.codex);
     assert_eq!(before.pi, after.pi);
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
     app.select_client_tab(ClientTab::Claude);
     assert!(!app.grok_enabled);
     assert_eq!(app.config.profiles, before.profiles);
@@ -3914,8 +3957,13 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
         Some("grok-build")
     );
     assert_eq!(
-        serde_json::to_value(&before).unwrap(),
-        serde_json::to_value(&app.config.profiles).unwrap()
+        app.config.grok.active_mode,
+        Some(crate::grok::Mode::Account)
+    );
+    assert!(app.config.profiles.values().all(|profile| !profile.enabled));
+    assert_eq!(
+        app.config.grok.suspended_providers.as_ref().unwrap()["one"],
+        before["one"].enabled
     );
     assert!(
         std::fs::read_to_string(app.grok_home.join("config.toml"))

@@ -226,7 +226,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 ## Grok 配置
 
-点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude Code 的厂商和模型管理操作，支持三种 API 协议，由 Grok 直接连接厂商。
+点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude 的厂商和模型管理操作，支持三种 API 协议。Grok 的 **API Provider** 与 **OAuth Account** 是互斥的使用模式：按 `p` 选择 API Provider 后，CCSW 管理的模型经本地代理转发并记录 Gateway token；选择 OAuth 时暂停这些 API Provider。
 
 1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `n` 新增厂商。
 2. 编辑厂商、模型、启用状态及 token 参数。新增模型在 Grok 中使用 `ccsw::厂商ID::模型ID`，请求发送实际上游模型 ID；导入模型保留原有配置键。
@@ -241,7 +241,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`（或再次点击）进入独立的 OAuth Accounts 管理页面；也可按 `o` 直接进入。页面沿用 Codex Accounts 的上下布局：上方账号列表、下方详情与原生模型配置、底部登录、Wake 与退出操作，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
 
-登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。登录本身不会修改已选 API 模型；已有厂商和模型保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`w` 对当前 OAuth 账号执行 Wake，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
+登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。Use OAuth 会保存 API Provider 的启用状态、暂停这些 Provider 并移除 Grok 代理路由；再次选中 API Provider 按 `p` 会恢复原来的启用状态和 API 默认模型。登录本身不切换模式；已有厂商、模型和登录凭据都会保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`w` 对当前 OAuth 账号执行 Wake，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
 
 进入账号页或登录成功后自动获取用量：显示当前周期的已用比例、剩余比例、额度进度条、重置时间，以及服务返回的预付余额和按需用量/上限。共享额度会标为 **Shared account credit allowance**。这些数据是账号额度，不是本地会话 token 统计；缺失字段不会显示为零。`PgUp/PgDn` 查看较长详情。刷新失败时保留本次运行中同一账号的上次结果并提示缓存状态；退出登录或更换账号会清除对应缓存。访问令牌过期时，先在 Grok 刷新登录或重新授权，再按 `r`。接口依据 [Grok 官方账单实现](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/extensions/billing.rs)。
 
@@ -772,7 +772,7 @@ Grok → Grok；未识别到这些 agent → All。打开后通过 Herdr 焦点�
 - 每 2 秒检查本地用量库；数据库版本未变化时跳过统计查询。`r` 立即检查。读取失败保留旧数据并标记 STALE。
 - 首页在 `PROVIDERS / TODAY` 标题右侧点击 `[Models m]`（或按 `m`）切换服务商与模型明细；不再使用 `d`。滚轮、方向键、PgUp/PgDn、鼠标点击或拖动滚动条均可滚动，Esc/Home 回到顶部。
 - **Codex** 页面顶部用紧凑账号卡显示名称、邮箱、套餐、本地登录状态及额度进度条。简洁版以紧凑额度条显示已用比例与相对重置时间，登录状态、账号数量和缓存年龄合并为一行；文字版保留完整字段。账号元数据每两秒更新；`r` 可在线刷新额度，Pulse 不切换账号。
-- **Grok** 页面顶部先显示账号卡、额度进度条和模型列表，再以独立的 Gateway token 区域显示今日 Grok 网关用量、输入/输出及缓存，再以 Session token 区域显示本地会话累计 token、缓存读写和命中率，两者不相加。账号卡显示 OAuth 账号、额度/重置时间/余额及模型配置。当前选择 Grok 时，每分钟自动刷新在线额度，`r` 立即刷新；失败保留同一账号缓存。`v` 在文字版与简洁版之间切换：文字版沿用 Claude 的完整网关指标、请求健康及服务商/模型明细，简洁版与 Codex、Claude 共用精细比例条，账号额度、输入输出及缓存命中以紧凑视图显示。两版都显示网关输出速率（E2E）；Session 区域另显示原生日志的 API rate（有耗时记录的输出 token ÷ API 总耗时），不等同于纯模型解码速度，缺少有效耗时时显示 `—`。Grok 直接 API 流量不计入 CCSW 网关统计，Pulse 只读索引 Grok 原生 `updates.jsonl` 中每个 prompt 的真实 usage，重复完成通知不会重复计数。聚焦的 Grok session 优先；没有聚焦 Grok session 时展示最近会话并标为 Recent，缺少 token 数据显示 `—`。
+- **Grok** 页面顶部先显示账号卡、额度进度条和模型列表，再以独立的 Gateway token 区域显示今日**经过 CCSW 本地代理**的 Grok 请求用量、输入/输出及缓存；Session token 区域显示 Grok 原生 `updates.jsonl` 中当前会话累计的 token、缓存读写和命中率，两者不相加。选择 API Provider 并重启 Grok 后，新请求才会记入 Gateway token；OAuth 和未通过 CCSW 代理的旧直连请求不会计入该区域。账号卡显示 OAuth 账号、额度/重置时间/余额及模型配置。当前选择 Grok 时，每分钟自动刷新在线额度，`r` 立即刷新；失败保留同一账号缓存。`v` 在文字版与简洁版之间切换：文字版沿用 Claude 的完整网关指标、请求健康及服务商/模型明细，简洁版与 Codex、Claude 共用精细比例条。两版都显示网关输出速率（E2E）；Session 区域另显示原生日志的 API rate（有耗时记录的输出 token ÷ API 总耗时），不等同于纯模型解码速度，缺少有效耗时时显示 `—`。聚焦的 Grok session 优先；没有聚焦 Grok session 时显示最近一个有 token 的会话并标为 Recent；尚未写入 usage 时显示 `—`。
 - Claude / All 侧栏首页首屏先显示**今日 CCSW 网关用量**，再显示当前聚焦的 Claude / Codex pane 的**当前 session 累计 token**；两者均用大数字展示，互不相加，各自保留输入/输出、缓存读写和缓存率。session 缓存复用率 = 缓存读取 ÷ 总输入（不含输出；缓存写入不算命中）。当前会话来自本地日志；文件变化会触发更新，并每 30 秒兜底检查一次。文件监听不可用时改为每 2 秒检查。Codex 恢复同一 session 时会合并多份日志的累计计数，避免新日志尚未写入 token 事件时用量暂时消失。`s` / `Sessions` 打开会话页，顶部保留当前会话摘要，下方显示其他本地会话；沿用 Claude / Codex / All 筛选。焦点切换到另一 agent pane 或 agent 切换 session 时，侧栏随之切换对应客户端和当前会话。若 Herdr 尚未提供 session ID，会显示等待识别，不会把最近的日志误标为当前会话。会话页按 `t` 切换最近活动 / token 排序，`r` 刷新，`?` 查看统计说明。Fork 会话标记 `*`，可能包含继承用量。
 - `c` / `Chart` 切换首页与图表页：上方为今日网关每小时请求数，下方为当前 session 今日每小时 token 增量（输入+输出，来自本地日志）；两组图分别缩放，不应直接比较柱高。
 - `v`（或点击右上角 `V(v)` / `T(v)`）在文字版和简洁图形版之间切换，当前页面、客户端筛选和排序保持不变。简洁版仍保留网关与当前 session 的大 Token 数字；网关指标改为输入/输出双色条、请求/未知计数、缓存命中条（内含 R/W 读写量）及速率/测量流数的紧凑读数，保留各项数值而减少重复标签。健康条按已完成请求分为绿色成功、红色失败、金色中断，待完成请求不计入比例。图表页原本就是图形展示，切换后图表数据不变。

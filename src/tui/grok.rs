@@ -18,6 +18,7 @@ pub(super) enum Dialog {
     Reconnect {
         conflicts: Vec<String>,
         preferred: Option<String>,
+        api: bool,
         scroll: u16,
     },
 }
@@ -153,7 +154,7 @@ impl App {
                 self.status_error = false;
             }
             KeyCode::Char('P') => {
-                self.status = "Grok connects directly to providers".into();
+                self.status = "Grok API providers use CCSW Gateway after p connects".into();
             }
             _ => return Ok(false),
         }
@@ -193,13 +194,14 @@ impl App {
             self.open_grok_auth();
             return;
         }
-        let preferred = self.grok_preferred();
+        let selected = self.grok_preferred();
         if !reconnect {
             match native::conflicts(&self.paths, &self.grok_home) {
                 Ok(conflicts) if !conflicts.is_empty() => {
                     self.modal = Some(Modal::Grok(Box::new(Dialog::Reconnect {
                         conflicts,
-                        preferred,
+                        preferred: selected,
+                        api: true,
                         scroll: 0,
                     })));
                     return;
@@ -211,7 +213,55 @@ impl App {
                 _ => {}
             }
         }
-        self.write_grok(preferred, reconnect);
+        if self.config.grok.active_mode != Some(native::Mode::Account)
+            && !self.config.profiles.values().any(|profile| {
+                profile.enabled && !discovery::active_models(profile, &[]).is_empty()
+            })
+        {
+            self.write_grok(None, reconnect);
+            return;
+        }
+        let previous_grok = self.config.grok.clone();
+        let previous_profiles = self.config.profiles.clone();
+        self.config = match self.update_client_config(|c| {
+            c.grok.use_api(&mut c.profiles, selected.clone());
+            if !c.profiles.values().any(|profile| {
+                profile.enabled && !discovery::active_models(profile, &[]).is_empty()
+            }) {
+                anyhow::bail!("Enable at least one Grok API model before selecting API providers");
+            }
+            Ok(())
+        }) {
+            Ok(config) => config,
+            Err(error) => {
+                self.set_error(format!("Cannot select Grok API providers: {error:#}"));
+                return;
+            }
+        };
+        let preferred = selected
+            .or_else(|| self.grok_preferred())
+            .or_else(|| self.config.grok.last_api_default.clone());
+        self.write_grok(preferred.clone(), reconnect);
+        if self.status_error {
+            let written_default = std::fs::read_to_string(self.grok_home.join("config.toml"))
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                .and_then(|doc| {
+                    doc.get("models")?
+                        .get("default")?
+                        .as_str()
+                        .map(str::to_owned)
+                });
+            if written_default.as_deref() != preferred.as_deref()
+                && let Ok(config) = self.update_client_config(|c| {
+                    c.grok = previous_grok.clone();
+                    c.profiles = previous_profiles.clone();
+                    Ok(())
+                })
+            {
+                self.config = config;
+            }
+        }
     }
     fn write_grok(&mut self, preferred: Option<String>, reconnect: bool) {
         let result = (|| -> Result<()> {
@@ -343,7 +393,29 @@ impl App {
                                     "Grok settings changed in another instance; reopen settings"
                                 );
                             }
-                            c.grok.preferences = edited.clone();
+                            let mut applied = edited.clone();
+                            if c.grok.active_mode == Some(native::Mode::Account) {
+                                if let Some(model) = &applied.default
+                                    && c.grok.managed_key(model)
+                                {
+                                    c.grok.last_api_default = Some(model.clone());
+                                    applied.default = c.grok.preferences.default.clone();
+                                }
+                                if let Some(model) = &applied.web_search
+                                    && c.grok.managed_key(model)
+                                {
+                                    c.grok.last_api_web_search = Some(model.clone());
+                                    applied.web_search = c.grok.preferences.web_search.clone();
+                                }
+                                if let Some(model) = &applied.fork_secondary_model
+                                    && c.grok.managed_key(model)
+                                {
+                                    c.grok.last_api_fork_secondary_model = Some(model.clone());
+                                    applied.fork_secondary_model =
+                                        c.grok.preferences.fork_secondary_model.clone();
+                                }
+                            }
+                            c.grok.preferences = applied;
                             Ok(())
                         })?;
                         self.status =
@@ -389,11 +461,18 @@ impl App {
                 _ => {}
             },
             Dialog::Reconnect {
-                preferred, scroll, ..
+                preferred,
+                api,
+                scroll,
+                ..
             } => match key.code {
                 KeyCode::Esc => return Ok(true),
                 KeyCode::Enter => {
-                    self.write_grok(preferred.clone(), true);
+                    if *api {
+                        self.apply_grok(true);
+                    } else {
+                        self.select_grok_oauth(preferred.clone().unwrap_or_default(), true)?;
+                    }
                     return Ok(true);
                 }
                 KeyCode::Down | KeyCode::PageDown => *scroll = scroll.saturating_add(1),

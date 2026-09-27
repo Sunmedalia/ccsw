@@ -14,7 +14,13 @@ pub(super) async fn begin(
         state.usage.clone(),
         Request {
             config: target.config_path.clone(),
-            client: if target.codex { "Codex" } else { "Claude" },
+            client: if target.grok {
+                "Grok"
+            } else if target.codex {
+                "Codex"
+            } else {
+                "Claude"
+            },
             provider: id.into(),
             name: profile.name.clone(),
             model: model.into(),

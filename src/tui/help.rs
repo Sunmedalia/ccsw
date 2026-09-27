@@ -437,6 +437,7 @@ fn grok_help_content(section: HelpSection) -> Vec<Line<'static>> {
         Line::raw(
             "OAuth: b browser · d device code · u use native model · r refresh usage · x sign out.",
         ),
+        Line::raw("Grok OAuth and API providers are exclusive; p restores API providers through CCSW Gateway."),
         Line::raw("Account usage: credits, resets, prepaid/on-demand amounts · PgUp/PgDn scroll."),
         Line::raw("Failed refresh retains the current account's cached usage; expired login needs reauth."),
         Line::raw("Restart Grok, then /model lists all synced models; grok models verifies the catalog."),
