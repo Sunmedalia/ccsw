@@ -93,40 +93,8 @@ impl Settings {
         key.starts_with("ccsw::") || self.imports.values().any(|name| name == key)
     }
 
-    pub fn use_account(&mut self, profiles: &mut BTreeMap<String, Profile>, model: String) {
-        if self.suspended_providers.is_none() {
-            self.suspended_providers = Some(
-                profiles
-                    .iter()
-                    .map(|(id, profile)| (id.clone(), profile.enabled))
-                    .collect(),
-            );
-            if let Some(default) = &self.preferences.default
-                && self.managed_key(default)
-            {
-                self.last_api_default = Some(default.clone());
-            }
-            if let Some(search) = &self.preferences.web_search
-                && self.managed_key(search)
-            {
-                self.last_api_web_search = Some(search.clone());
-                self.preferences.web_search = None;
-            }
-            if let Some(fork) = &self.preferences.fork_secondary_model
-                && self.managed_key(fork)
-            {
-                self.last_api_fork_secondary_model = Some(fork.clone());
-                self.preferences.fork_secondary_model = None;
-            }
-        }
-        for profile in profiles.values_mut() {
-            profile.enabled = false;
-        }
-        self.preferences.default = Some(model);
-        self.active_mode = Some(Mode::Account);
-    }
-
-    pub fn use_api(&mut self, profiles: &mut BTreeMap<String, Profile>, preferred: Option<String>) {
+    /// Restore provider flags saved by older versions that treated Grok like Codex.
+    pub fn restore_suspended(&mut self, profiles: &mut BTreeMap<String, Profile>) {
         if let Some(saved) = self.suspended_providers.take() {
             for (id, enabled) in saved {
                 if let Some(profile) = profiles.get_mut(&id) {
@@ -134,6 +102,27 @@ impl Settings {
                 }
             }
         }
+        if self.preferences.web_search.is_none() {
+            self.preferences.web_search = self.last_api_web_search.take();
+        }
+        if self.preferences.fork_secondary_model.is_none() {
+            self.preferences.fork_secondary_model = self.last_api_fork_secondary_model.take();
+        }
+    }
+
+    pub fn use_account(&mut self, profiles: &mut BTreeMap<String, Profile>, model: String) {
+        self.restore_suspended(profiles);
+        if let Some(default) = &self.preferences.default
+            && self.managed_key(default)
+        {
+            self.last_api_default = Some(default.clone());
+        }
+        self.preferences.default = Some(model);
+        self.active_mode = Some(Mode::Account);
+    }
+
+    pub fn use_api(&mut self, profiles: &mut BTreeMap<String, Profile>, preferred: Option<String>) {
+        self.restore_suspended(profiles);
         self.preferences.default =
             preferred
                 .or_else(|| self.last_api_default.clone())
@@ -147,12 +136,6 @@ impl Settings {
                             })
                     })
                 });
-        if let Some(search) = self.last_api_web_search.take() {
-            self.preferences.web_search = Some(search);
-        }
-        if let Some(fork) = self.last_api_fork_secondary_model.take() {
-            self.preferences.fork_secondary_model = Some(fork);
-        }
         self.active_mode = Some(Mode::Api);
     }
 }
@@ -426,7 +409,7 @@ pub fn apply(
     let active_models = config.profiles.values().any(|profile| {
         profile.enabled && !crate::discovery::active_models(profile, &[]).is_empty()
     });
-    let gateway = if config.grok.active_mode == Some(Mode::Api) && active_models {
+    let gateway = if config.grok.active_mode.is_some() && active_models {
         Some(crate::proxy::prepare_grok_route(paths, config)?)
     } else {
         None
@@ -915,7 +898,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn account_and_api_modes_restore_provider_and_model_choices() {
+    fn account_and_api_defaults_keep_provider_choices() {
         let mut settings = Settings::default();
         let mut profiles = BTreeMap::from([
             ("a".into(), profile(ApiFormat::OpenaiChat)),
@@ -928,10 +911,18 @@ mod tests {
         settings.preferences.fork_secondary_model = Some(api_model.clone());
         settings.use_account(&mut profiles, "grok-build".into());
         assert_eq!(settings.active_mode, Some(Mode::Account));
-        assert!(profiles.values().all(|profile| !profile.enabled));
+        assert!(profiles["a"].enabled);
+        assert!(!profiles["b"].enabled);
         assert_eq!(settings.preferences.default.as_deref(), Some("grok-build"));
-        assert!(settings.preferences.web_search.is_none());
-        assert!(settings.preferences.fork_secondary_model.is_none());
+        assert_eq!(
+            settings.preferences.web_search.as_deref(),
+            Some(api_model.as_str())
+        );
+        assert_eq!(
+            settings.preferences.fork_secondary_model.as_deref(),
+            Some(api_model.as_str())
+        );
+        assert!(settings.suspended_providers.is_none());
         settings.use_api(&mut profiles, None);
         assert_eq!(settings.active_mode, Some(Mode::Api));
         assert!(profiles["a"].enabled);
@@ -947,6 +938,31 @@ mod tests {
         assert_eq!(
             settings.preferences.fork_secondary_model.as_deref(),
             Some(api_model.as_str())
+        );
+    }
+
+    #[test]
+    fn old_account_selection_restores_suspended_providers() {
+        let mut settings = Settings {
+            active_mode: Some(Mode::Account),
+            suspended_providers: Some(BTreeMap::from([("a".into(), true), ("b".into(), false)])),
+            last_api_web_search: Some("ccsw::a::test".into()),
+            ..Settings::default()
+        };
+        let mut profiles = BTreeMap::from([
+            ("a".into(), profile(ApiFormat::OpenaiChat)),
+            ("b".into(), profile(ApiFormat::Anthropic)),
+        ]);
+        for profile in profiles.values_mut() {
+            profile.enabled = false;
+        }
+        settings.restore_suspended(&mut profiles);
+        assert!(profiles["a"].enabled);
+        assert!(!profiles["b"].enabled);
+        assert!(settings.suspended_providers.is_none());
+        assert_eq!(
+            settings.preferences.web_search.as_deref(),
+            Some("ccsw::a::test")
         );
     }
 

@@ -2573,7 +2573,9 @@ mod tests {
             post(move |headers: HeaderMap, Json(body): Json<Value>| {
                 let sender = sender.clone();
                 async move {
-                    sender.lock().unwrap().take().unwrap().send((headers, body)).unwrap();
+                    if let Some(sender) = sender.lock().unwrap().take() {
+                        sender.send((headers, body)).unwrap();
+                    }
                     Json(json!({"id":"test","model":"upstream-model","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":13,"completion_tokens":7}}))
                 }
             }),
@@ -2691,19 +2693,38 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(native["models"]["default"].as_str(), Some("grok-build"));
-        assert!(
-            native
-                .get("model")
-                .and_then(|models| models.get("ccsw::provider::upstream-model"))
-                .and_then(|model| model.get("base_url"))
-                .is_none()
+        assert_eq!(
+            native["model"]["ccsw::provider::upstream-model"]["base_url"].as_str(),
+            model["base_url"].as_str()
         );
         assert_eq!(
             load_registry(&ProxyPaths::from_app(&paths).unwrap())
                 .unwrap()
                 .routes
                 .len(),
-            0
+            1
+        );
+        let response = client
+            .post(format!(
+                "{}/messages",
+                native["model"]["ccsw::provider::upstream-model"]["base_url"]
+                    .as_str()
+                    .unwrap()
+            ))
+            .header("x-api-key", &token)
+            .json(&json!({"model":"ccsw::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"account default with API model"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        let usage =
+            crate::usage::snapshot(&paths.state_dir.join(crate::usage::FILE), &paths.config)
+                .unwrap();
+        assert_eq!(
+            usage
+                .total(Some("Grok"), Some("provider"), None, "generation")
+                .calls,
+            2
         );
         config::update_client(&paths.config, config::Client::Grok, |config| {
             config.grok.use_api(&mut config.profiles, None);

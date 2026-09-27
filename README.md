@@ -226,7 +226,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 ## Grok 配置
 
-点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude 的厂商和模型管理操作，支持三种 API 协议。Grok 的 **API Provider** 与 **OAuth Account** 是互斥的使用模式：按 `p` 选择 API Provider 后，CCSW 管理的模型经本地代理转发并记录 Gateway token；选择 OAuth 时暂停这些 API Provider。
+点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude 的厂商和模型管理操作，支持三种 API 协议。Grok 的 **API Provider** 与 **OAuth Account** 可以共存：选择 OAuth 只改变默认模型，已启用的 API 模型仍可通过 Grok 的 `/model` 选择，并经 CCSW 本地代理转发、记录 Gateway token。按 `p` 可将 API 模型设为默认模型。
 
 1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `n` 新增厂商。
 2. 编辑厂商、模型、启用状态及 token 参数。新增模型在 Grok 中使用 `ccsw::厂商ID::模型ID`，请求发送实际上游模型 ID；导入模型保留原有配置键。

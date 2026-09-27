@@ -1079,6 +1079,12 @@ impl Monitor {
             if let Some(title) = out.first_mut() {
                 *title = pair("GATEWAY TOKENS", self.snapshot.today(), width, BLUE);
             }
+            if self.refreshed.is_some() && metrics(&self.snapshot, Some("Grok")).total.calls == 0 {
+                out.push(line(
+                    "Use a CCSW API model via /model to record Gateway usage",
+                    SOFT,
+                ));
+            }
             out.push(Line::default());
             return out;
         }
@@ -1132,6 +1138,7 @@ impl Monitor {
             }
             if totals.calls == 0 {
                 out.push(line("○ No gateway traffic", SOFT));
+                out.push(line("Select a CCSW API model with /model", SOFT));
             }
         } else {
             out.push(line("◌ Loading gateway…", SOFT));

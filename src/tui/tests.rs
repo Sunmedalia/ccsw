@@ -3917,6 +3917,11 @@ fn grok_default_action_and_model_form_use_native_capabilities() {
 
 #[test]
 fn grok_oauth_native_default_preserves_providers_and_credentials() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     let (temp, mut app) = persisted_app();
     let provider = app.config.profiles["one"].clone();
     app.grok_home = temp.path().join("grok");
@@ -3933,6 +3938,42 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
         })
         .unwrap();
     let before = app.config.profiles.clone();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    std::fs::create_dir_all(&app.paths.state_dir).unwrap();
+    std::fs::write(
+        app.paths.state_dir.join("proxy.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "listen": listener.local_addr().unwrap().to_string(),
+            "local_token": "test-local-token",
+            "routes": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let server = std::thread::spawn(move || {
+        while !stopped.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0u8; 2048];
+                    let _ = stream.read(&mut request);
+                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true}).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.handle_key(key(KeyCode::Char('o'))).unwrap();
     assert!(app.modal.is_none() && app.grok_auth.page.is_some());
@@ -3960,11 +4001,8 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
         app.config.grok.active_mode,
         Some(crate::grok::Mode::Account)
     );
-    assert!(app.config.profiles.values().all(|profile| !profile.enabled));
-    assert_eq!(
-        app.config.grok.suspended_providers.as_ref().unwrap()["one"],
-        before["one"].enabled
-    );
+    assert_eq!(app.config.profiles["one"].enabled, before["one"].enabled);
+    assert!(app.config.grok.suspended_providers.is_none());
     assert!(
         std::fs::read_to_string(app.grok_home.join("config.toml"))
             .unwrap()
@@ -3980,6 +4018,8 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
     app.handle_key(key(KeyCode::Esc)).unwrap();
     assert!(!app.grok_auth.busy);
     assert_eq!(std::fs::read_to_string(auth_path).unwrap(), credentials);
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
 }
 
 #[test]

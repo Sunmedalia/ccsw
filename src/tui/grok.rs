@@ -393,29 +393,16 @@ impl App {
                                     "Grok settings changed in another instance; reopen settings"
                                 );
                             }
-                            let mut applied = edited.clone();
-                            if c.grok.active_mode == Some(native::Mode::Account) {
-                                if let Some(model) = &applied.default
-                                    && c.grok.managed_key(model)
-                                {
-                                    c.grok.last_api_default = Some(model.clone());
-                                    applied.default = c.grok.preferences.default.clone();
-                                }
-                                if let Some(model) = &applied.web_search
-                                    && c.grok.managed_key(model)
-                                {
-                                    c.grok.last_api_web_search = Some(model.clone());
-                                    applied.web_search = c.grok.preferences.web_search.clone();
-                                }
-                                if let Some(model) = &applied.fork_secondary_model
-                                    && c.grok.managed_key(model)
-                                {
-                                    c.grok.last_api_fork_secondary_model = Some(model.clone());
-                                    applied.fork_secondary_model =
-                                        c.grok.preferences.fork_secondary_model.clone();
-                                }
+                            if edited.default != c.grok.preferences.default
+                                && let Some(model) = &edited.default
+                            {
+                                c.grok.active_mode = Some(if c.grok.managed_key(model) {
+                                    native::Mode::Api
+                                } else {
+                                    native::Mode::Account
+                                });
                             }
-                            c.grok.preferences = applied;
+                            c.grok.preferences = edited;
                             Ok(())
                         })?;
                         self.status =

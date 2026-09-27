@@ -371,7 +371,7 @@ impl App {
                             self.grok_auth.message = if status.saved {
                                 "OAuth login saved by Grok · Use OAuth selects the native startup model"
                             } else if self.config.grok.active_mode == Some(crate::grok::Mode::Account) {
-                                "Grok signed out · select an API provider with p to switch modes"
+                                "Grok signed out · API providers remain available"
                             } else {
                                 "Grok signed out · API provider configurations retained"
                             }
@@ -523,7 +523,8 @@ impl App {
             }
             return Err(error);
         }
-        self.grok_auth.message = "Grok OAuth selected · API providers paused · restart Grok".into();
+        self.grok_auth.message =
+            "Grok OAuth selected · API providers remain available via /model · restart Grok".into();
         self.status = self.grok_auth.message.clone();
         self.status_error = false;
         Ok(())
