@@ -1128,6 +1128,22 @@ impl Monitor {
                 format!("{} measured streams", totals.speed_samples),
                 SOFT,
             ));
+            out.push(Line::default());
+            out.push(section("CALL HEALTH", width));
+            out.push(health_meter(&totals, width));
+            out.push(pair(
+                "Success rate",
+                rate(&totals).map_or("— no samples".into(), |n| format!("{n:.1}%")),
+                width,
+                GREEN,
+            ));
+            out.push(line(
+                format!(
+                    "✓ {}   × {}   ! {}   ◌ {}",
+                    totals.success, totals.failed, totals.interrupted, totals.pending
+                ),
+                INK,
+            ));
             if totals.unknown > 0 {
                 out.push(pair(
                     "Unknown tokens",
@@ -4411,7 +4427,9 @@ mod account_page_tests {
                     && text.contains("200.0 tok/s")
                     && text.contains("API rate")
             );
-            assert_eq!(text.contains("CALL HEALTH"), !visual);
+            assert!(text.contains("CALL HEALTH"));
+            assert!(text.contains("Success rate"));
+            assert!(text.contains("100.0%"));
             assert_eq!(text.contains("Output rate (E2E)"), !visual);
             assert_eq!(text.contains("↗ Rate"), visual);
             assert_eq!(text.matches("SESSION TOKENS").count(), 1);
@@ -4426,6 +4444,9 @@ mod account_page_tests {
                     .map(|cell| cell.symbol())
                     .collect();
                 assert!(text.contains("50.0 tok/s"));
+                if visual && width == 48 {
+                    assert!(text.contains("CALL HEALTH"));
+                }
             }
         }
         monitor.snapshot.rows[0].totals.speed_ms = 0;
