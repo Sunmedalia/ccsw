@@ -253,7 +253,7 @@ impl App {
             && self
                 .usage
                 .updated
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(self.config.usage_refresh_secs))
         {
             let (sender, receiver) = mpsc::channel();
             let path = self.paths.state_dir.join(crate::usage::FILE);
@@ -326,7 +326,7 @@ impl App {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        let interval = Duration::from_secs(2);
+        let interval = Duration::from_secs(self.config.usage_refresh_secs);
         if self.usage.sessions_receiver.is_none()
             && (self
                 .usage

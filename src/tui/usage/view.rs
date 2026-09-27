@@ -8,6 +8,7 @@ struct Areas {
     date: Rect,
     range: Rect,
     summary: Rect,
+    insights: Rect,
     sections: Rect,
     body: Rect,
     footer: Rect,
@@ -23,6 +24,7 @@ fn areas(area: Rect) -> Areas {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(if inner.height >= 17 { 4 } else { 1 }),
+        Constraint::Length(u16::from(inner.height >= 20)),
         Constraint::Length(1),
         Constraint::Min(2),
         Constraint::Length(1),
@@ -33,9 +35,10 @@ fn areas(area: Rect) -> Areas {
         date: rows[1],
         range: rows[2],
         summary: rows[3],
-        sections: rows[4],
-        body: rows[5],
-        footer: rows[6],
+        insights: rows[4],
+        sections: rows[5],
+        body: rows[6],
+        footer: rows[7],
     }
 }
 
@@ -895,6 +898,50 @@ impl App {
             tracked,
             page.range_label(),
         );
+        if a.insights.height > 0 && tracked {
+            let completed = daily.success + daily.failed + daily.interrupted;
+            let rate = if completed > 0 {
+                format!("{:.0}%", daily.success as f64 * 100.0 / completed as f64)
+            } else {
+                "—".into()
+            };
+            let cache = if daily.input > 0 {
+                format!(
+                    "{:.0}%",
+                    daily.cache_read as f64 * 100.0 / daily.input as f64
+                )
+            } else {
+                "—".into()
+            };
+            let average = if daily.calls > daily.unknown {
+                compact((daily.input + daily.output) / (daily.calls - daily.unknown))
+            } else {
+                "—".into()
+            };
+            let refreshed = self.usage.updated.map_or("waiting".into(), |updated| {
+                format!("{}s ago", updated.elapsed().as_secs())
+            });
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled("SUCCESS ", Style::default().fg(MUTED)),
+                    Span::styled(rate, Style::default().fg(CONNECTED)),
+                    Span::styled("  ·  CACHE READ ", Style::default().fg(MUTED)),
+                    Span::styled(cache, Style::default().fg(ROUTE)),
+                    Span::styled("  ·  AVG ", Style::default().fg(MUTED)),
+                    Span::styled(
+                        format!("{average} tok/call"),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled("  ·  UPDATED ", Style::default().fg(MUTED)),
+                    Span::styled(refreshed, Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!(" / {}s", self.config.usage_refresh_secs),
+                        Style::default().fg(MUTED),
+                    ),
+                ])),
+                a.insights,
+            );
+        }
         if !tracked {
             frame.render_widget(
                 Paragraph::new(vec![Line::styled(

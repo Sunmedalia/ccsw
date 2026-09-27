@@ -68,7 +68,9 @@ impl App {
         let before = self.config.clone();
         let before_client = self.config_client();
         let result = self.handle_key_inner(key);
-        if before != self.config && before_client == self.config_client() {
+        let mut before_sync = before;
+        before_sync.usage_refresh_secs = self.config.usage_refresh_secs;
+        if before_sync != self.config && before_client == self.config_client() {
             self.queue_sync(false, None);
             self.sync_pi_after_edit();
             self.sync_grok_after_edit();
@@ -408,12 +410,30 @@ impl App {
                             form.theme = theme::Theme::ALL[index];
                         }
                     }
+                } else if contains(theme::refresh_row(modal_area), mouse.column, mouse.row) {
+                    if let Some(Modal::Appearance(form)) = self.modal.as_mut() {
+                        form.refresh_selected = true;
+                        form.pulse_selected = false;
+                        let relative = mouse.column.saturating_sub(panel_inner(modal_area).x);
+                        if (modal_area.height <= 10 && (21..25).contains(&relative))
+                            || (modal_area.height > 10 && (26..33).contains(&relative))
+                        {
+                            form.usage_refresh_secs =
+                                form.usage_refresh_secs.saturating_sub(1).max(1);
+                        } else if (modal_area.height <= 10 && relative >= 25)
+                            || (modal_area.height > 10 && relative >= 33)
+                        {
+                            form.usage_refresh_secs = (form.usage_refresh_secs + 1).min(60);
+                        }
+                    }
                 } else if let Some(Modal::Appearance(form)) = self.modal.as_mut()
                     && mouse.row == panel_inner(modal_area).y
                     && mouse.column >= panel_inner(modal_area).x
                     && mouse.column < panel_inner(modal_area).right()
                 {
-                    form.pulse_selected = mouse.column >= panel_inner(modal_area).x + 11;
+                    form.pulse_selected = mouse.column >= panel_inner(modal_area).x + 11
+                        && mouse.column < panel_inner(modal_area).x + 25;
+                    form.refresh_selected = mouse.column >= panel_inner(modal_area).x + 25;
                 } else {
                     let client_settings = !self.pi_enabled && !self.codex_ui.enabled;
                     if let Some(index) =
@@ -1309,6 +1329,9 @@ impl App {
                             theme,
                             pulse_theme: form.return_pulse_theme.unwrap_or_default(),
                             pulse_selected: form.return_pulse_selected,
+                            refresh_selected: false,
+                            usage_refresh_secs: self.config.usage_refresh_secs,
+                            original_usage_refresh_secs: self.config.usage_refresh_secs,
                         }));
                     }
                     return Ok(());

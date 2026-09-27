@@ -73,6 +73,54 @@ fn tui_theme_settings_mouse_and_keyboard_work_on_every_client() {
         assert!(app.modal.is_none());
     }
 }
+
+#[test]
+fn usage_refresh_setting_saves_and_updates_usage_overview() {
+    let (_temp, mut app) = persisted_app();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(app.config.usage_refresh_secs, 2);
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    app.handle_key(key(KeyCode::Right)).unwrap();
+    assert!(matches!(app.modal, Some(Modal::Appearance(ref form)) if form.usage_refresh_secs == 3));
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.config.usage_refresh_secs, 3);
+    assert_eq!(
+        config::load(&app.paths.config).unwrap().usage_refresh_secs,
+        3
+    );
+    assert!(app.background.queued_sync.is_none());
+
+    app.handle_key(key(KeyCode::F(6))).unwrap();
+    app.usage.updated = Some(std::time::Instant::now());
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("SUCCESS"));
+    assert!(text.contains("CACHE READ"));
+    assert!(text.contains("UPDATED"));
+    assert!(text.contains("/ 3s"));
+
+    app.handle_key(key(KeyCode::F(4))).unwrap();
+    let mut small = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    small.draw(|frame| app.draw(frame)).unwrap();
+    let compact = small
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(compact.contains("Usage refresh"));
+    assert!(compact.contains("Save"));
+}
 use std::path::PathBuf;
 
 #[test]

@@ -17,6 +17,8 @@ pub const CONFIG_VERSION: u32 = 6;
 pub struct Config {
     #[serde(default = "default_version")]
     pub version: u32,
+    #[serde(default = "default_usage_refresh_secs")]
+    pub usage_refresh_secs: u64,
     #[serde(default)]
     pub claude: crate::claude_preferences::Settings,
     #[serde(default)]
@@ -33,6 +35,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
+            usage_refresh_secs: default_usage_refresh_secs(),
             claude: Default::default(),
             codex: Default::default(),
             pi: Default::default(),
@@ -40,6 +43,10 @@ impl Default for Config {
             profiles: BTreeMap::new(),
         }
     }
+}
+
+fn default_usage_refresh_secs() -> u64 {
+    2
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +451,7 @@ pub fn load(path: &Path) -> Result<Config> {
             .with_context(|| format!("invalid profile {id}"))?;
     }
     suspend_codex_api_providers(&mut config);
+    validate_usage_refresh_secs(config.usage_refresh_secs)?;
     config.claude.validate()?;
     config.grok.preferences.validate()?;
     Ok(config)
@@ -546,6 +554,7 @@ fn update_locked(
     let mut latest = load(path)?;
     edit(&mut latest)?;
     suspend_codex_api_providers(&mut latest);
+    validate_usage_refresh_secs(latest.usage_refresh_secs)?;
     latest.version = CONFIG_VERSION;
     for (id, profile) in latest
         .profiles
@@ -562,6 +571,13 @@ fn update_locked(
     write_unlocked(path, &latest)?;
     FileExt::unlock(&lock).ok();
     Ok(latest)
+}
+
+fn validate_usage_refresh_secs(value: u64) -> Result<()> {
+    if !(1..=60).contains(&value) {
+        bail!("usage_refresh_secs must be between 1 and 60 seconds");
+    }
+    Ok(())
 }
 
 /// Merge an edit against the latest profile without overwriting independent changes.

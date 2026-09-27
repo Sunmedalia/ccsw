@@ -346,6 +346,9 @@ pub(super) struct Appearance {
     pub theme: Theme,
     pub pulse_theme: PulseTheme,
     pub pulse_selected: bool,
+    pub refresh_selected: bool,
+    pub usage_refresh_secs: u64,
+    pub original_usage_refresh_secs: u64,
 }
 
 impl App {
@@ -354,6 +357,9 @@ impl App {
             theme: self.theme,
             pulse_theme: PulseTheme::load(&self.paths),
             pulse_selected: false,
+            refresh_selected: false,
+            usage_refresh_secs: self.config.usage_refresh_secs,
+            original_usage_refresh_secs: self.config.usage_refresh_secs,
         }));
     }
 
@@ -361,10 +367,25 @@ impl App {
         match key.code {
             KeyCode::Esc => return Ok(true),
             KeyCode::Enter | KeyCode::Char('s') => {
+                if form.usage_refresh_secs != form.original_usage_refresh_secs {
+                    let value = form.usage_refresh_secs;
+                    self.config = crate::config::try_update(&self.paths.config, |config| {
+                        if config.usage_refresh_secs != form.original_usage_refresh_secs {
+                            anyhow::bail!(
+                                "usage refresh interval changed in another instance; reopen settings"
+                            );
+                        }
+                        config.usage_refresh_secs = value;
+                        Ok(())
+                    })?;
+                }
                 form.theme.save(&self.paths)?;
                 form.pulse_theme.save(&self.paths)?;
                 self.theme = form.theme;
-                self.status = "CCSW and Pulse themes saved".into();
+                self.status = format!(
+                    "Settings saved · Usage refresh every {}s",
+                    form.usage_refresh_secs
+                );
                 self.status_error = false;
                 return Ok(true);
             }
@@ -384,10 +405,21 @@ impl App {
                 }
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => {
-                form.pulse_selected = !form.pulse_selected;
+                let current = if form.refresh_selected {
+                    2
+                } else if form.pulse_selected {
+                    1
+                } else {
+                    0
+                };
+                let next = (current + if key.code == KeyCode::BackTab { 2 } else { 1 }) % 3;
+                form.pulse_selected = next == 1;
+                form.refresh_selected = next == 2;
             }
             KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
-                if form.pulse_selected {
+                if form.refresh_selected {
+                    form.usage_refresh_secs = form.usage_refresh_secs.saturating_sub(1).max(1);
+                } else if form.pulse_selected {
                     let index = PulseTheme::ALL
                         .iter()
                         .position(|t| *t == form.pulse_theme)
@@ -403,7 +435,9 @@ impl App {
                 }
             }
             KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => {
-                if form.pulse_selected {
+                if form.refresh_selected {
+                    form.usage_refresh_secs = (form.usage_refresh_secs + 1).min(60);
+                } else if form.pulse_selected {
                     let index = PulseTheme::ALL
                         .iter()
                         .position(|t| *t == form.pulse_theme)
@@ -445,26 +479,38 @@ pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
         .collect()
 }
 
+pub(super) fn refresh_row(area: Rect) -> Rect {
+    let inner = panel_inner(area);
+    Rect::new(
+        inner.x,
+        inner.y + if area.height <= 10 { 0 } else { 9 },
+        inner.width,
+        1,
+    )
+}
+
 pub(super) fn draw(
     frame: &mut ratatui::Frame,
     area: Rect,
     form: &Appearance,
     client_settings: Option<&str>,
 ) {
-    frame.render_widget(panel(" Settings · TUI appearance ", true), area);
+    frame.render_widget(panel(" Settings · appearance & usage ", true), area);
     let inner = panel_inner(area);
     frame.render_widget(
-        Paragraph::new(if form.pulse_selected {
-            "CCSW UI    [Pulse pane] · Tab"
+        Paragraph::new(if form.refresh_selected {
+            "CCSW UI    Pulse pane    [Usage refresh] · Tab"
+        } else if form.pulse_selected {
+            "CCSW UI    [Pulse pane]    Usage refresh · Tab"
         } else {
-            "[CCSW UI]    Pulse pane · Tab"
+            "[CCSW UI]    Pulse pane    Usage refresh · Tab"
         })
         .style(Style::default().fg(ROUTE).add_modifier(Modifier::BOLD)),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     if area.height > 10 {
         frame.render_widget(
-            Paragraph::new("Tab: switch target · ↑↓: select · Enter: save")
+            Paragraph::new("Tab: switch setting · ↑↓: adjust · Enter: save")
                 .style(Style::default().fg(MUTED)),
             Rect::new(inner.x, inner.y + 1, inner.width, 1),
         );
@@ -489,14 +535,31 @@ pub(super) fn draw(
         );
     }
     frame.render_widget(
-        Paragraph::new("Pulse pane updates after saving. Esc cancels the preview.")
+        Paragraph::new(if area.height <= 10 {
+            format!(" Tab · Usage refresh  ‹ {}s ›", form.usage_refresh_secs)
+        } else {
+            format!(
+                " {} Usage auto refresh     ‹  {}s  ›   (1–60s)",
+                if form.refresh_selected { "●" } else { "○" },
+                form.usage_refresh_secs
+            )
+        })
+        .style(if form.refresh_selected {
+            Style::default().fg(ROUTE).bg(SELECTION)
+        } else {
+            Style::default().fg(MUTED)
+        }),
+        refresh_row(area),
+    );
+    frame.render_widget(
+        Paragraph::new("Changes apply after saving. Esc cancels the preview.")
             .wrap(Wrap { trim: false })
             .style(Style::default().fg(MUTED)),
         Rect::new(
             inner.x,
-            inner.y + 9,
+            inner.y + 10,
             inner.width,
-            inner.height.saturating_sub(11),
+            inner.height.saturating_sub(12),
         ),
     );
     let buttons = if let Some(label) = client_settings {
