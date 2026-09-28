@@ -36,6 +36,7 @@ impl ClientTab {
 
 pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 6] {
     let mut x = area.x.saturating_add(1);
+    let compact = area.width < 60;
     [
         (ClientTab::Claude, 11),
         (ClientTab::Codex, 9),
@@ -45,6 +46,11 @@ pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 6] {
         (ClientTab::Settings, 12),
     ]
     .map(|(tab, width)| {
+        let width = if compact {
+            tab.label().len() as u16
+        } else {
+            width
+        };
         let right = area.right().saturating_sub(1);
         let rect = Rect::new(
             x,

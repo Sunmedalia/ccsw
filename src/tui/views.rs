@@ -216,7 +216,15 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("{} enabled · all providers", self.all_enabled_model_count()),
+                    format!(
+                        "{} {} · all providers",
+                        self.all_enabled_model_count(),
+                        if self.pi_enabled {
+                            "configured"
+                        } else {
+                            "enabled"
+                        }
+                    ),
                     Style::default().fg(ENABLED),
                 ),
             ]),
@@ -241,7 +249,15 @@ impl App {
                     Line::styled("All Models", Style::default().add_modifier(Modifier::BOLD)),
                     Line::from(vec![
                         Span::styled(
-                            format!("{} enabled", self.all_enabled_model_count()),
+                            format!(
+                                "{} {}",
+                                self.all_enabled_model_count(),
+                                if self.pi_enabled {
+                                    "configured"
+                                } else {
+                                    "enabled"
+                                }
+                            ),
                             Style::default().fg(ENABLED),
                         ),
                         Span::styled(" · all providers", Style::default().fg(MUTED)),

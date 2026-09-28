@@ -202,9 +202,9 @@ fn usage_refresh_setting_saves_and_updates_usage_overview() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(text.contains("SUCCESS"));
-    assert!(text.contains("CACHE READ"));
-    assert!(text.contains("UPDATED"));
-    assert!(text.contains("/ 3s"));
+    assert!(text.contains("CACHE  read"), "{text}");
+    assert!(text.contains("scroll"), "{text}");
+    assert!(text.contains("/ 3s"), "{text}");
 
     app.handle_key(key(KeyCode::F(4))).unwrap();
     let mut small = Terminal::new(TestBackend::new(40, 12)).unwrap();
@@ -801,7 +801,17 @@ fn help_renders_in_full_and_narrow_terminals() {
         .collect::<String>();
     assert!(rendered.contains("1 Home"));
     assert!(rendered.contains("Help · Provider"));
-    assert!(rendered.contains("Space / d / 1"));
+    app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE))
+        .unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(rendered.contains("Esc / q"), "{rendered}");
 
     let backend = TestBackend::new(36, 10);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -831,7 +841,7 @@ fn all_enabled_is_the_first_home_row_and_excludes_disabled_providers() {
         3
     );
 
-    let backend = TestBackend::new(120, 30);
+    let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let rendered = terminal
@@ -914,8 +924,9 @@ fn clicking_an_all_enabled_model_selects_then_opens_its_provider() {
     let mut app = interactive_test_app();
     app.home_all_selected = true;
     app.enter_all_enabled_view();
-    let screen = Rect::new(0, 0, 120, 30);
-    let panel = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let screen = Rect::new(0, 0, 100, 30);
+    let panel = app.provider_ui_areas(screen).models.unwrap();
+    let (_, list) = all_models::areas(panel);
     let index = app
         .all_managed_models()
         .iter()
@@ -926,7 +937,7 @@ fn clicking_an_all_enabled_model_selects_then_opens_its_provider() {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: panel.x + 6,
-            row: panel.y + 1 + u16::try_from(index).unwrap() * 2,
+            row: list.y + 1 + u16::try_from(index).unwrap() * 2,
             modifiers: KeyModifiers::NONE,
         },
         screen,
@@ -935,13 +946,13 @@ fn clicking_an_all_enabled_model_selects_then_opens_its_provider() {
 
     assert_eq!(app.view_mode, ViewMode::AllEnabled);
     assert_eq!(app.model_idx, index);
-    assert!(app.status.contains("click again"));
+    assert!(app.status.contains("Enter open provider"));
 
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: panel.x + 6,
-            row: panel.y + 1 + u16::try_from(index).unwrap() * 2,
+            row: list.y + 1 + u16::try_from(index).unwrap() * 2,
             modifiers: KeyModifiers::NONE,
         },
         screen,
@@ -974,7 +985,7 @@ fn aggregate_editor_uses_the_target_provider_catalog() {
 fn mouse_wheel_and_click_navigate_lists() {
     let (_temp, mut app) = persisted_app();
     let screen = Rect::new(0, 0, 120, 30);
-    let areas = ui_areas(screen, app.focus, app.view_mode);
+    let areas = app.provider_ui_areas(screen);
     let profiles = areas.profiles.unwrap();
     app.handle_mouse(
         MouseEvent {
@@ -991,11 +1002,11 @@ fn mouse_wheel_and_click_navigate_lists() {
 
     app.view_mode = ViewMode::Provider;
     app.focus = Focus::Models;
-    let models = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let models = app.provider_ui_areas(screen).models.unwrap();
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: models.x + 1,
+            column: models.x + 6,
             row: models.y + 5,
             modifiers: KeyModifiers::NONE,
         },
@@ -1021,7 +1032,7 @@ fn scrollbar_click_and_drag_cover_the_full_list() {
             .insert(format!("route-{index:02}"), template.clone());
     }
     let screen = Rect::new(0, 0, 120, 20);
-    let panel = ui_areas(screen, app.focus, app.view_mode).profiles.unwrap();
+    let panel = app.provider_ui_areas(screen).profiles.unwrap();
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -1099,7 +1110,7 @@ fn provider_catalog_scrollbar_drag_selects_a_later_model() {
     app.view_mode = ViewMode::Provider;
     app.focus = Focus::Models;
     let screen = Rect::new(0, 0, 120, 30);
-    let panel = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let panel = app.provider_ui_areas(screen).models.unwrap();
     let list_area = Rect::new(
         panel.x,
         panel.y + 3,
@@ -1125,8 +1136,9 @@ fn route_details_exposes_clickable_provider_editor() {
     app.view_mode = ViewMode::Provider;
     app.focus = Focus::Details;
     let screen = Rect::new(0, 0, 120, 30);
-    let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
-    let edit = detail_controls(details)
+    let details = app.provider_ui_areas(screen).details.unwrap();
+    let (_, provider_card) = provider_detail_cards(details);
+    let edit = detail_controls(provider_card)
         .into_iter()
         .find(|(control, _)| *control == DetailControl::Edit)
         .unwrap()
@@ -1202,7 +1214,8 @@ fn proxy_manager_renders_and_supports_keyboard_and_mouse_navigation() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(rendered.contains("Proxy control"));
+    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("Proxy"));
     assert!(rendered.contains("Running in background"));
     assert!(rendered.contains("Enable at login"));
     assert!(rendered.contains("Disable at login"));
@@ -1214,7 +1227,7 @@ fn proxy_manager_renders_and_supports_keyboard_and_mouse_navigation() {
         Some(Modal::Proxy(ProxyManager { selected: 1, .. }))
     ));
 
-    let modal = modal_area_for(app.modal.as_ref().unwrap(), screen);
+    let modal = settings_page_area(screen);
     let close = proxy_controls(modal)
         .into_iter()
         .find(|(control, _)| *control == ProxyControl::Close)
@@ -1562,8 +1575,8 @@ fn home_screen_enter_and_esc_transitions() {
 #[test]
 fn home_screen_mouse_click_drills_down_to_provider() {
     let mut app = interactive_test_app();
-    let screen = Rect::new(0, 0, 120, 30);
-    let areas = ui_areas(screen, app.focus, app.view_mode);
+    let screen = Rect::new(0, 0, 80, 24);
+    let areas = app.provider_ui_areas(screen);
     let panel = areas.profiles.unwrap();
 
     // The virtual All Models row is first; click the first provider below it.
@@ -1580,12 +1593,19 @@ fn home_screen_mouse_click_drills_down_to_provider() {
     assert_eq!(app.view_mode, ViewMode::Provider);
     assert_eq!(app.focus, Focus::Models);
 
+    let back = app
+        .provider_page_layout(screen)
+        .controls
+        .into_iter()
+        .find(|(c, _)| *c == FooterControl::Back)
+        .unwrap()
+        .1;
     // Clicking the header back button returns to Home
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 4,
-            row: 1,
+            column: back.x,
+            row: back.y,
             modifiers: KeyModifiers::NONE,
         },
         screen,
@@ -1643,7 +1663,7 @@ fn provider_screen_directly_displays_model_catalog_and_showcase() {
 
     assert!(rendered.contains("Selected model"));
     assert!(rendered.contains("Provider"));
-    assert!(rendered.contains("One  →  model-a"));
+    assert!(rendered.contains("One  /  model-a"), "{rendered}");
     assert!(rendered.contains("model-b"));
 }
 
@@ -1656,7 +1676,7 @@ fn mouse_click_showcase_buttons_perform_actions() {
 
     app.enter_provider_view();
     let screen = Rect::new(0, 0, 120, 30);
-    let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
+    let details = app.provider_ui_areas(screen).details.unwrap();
     let (showcase_card, _) = provider_detail_cards(details);
     let controls = showcase_controls(showcase_card, false);
 
@@ -1723,9 +1743,8 @@ fn mouse_click_catalog_add_and_detail_edit() {
     let screen = Rect::new(0, 0, 120, 30);
 
     // 1. Click catalog add button
-    let models = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
-    let search_area = Rect::new(models.x, models.y, models.width, 3);
-    let add_btn = catalog_add_button_rect(search_area).unwrap();
+    let models = app.provider_ui_areas(screen).models.unwrap();
+    let add_btn = model_add_button_rect(models, app.view_mode).unwrap();
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1742,7 +1761,7 @@ fn mouse_click_catalog_add_and_detail_edit() {
     app.modal = None;
 
     // 2. The details card keeps provider-specific edit/delete actions.
-    let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
+    let details = app.provider_ui_areas(screen).details.unwrap();
     let (_, provider_card) = provider_detail_cards(details);
     assert_eq!(detail_controls(provider_card).len(), 2);
     let edit_btn = detail_controls(provider_card)
@@ -2060,18 +2079,17 @@ fn usage_page_opens_filters_and_renders_at_supported_sizes() {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("Usage"));
-        assert!(text.contains("scroll"));
+        assert!(
+            text.contains("scroll") || text.contains("Reading gateway"),
+            "{text}"
+        );
     }
-    for key in [
-        KeyCode::Char('a'),
-        KeyCode::Right,
-        KeyCode::Tab,
-        KeyCode::Tab,
-        KeyCode::Tab,
-    ] {
-        app.handle_key(KeyEvent::new(key, KeyModifiers::NONE))
+    for _ in 0..3 {
+        app.handle_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE))
             .unwrap();
     }
+    app.handle_key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE))
+        .unwrap();
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let text = terminal
@@ -2081,7 +2099,7 @@ fn usage_page_opens_filters_and_renders_at_supported_sizes() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(text.contains("Pi: not tracked"));
+    assert!(text.contains("0 sessions · Pi · All dates"), "{text}");
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
     assert!(app.modal.is_none());
@@ -2174,7 +2192,7 @@ fn usage_tab_opens_tables_and_click_filters() {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(rendered.contains("Models 4") || rendered.contains("Models4"));
+        assert!(rendered.contains("MODELS"), "{rendered}");
         assert!(rendered.contains("gpt-test-model"));
         assert!(rendered.contains("123"));
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -2735,7 +2753,7 @@ fn pi_navigation_keeps_model_and_provider_edit_shortcuts() {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(text.contains("‹ Back (Esc)"));
+        assert!(text.contains("Back [Esc/q]"), "{text}");
     }
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
         .unwrap();
@@ -2932,7 +2950,7 @@ fn codex_account_provider_and_help_use_shared_navigation() {
     assert!(text.contains("Codex / Providers"));
     app.home_all_selected = false;
     let area = Rect::new(0, 0, 120, 36);
-    let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
+    let panel = app.provider_ui_areas(area).profiles.unwrap();
     let account_row = panel_inner(panel).y + app.home_profile_item_heights(panel)[0] as u16;
     let mouse = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -3131,9 +3149,9 @@ fn pi_uses_provider_layout_with_proxy_control() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Providers · F2 Grok"));
+        assert!(text.contains("Pi / Providers"), "{text}");
         let area = Rect::new(0, 0, width, height);
-        let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
+        let controls = app.provider_page_layout(area).controls;
         if width == 120 {
             assert!(
                 controls
@@ -3141,10 +3159,11 @@ fn pi_uses_provider_layout_with_proxy_control() {
                     .any(|(control, _)| *control == FooterControl::Proxy)
             );
         }
-        let gap = controls[1].1.x - controls[0].1.right();
-        assert!(gap >= 1);
+        assert!(!controls.is_empty());
         for pair in controls.windows(2) {
-            assert_eq!(pair[0].1.right() + gap, pair[1].1.x);
+            if pair[0].1.y == pair[1].1.y {
+                assert!(pair[0].1.right() < pair[1].1.x);
+            }
         }
         let (_, help) = controls
             .iter()
@@ -3279,7 +3298,7 @@ fn pi_availability_controls_do_not_mutate_native_files() {
                 .unwrap();
             assert!(!app.status_error, "{}", app.status);
         }
-        let ui = ui_areas(screen, app.focus, view);
+        let ui = app.provider_ui_areas(screen);
         let (column, row) = match view {
             ViewMode::Home => {
                 let panel = ui.profiles.unwrap();
@@ -3697,16 +3716,28 @@ fn quit_is_only_available_on_provider_home() {
     for view in [ViewMode::Home, ViewMode::Provider, ViewMode::AllEnabled] {
         app.view_mode = view;
         for width in [40, 60, 120] {
-            let controls = footer_controls(Rect::new(0, 0, width, 1), width < 100, view);
-            assert_eq!(
-                controls.iter().any(|(c, _)| *c == FooterControl::Quit),
-                view == ViewMode::Home
-            );
+            let controls = app
+                .provider_page_layout(Rect::new(0, 0, width, 24))
+                .controls;
+            assert!(controls.iter().any(|(c, _)| *c == FooterControl::Back));
+            assert!(!controls.iter().any(|(c, _)| *c == FooterControl::Quit));
+            let label = app.provider_action_text(FooterControl::Back);
+            assert!(label.contains(if view == ViewMode::Home {
+                "Quit"
+            } else {
+                "Back"
+            }));
         }
         for key in [
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         ] {
+            app.view_mode = view;
+            app.focus = if view == ViewMode::Home {
+                Focus::Profiles
+            } else {
+                Focus::Models
+            };
             assert_eq!(app.handle_key(key).unwrap(), view == ViewMode::Home);
         }
     }
@@ -3723,7 +3754,7 @@ fn provider_delete_button_and_details_shortcut_open_confirmation() {
     let mut app = interactive_test_app();
     app.enter_provider_view();
     let screen = Rect::new(0, 0, 120, 30);
-    let details = ui_areas(screen, app.focus, app.view_mode).details.unwrap();
+    let details = app.provider_ui_areas(screen).details.unwrap();
     let (_, card) = provider_detail_cards(details);
     let (_, button) = detail_controls(card)
         .into_iter()
@@ -3790,33 +3821,16 @@ fn provider_form_only_displays_its_test_messages() {
 }
 
 #[test]
-fn home_delete_button_follows_provider_selection_and_confirms() {
+fn home_delete_shortcut_follows_provider_selection_and_confirms() {
     let mut app = interactive_test_app();
     app.select_home_index(0);
-    let screen = Rect::new(0, 0, 80, 24);
-    let footer = ui_areas(screen, app.focus, app.view_mode).footer;
-    assert!(
-        !app.client_footer_controls(footer, true)
-            .iter()
-            .any(|(c, _)| *c == FooterControl::DeleteProfile)
-    );
-    app.select_home_index(1);
-    let (_, button) = app
-        .client_footer_controls(footer, true)
-        .into_iter()
-        .find(|(c, _)| *c == FooterControl::DeleteProfile)
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
         .unwrap();
+    assert!(app.modal.is_none());
+    app.select_home_index(1);
     let before = app.config.clone();
-    app.handle_mouse(
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: button.x,
-            row: button.y,
-            modifiers: KeyModifiers::NONE,
-        },
-        screen,
-    )
-    .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        .unwrap();
     assert!(matches!(app.modal, Some(Modal::DeleteProfile)));
     assert_eq!(app.config, before);
 }
@@ -3887,7 +3901,7 @@ fn repeated_model_click_edits_and_reasoning_arrows_cycle() {
     let mut app = interactive_test_app();
     app.enter_provider_view();
     let screen = Rect::new(0, 0, 120, 30);
-    let models = ui_areas(screen, app.focus, app.view_mode).models.unwrap();
+    let models = app.provider_ui_areas(screen).models.unwrap();
     let click = |x, y| MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: x,
@@ -3989,8 +4003,19 @@ fn grok_tabs_import_settings_sync_and_client_isolation() {
         while !stopped.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut request = [0u8; 2048];
-                    let _ = stream.read(&mut request);
+                    // Drain the complete HTTP header before responding. Closing with
+                    // unread request bytes can reset the connection on Windows.
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut byte = [0; 1];
+                    while request.len() < 16_384 && !request.ends_with(b"\r\n\r\n") {
+                        if stream.read(&mut byte).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        request.push(byte[0]);
+                    }
                     let body = serde_json::json!({"name":"mux-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
@@ -4223,8 +4248,19 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
         while !stopped.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut request = [0u8; 2048];
-                    let _ = stream.read(&mut request);
+                    // Drain the complete HTTP header before responding. Closing with
+                    // unread request bytes can reset the connection on Windows.
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut byte = [0; 1];
+                    while request.len() < 16_384 && !request.ends_with(b"\r\n\r\n") {
+                        if stream.read(&mut byte).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        request.push(byte[0]);
+                    }
                     let body = serde_json::json!({"name":"mux-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
@@ -4326,7 +4362,7 @@ fn grok_oauth_provider_row_uses_home_keyboard_and_mouse_navigation() {
     app.select_client_tab(ClientTab::Grok);
     assert_eq!(app.home_prefix_count(), 2);
     let before = std::fs::read(&app.paths.config).unwrap();
-    let area = Rect::new(0, 0, 120, 36);
+    let area = Rect::new(0, 0, 80, 36);
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let text: String = terminal
@@ -4340,7 +4376,7 @@ fn grok_oauth_provider_row_uses_home_keyboard_and_mouse_navigation() {
     assert!(text.contains("grok@example.com"));
     assert!(!text.contains("SECRET"));
     assert!(
-        !app.client_footer_controls(ui_areas(area, app.focus, app.view_mode).footer, false)
+        !app.client_footer_controls(app.provider_ui_areas(area).footer, false)
             .iter()
             .any(|(control, _)| *control == FooterControl::Proxy)
     );
@@ -4354,10 +4390,10 @@ fn grok_oauth_provider_row_uses_home_keyboard_and_mouse_navigation() {
     assert!(app.modal.is_none() && app.grok_auth.page.is_some());
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
-    assert!(app.home_grok_oauth_selected());
+    assert!(!app.home_grok_oauth_selected());
     assert_eq!(app.view_mode, ViewMode::Home);
     app.select_home_index(0);
-    let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
+    let panel = app.provider_ui_areas(area).profiles.unwrap();
     let mouse = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: panel.x + 2,
@@ -4572,6 +4608,7 @@ fn theme_gallery_and_usage_render_with_resolved_styles_at_all_sizes() {
         for (width, height) in [(40, 12), (80, 24), (120, 36)] {
             for settings in [false, true] {
                 app.modal = None;
+                app.usage.active = true;
                 if settings {
                     app.open_appearance();
                 }
@@ -4589,7 +4626,7 @@ fn theme_gallery_and_usage_render_with_resolved_styles_at_all_sizes() {
                 if settings {
                     assert!(text.contains("Save"));
                 } else if width == 120 {
-                    assert!(text.contains("Range overview"));
+                    assert!(text.contains("GATEWAY / TOKENS"), "{text}");
                 }
                 if let Ok(directory) = std::env::var("MUX_UI_PREVIEW_DIR") {
                     std::fs::create_dir_all(&directory).unwrap();

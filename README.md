@@ -26,19 +26,19 @@ mux migrate --config /path/to/old/config.toml --state-dir /path/to/old/state --c
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 当前源码已更名为 Mux。Pi 可使用本地 Proxy API；Claude、Codex、Pi 和 Grok 的 Provider 都支持单独配置模型目录地址。历史 Release 属于更名前的版本，尚无 Mux 预编译发布包。
+> 本文对应 v0.1.19，首个 Mux 发布版。支持 macOS ARM64、Linux x86_64/ARM64 和 Windows x64。Pi 可使用本地 Proxy API；Claude、Codex、Pi 和 Grok 的 Provider 都支持单独配置模型目录地址。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok 配置](#grok-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
-**目前请使用[源码安装](#从源码安装)**。GitHub 仓库已更名，但历史 Release 的文件名、内置命令和环境变量仍属于旧版本。下面的在线安装与下载示例需等待首个 Mux Release 发布后使用。
+v0.1.19 起，发布包、命令与环境变量统一为 Mux。更名前的历史 Release 保留原样；更新时请使用 v0.1.19 或更新版本。
 
 如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件安装](#通过-herdr-安装发布版插件)，不需要先手工安装 Mux；支持自动绑定的版本会配置默认快捷键。
 
 ### 一键安装（macOS / Linux）
 
-首个 Mux Release 发布后，可用以下命令安装最新发布版，自动校验 SHA-256：
+使用以下命令安装最新发布版，自动校验 SHA-256：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Sunmedalia/mux/main/install.sh | bash
@@ -61,7 +61,7 @@ Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并�
 
 ### 下载 Release
 
-尚无 Mux 预编译发布包。首个 Mux Release 发布后，macOS Apple Silicon 与 Linux x86_64/ARM64 可使用下列文件名下载；Windows 安装说明见 [README-Windows.md](README-Windows.md)。
+v0.1.19 提供 macOS Apple Silicon、Linux x86_64/ARM64 与 Windows x64 发布包。macOS/Linux 可使用下列命令下载，Windows 安装说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -79,7 +79,7 @@ sudo install mux /usr/local/bin/mux
 
 ### Windows
 
-尚无 Mux Windows 发布包，请从源码构建。完整的构建步骤、PowerShell/CMD 示例、目录覆盖优先级、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
+下载 [v0.1.19 Windows x64 ZIP](https://github.com/Sunmedalia/mux/releases/download/v0.1.19/mux-windows-x86_64.zip) 及旁边的 SHA-256 文件。完整的校验、解压、PowerShell/CMD 示例、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
 
 配置默认位于 `%APPDATA%\mux\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\mux\state`、`cache`。关闭 TUI 不会停止后台代理；更新前先执行 `mux proxy stop`，移动程序前先卸载旧位置的自启项。
 

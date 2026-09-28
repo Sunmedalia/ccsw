@@ -493,18 +493,6 @@ pub(super) fn draw_header_add_button(frame: &mut ratatui::Frame, area: Rect) {
     }
 }
 
-#[cfg(test)]
-pub(super) fn catalog_add_button_rect(search_area: Rect) -> Option<Rect> {
-    let inner = panel_inner(search_area);
-    if inner.width >= 10 {
-        let btn_w = if inner.width >= 35 { 17 } else { 6 };
-        let btn_x = inner.x + inner.width.saturating_sub(btn_w);
-        Some(Rect::new(btn_x, inner.y, btn_w, 1))
-    } else {
-        None
-    }
-}
-
 pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
     let inner = panel_inner(area);
     if inner.height == 0 || inner.width < 8 {

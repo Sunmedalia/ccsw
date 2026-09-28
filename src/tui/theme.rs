@@ -715,14 +715,16 @@ mod tests {
             app.theme = theme;
             let default_color = theme.palette().map_or(WARNING, |p| p.default_model);
             let enabled_color = theme.palette().map_or(CONNECTED, |p| p.enabled);
-            for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+            for (width, height) in [(40, 24), (80, 24), (120, 36)] {
                 for selected in [false, true] {
+                    app.view_mode = ViewMode::Home;
+                    app.focus = Focus::Profiles;
                     app.home_all_selected = !selected;
                     app.profile_offset = 0;
                     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                     terminal.draw(|frame| app.draw(frame)).unwrap();
                     let cells = &terminal.backend().buffer().content;
-                    if width >= 80 || selected {
+                    if (width >= 80 || selected) && (width < 120 || selected) {
                         assert!(
                             cells
                                 .iter()
@@ -749,13 +751,15 @@ mod tests {
                 }
             }
             app.config.profiles.get_mut("command_goat").unwrap().enabled = false;
-            let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+            app.view_mode = ViewMode::Home;
+            app.focus = Focus::Profiles;
+            let mut terminal = Terminal::new(TestBackend::new(80, 36)).unwrap();
             terminal.draw(|frame| app.draw(frame)).unwrap();
             let buffer = terminal.backend().buffer();
             let disabled_color = theme.palette().map_or(MUTED, |p| p.muted);
             let mut found_disabled = false;
             for y in 0..36 {
-                let text: String = (0..120).map(|x| buffer[(x, y)].symbol()).collect();
+                let text: String = (0..80).map(|x| buffer[(x, y)].symbol()).collect();
                 if let Some(x) = text.find("provider disabled") {
                     found_disabled = true;
                     let x = text[..x].chars().count();

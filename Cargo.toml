@@ -1,6 +1,6 @@
 [package]
 name = "mux"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2024"
 rust-version = "1.88"
 description = "A terminal configuration manager for coding agents, model providers, accounts, and local proxies"
