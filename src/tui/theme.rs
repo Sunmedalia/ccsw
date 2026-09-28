@@ -103,6 +103,14 @@ impl Theme {
         self.apply_region(buffer, buffer.area);
     }
 
+    pub(super) fn selection_symbol(self) -> &'static str {
+        if self.terminal_background() {
+            "▶"
+        } else {
+            ""
+        }
+    }
+
     pub(super) fn terminal_background(self) -> bool {
         matches!(self, Self::Arctic | Self::Ember | Self::Orchid)
     }
@@ -112,6 +120,23 @@ impl Theme {
         for y in region.y..region.bottom() {
             for x in region.x..region.right() {
                 let cell = &mut buffer[(x, y)];
+                // Cursor arrows belong only to the terminal-background themes.
+                // Filled highlights remain the selection cue in the original themes.
+                if cell.symbol() == "▶"
+                    && !self.terminal_background()
+                    && (cell.bg == PROVIDER_SELECTION
+                        || (cell.fg == ROUTE && cell.modifier.contains(Modifier::BOLD)))
+                {
+                    let marker = if cell.bg == PROVIDER_SELECTION {
+                        " "
+                    } else {
+                        "●"
+                    };
+                    cell.set_symbol(marker);
+                }
+                if self.terminal_background() && cell.bg == PROVIDER_SELECTION {
+                    cell.modifier.remove(Modifier::UNDERLINED);
+                }
                 if cell.symbol() == "▶" && cell.bg == PROVIDER_SELECTION {
                     cell.fg = ROUTE;
                     cell.modifier |= Modifier::BOLD;
@@ -1083,7 +1108,7 @@ pub(super) fn draw(
         }
         frame.render_widget(
             Paragraph::new(lines).style(Style::default().bg(if selected {
-                SELECTION
+                PROVIDER_SELECTION
             } else {
                 SURFACE
             })),

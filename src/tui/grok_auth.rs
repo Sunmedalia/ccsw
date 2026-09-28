@@ -662,7 +662,7 @@ impl App {
             List::new(items)
                 .block(panel(" Grok accounts ", true))
                 .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
-                .highlight_symbol("▶"),
+                .highlight_symbol(self.theme.selection_symbol()),
             rows[1],
             &mut state,
         );

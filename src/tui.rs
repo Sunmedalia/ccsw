@@ -7,6 +7,7 @@ mod grok;
 mod grok_auth;
 mod help;
 mod layout;
+mod meters;
 mod models;
 mod pi;
 mod preferences;

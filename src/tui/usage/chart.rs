@@ -1,6 +1,5 @@
 use super::*;
 use chrono::{NaiveDate, Timelike};
-use ratatui::widgets::{Bar, BarChart, BarGroup};
 
 struct Series {
     bins: Vec<Totals>,
@@ -113,176 +112,127 @@ fn short_value(value: u64, width: u16) -> String {
     String::new()
 }
 
-impl App {
-    pub(super) fn draw_usage_chart(
-        &self,
-        frame: &mut ratatui::Frame,
-        area: Rect,
-        page: &UsagePage,
-    ) {
-        page.table_area.set(Rect::default());
-        page.limit.set(0);
-        let chart_area = Rect {
-            y: area.y.saturating_add(1),
-            height: area.height.saturating_sub(1),
-            ..area
-        };
-        if chart_area.height < 6 {
-            frame.render_widget(
-                Paragraph::new("Enlarge terminal to view chart").style(Style::default().fg(MUTED)),
-                chart_area,
-            );
-            return;
-        }
-        let series = series(&self.usage.snapshot, page);
-        let capacity = usize::from(chart_area.width / 2).max(1);
-        let group = series.bins.len().div_ceil(capacity).max(1);
-        let bins = coarsen(&series.bins, group);
-        let width = ((usize::from(chart_area.width) + 1) / bins.len().max(1))
-            .saturating_sub(1)
-            .clamp(1, 8) as u16;
-        let step = series.step * group;
-        let missing = page.chart_tokens && bins.iter().any(|bin| bin.unknown > 0);
-        let values: Vec<Option<u64>> = bins
-            .iter()
-            .map(|bin| {
-                if page.chart_tokens && bin.unknown > 0 {
-                    None
-                } else {
-                    Some(if page.chart_tokens {
-                        (bin.input + bin.output).max(0) as u64
-                    } else {
-                        bin.calls.max(0) as u64
-                    })
-                }
-            })
-            .collect();
-        let max = values.iter().flatten().copied().max().unwrap_or(0);
-        let bars = values
-            .iter()
-            .enumerate()
-            .map(|(i, value)| {
-                let label = if width >= 5 {
-                    if series.hourly {
-                        format!("{:02}:00", i * step)
-                    } else {
-                        (series.start + chrono::Duration::days((i * step) as i64))
-                            .format("%m/%d")
-                            .to_string()
-                    }
-                } else {
-                    String::new()
-                };
-                Bar::default()
-                    .value(value.unwrap_or(0))
-                    .label(Line::styled(label, Style::default().fg(MUTED)))
-                    .text_value(value.map(|v| short_value(v, width)).unwrap_or_default())
-            })
-            .collect::<Vec<_>>();
-        let interval = if step == 1 {
-            if series.hourly {
-                "hour".into()
+pub(super) fn lines(
+    snapshot: &Snapshot,
+    page: &UsagePage,
+    tokens: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let series = series(snapshot, page);
+    let group = series
+        .bins
+        .len()
+        .div_ceil(usize::from(width / 2).max(1))
+        .max(1);
+    let bins = coarsen(&series.bins, group);
+    let values: Vec<Option<u64>> = bins
+        .iter()
+        .map(|bin| {
+            if tokens && bin.unknown > 0 {
+                None
             } else {
-                "day".into()
-            }
-        } else {
-            format!("{step} {}", if series.hourly { "hours" } else { "days" })
-        };
-        let metric_color = if page.chart_tokens { ROUTE } else { ENABLED };
-        let mut title = vec![
-            Span::styled(
-                if page.chart_tokens {
-                    " Tokens "
+                Some(if tokens {
+                    bin.input.saturating_add(bin.output).max(0) as u64
                 } else {
-                    " Calls "
-                },
-                Style::default()
-                    .fg(metric_color)
-                    .add_modifier(Modifier::BOLD),
+                    bin.calls.max(0) as u64
+                })
+            }
+        })
+        .collect();
+    let peak = values.iter().flatten().copied().max().unwrap_or(0);
+    let step = series.step * group;
+    let color = if tokens { ROUTE } else { ENABLED };
+    let mut out = vec![Line::from(vec![
+        Span::styled(
+            if tokens { "TOKENS" } else { "CALLS" },
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " / {} {} · peak {}",
+                step,
+                if series.hourly { "hour(s)" } else { "day(s)" },
+                short_value(peak, 10)
             ),
-            Span::styled(
-                format!("/ {interval} · peak "),
-                Style::default().fg(FIELD_LABEL),
-            ),
-            Span::styled(
-                short_value(max, 10),
-                Style::default()
-                    .fg(metric_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-        if missing {
-            title.push(Span::styled(" · ? unknown", Style::default().fg(WARNING)));
-        }
-        title.push(Span::raw(" "));
-        // Unknown buckets use '?' on the value baseline; zero buckets use '0'.
-        let block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(theme::EDGE))
-            .title(Line::from(title));
-        let plot = block.inner(chart_area);
-        frame.render_widget(block, chart_area);
-        let bars_area = Rect {
-            height: plot.height.saturating_sub(u16::from(width < 5)),
-            ..plot
-        };
-        let chart = BarChart::default()
-            .data(BarGroup::default().bars(&bars))
-            .bar_width(width)
-            .bar_gap(1)
-            .max(max.max(1))
-            .bar_style(Style::default().fg(metric_color))
-            .value_style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            );
-        frame.render_widget(chart, bars_area);
-        for (i, value) in values.iter().enumerate() {
-            if value.is_none() || *value == Some(0) {
-                let x = plot.x + i as u16 * (width + 1);
-                if x < plot.right() {
-                    frame.render_widget(
-                        Paragraph::new(if value.is_none() { "?" } else { "0" })
-                            .alignment(Alignment::Center)
-                            .style(Style::default().fg(if value.is_none() {
-                                WARNING
-                            } else {
-                                MUTED
-                            })),
-                        Rect::new(
-                            x,
-                            bars_area.bottom().saturating_sub(2),
-                            width.min(plot.right() - x),
-                            1,
-                        ),
-                    );
+            Style::default().fg(FIELD_LABEL),
+        ),
+    ])];
+    let cell_width = (usize::from(width) / values.len().max(1)).max(1);
+    for row in (0..6).rev() {
+        let mut spans = vec![];
+        for value in &values {
+            let units = value.map_or(0, |v| {
+                if peak == 0 {
+                    0
+                } else {
+                    ((v as f64 / peak as f64) * 48.0).round() as usize
                 }
+            });
+            let fill = units.saturating_sub(row * 8).min(8);
+            let symbol = if value.is_none() && row == 0 {
+                "?"
+            } else if *value == Some(0) && row == 0 {
+                "0"
+            } else {
+                [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"][fill]
+            };
+            let bar_width = cell_width.saturating_sub(1).max(1);
+            let paint = if row == 0 && (value.is_none() || *value == Some(0)) {
+                let left = bar_width / 2;
+                format!(
+                    "{}{}{}",
+                    " ".repeat(left),
+                    symbol,
+                    " ".repeat(bar_width - left - 1)
+                )
+            } else {
+                symbol.repeat(bar_width)
+            };
+            spans.push(Span::styled(
+                paint,
+                Style::default().fg(if value.is_none() {
+                    WARNING
+                } else if fill == 0 {
+                    MUTED
+                } else {
+                    color
+                }),
+            ));
+            if cell_width > 1 {
+                spans.push(Span::raw(" "));
             }
         }
-        let axis = Rect::new(
-            plot.x,
-            plot.bottom().saturating_sub(1),
-            ((bins.len() as u16) * (width + 1))
-                .saturating_sub(1)
-                .min(plot.width),
-            1,
-        );
-        if width < 5 {
-            frame.render_widget(
-                Paragraph::new(series.first).style(Style::default().fg(MUTED)),
-                axis,
-            );
-            if bins.len() > 1 {
-                frame.render_widget(
-                    Paragraph::new(series.last)
-                        .alignment(Alignment::Right)
-                        .style(Style::default().fg(MUTED)),
-                    axis,
-                );
-            }
-        }
+        out.push(Line::from(spans));
     }
+    let middle = if series.hourly {
+        format!("{:02}:00", values.len() / 2 * step)
+    } else {
+        (series.start + chrono::Duration::days((values.len() / 2 * step) as i64))
+            .format("%m/%d")
+            .to_string()
+    };
+    let occupied = series.first.len() + middle.len() + series.last.len();
+    let spaces = usize::from(width).saturating_sub(occupied);
+    out.push(Line::styled(
+        format!(
+            "{}{}{}{}{}",
+            series.first,
+            " ".repeat(spaces / 2),
+            middle,
+            " ".repeat(spaces - spaces / 2),
+            series.last
+        ),
+        Style::default().fg(MUTED),
+    ));
+    out.push(Line::styled(
+        if tokens {
+            "0 known zero · ? usage unknown"
+        } else {
+            "0 no calls · gateway requests"
+        },
+        Style::default().fg(MUTED),
+    ));
+    out
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("F6", "Selected provider usage and daily history"),
             (
                 "↑↓ / j k",
-                "Browse models; Tab switches panels in narrow windows",
+                "Browse focused list; Tab switches provider/model/details panels",
             ),
             ("/ / Esc", "Search / clear search or return home"),
             ("Space / d / 1", "Toggle / set default / toggle 1M"),

@@ -20,6 +20,9 @@ impl App {
     }
 
     pub(super) fn home_profile_item_heights(&self, panel: Rect) -> Vec<usize> {
+        if provider_workspace(self.screen) {
+            return vec![2; self.config.profiles.len() + self.home_prefix_count()];
+        }
         let mut heights = vec![
             self.all_models_home_lines(panel.width.saturating_sub(2))
                 .len(),
@@ -107,6 +110,19 @@ impl App {
         } else {
             self.profile_idx.saturating_add(self.home_prefix_count())
         }
+    }
+
+    pub(super) fn select_sidebar_index(&mut self, index: usize) {
+        self.return_home();
+        self.select_home_index(index);
+        if self.home_all_selected {
+            if !self.home_account_selected() && !self.home_grok_oauth_selected() {
+                self.enter_all_enabled_view();
+            }
+        } else if self.selected_profile().is_some() {
+            self.enter_provider_view();
+        }
+        self.focus = Focus::Profiles;
     }
 
     pub(super) fn select_home_index(&mut self, index: usize) {
@@ -242,6 +258,16 @@ impl App {
     }
 
     pub(super) fn toggle_focus(&mut self) {
+        if provider_workspace(self.screen) {
+            self.focus = match (self.view_mode, self.focus) {
+                (ViewMode::Provider, Focus::Profiles) => Focus::Models,
+                (ViewMode::Provider, Focus::Models) => Focus::Details,
+                (ViewMode::Provider, Focus::Details) => Focus::Profiles,
+                (ViewMode::AllEnabled, Focus::Profiles) => Focus::Models,
+                _ => Focus::Profiles,
+            };
+            return;
+        }
         if self.view_mode == ViewMode::Home {
             self.focus = Focus::Profiles;
         } else if self.view_mode == ViewMode::AllEnabled {
@@ -255,6 +281,13 @@ impl App {
     }
 
     pub(super) fn move_selection(&mut self, delta: isize) {
+        if provider_workspace(self.screen) && self.focus == Focus::Profiles {
+            let count = self.config.profiles.len() + self.home_prefix_count();
+            let index =
+                (self.home_selected_index() as isize + delta).rem_euclid(count as isize) as usize;
+            self.select_sidebar_index(index);
+            return;
+        }
         if self.view_mode == ViewMode::Home && self.focus == Focus::Profiles {
             let len = self
                 .config

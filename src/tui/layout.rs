@@ -1,7 +1,34 @@
 use super::*;
 
+pub(super) fn provider_workspace(area: Rect) -> bool {
+    area.width >= 120 && area.height >= 24
+}
+
 pub(super) fn ui_areas(area: Rect, focus: Focus, view_mode: ViewMode) -> UiAreas {
     let rows = app_rows(area);
+    if provider_workspace(area) {
+        let columns = Layout::horizontal([
+            Constraint::Length((area.width / 4).clamp(30, 42)),
+            Constraint::Min(80),
+        ])
+        .split(rows[1]);
+        let right = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(columns[1]);
+        return UiAreas {
+            profiles: Some(columns[0]),
+            models: match view_mode {
+                ViewMode::Home => None,
+                ViewMode::Provider => Some(right[0]),
+                ViewMode::AllEnabled => Some(columns[1]),
+            },
+            details: match view_mode {
+                ViewMode::Home => Some(columns[1]),
+                ViewMode::Provider => Some(right[1]),
+                ViewMode::AllEnabled => None,
+            },
+            footer: rows[2],
+        };
+    }
     match view_mode {
         ViewMode::Home => UiAreas {
             profiles: Some(rows[1]),

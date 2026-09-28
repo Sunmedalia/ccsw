@@ -49,13 +49,14 @@ pub(super) struct UsagePage {
     chart_tokens: bool,
     client: usize,
     provider: Option<String>,
-    scroll: u16,
+    scroll: usize,
     section: usize,
     session_sort_tokens: bool,
-    limit: std::cell::Cell<u16>,
-    offset: std::cell::Cell<usize>,
-    clicked: Option<(usize, usize)>,
-    table_area: std::cell::Cell<Rect>,
+    session_follow_range: bool,
+    session_search: String,
+    session_searching: bool,
+    limit: std::cell::Cell<usize>,
+    dashboard: std::cell::RefCell<view::DashboardState>,
 }
 impl UsagePage {
     fn range_label(&self) -> &'static str {
@@ -98,17 +99,45 @@ impl UsagePage {
         total
     }
     fn client(&self) -> Option<&'static str> {
-        [None, Some("Claude"), Some("Codex"), Some("Pi")][self.client]
+        [
+            None,
+            Some("Claude"),
+            Some("Codex"),
+            Some("Pi"),
+            Some("Grok"),
+        ][self.client.min(4)]
     }
     pub fn key(&mut self, key: KeyEvent, snapshot: &Snapshot) -> bool {
-        self.clicked = None;
+        self.scroll = self.dashboard.borrow().effective_scroll;
         self.scroll = self.scroll.min(self.limit.get());
-        match key.code {
-            KeyCode::Esc if self.provider.is_some() => {
-                self.provider = None;
-                self.section = 0;
-                self.scroll = 0;
+        if self.session_searching {
+            match key.code {
+                KeyCode::Up | KeyCode::Down => {
+                    self.section = 5;
+                    self.select_table_row(key.code == KeyCode::Down);
+                    return false;
+                }
+                KeyCode::Esc | KeyCode::Enter => self.session_searching = false,
+                KeyCode::Backspace => {
+                    self.session_search.pop();
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.session_search.clear()
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.session_search.push(ch)
+                }
+                _ => {}
             }
+            self.section = 5;
+            self.jump_to_section();
+            return false;
+        }
+        match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(6) => return true,
             KeyCode::Left | KeyCode::Right => {
                 if self.range == 3 {
@@ -132,21 +161,46 @@ impl UsagePage {
                 self.follow_today = true;
                 self.scroll = 0;
             }
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.client = (self.client + if key.code == KeyCode::Tab { 1 } else { 3 }) % 4;
+            KeyCode::Char('[' | ']') => {
+                self.client =
+                    (self.client + if key.code == KeyCode::Char(']') { 1 } else { 4 }) % 5;
                 self.provider = None;
                 self.scroll = 0;
             }
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.section = (self.section + if key.code == KeyCode::Tab { 1 } else { 5 }) % 6;
+                self.jump_to_section();
+            }
             KeyCode::Char(c @ '1'..='6') => {
                 self.section = (c as u8 - b'1') as usize;
-                if self.section == 5 {
-                    self.provider = None;
-                }
+                self.jump_to_section();
+            }
+            KeyCode::Char('/') => {
+                self.session_searching = true;
+                self.section = 5;
+                self.jump_to_section();
+            }
+            KeyCode::Char('f') => {
+                self.session_follow_range = !self.session_follow_range;
+                self.section = 5;
+                self.jump_to_section();
+            }
+            KeyCode::Char('n' | 'p') => self.select_table_row(key.code == KeyCode::Char('n')),
+            KeyCode::Char('x') => {
+                self.client = 0;
+                self.provider = None;
+                self.day = snapshot.today();
+                self.follow_today = true;
+                self.range = 0;
+                self.session_search.clear();
+                self.session_follow_range = false;
+                self.session_sort_tokens = false;
                 self.scroll = 0;
             }
-            KeyCode::Char('s') if self.section == 5 => {
+            KeyCode::Char('s') => {
                 self.session_sort_tokens = !self.session_sort_tokens;
-                self.scroll = 0;
+                self.section = 5;
+                self.jump_to_section();
             }
             KeyCode::Char('d' | 'w' | 'm' | 'y') => {
                 self.range = match key.code {
@@ -157,18 +211,33 @@ impl UsagePage {
                 };
                 self.scroll = 0;
             }
-            KeyCode::Char('c') => self.chart_tokens = false,
-            KeyCode::Char('v') => self.chart_tokens = true,
+            KeyCode::Char('c' | 'v') => {
+                self.chart_tokens = key.code == KeyCode::Char('v');
+                self.section = 4;
+                self.jump_to_section();
+            }
             KeyCode::Char('a') => {
                 self.provider = None;
                 self.scroll = 0;
+            }
+            KeyCode::Up | KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.select_table_row(key.code == KeyCode::Down);
             }
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.scroll = self.scroll.saturating_add(1).min(self.limit.get())
             }
-            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(10),
-            KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10).min(self.limit.get()),
+            KeyCode::PageUp => {
+                self.scroll = self
+                    .scroll
+                    .saturating_sub(usize::from(self.dashboard.borrow().viewport.height.max(1)))
+            }
+            KeyCode::PageDown => {
+                self.scroll = self
+                    .scroll
+                    .saturating_add(usize::from(self.dashboard.borrow().viewport.height.max(1)))
+                    .min(self.limit.get())
+            }
             KeyCode::Home => self.scroll = 0,
             KeyCode::End => self.scroll = self.limit.get(),
             _ => {}
@@ -280,8 +349,7 @@ impl App {
 
     fn poll_sessions(&mut self) -> bool {
         let mut changed = false;
-        let showing_sessions =
-            self.usage.active && self.usage.page.as_ref().is_some_and(|p| p.section == 5);
+        let showing_sessions = self.usage.active;
         if !showing_sessions {
             self.usage.sessions_watcher = None;
             self.usage.sessions_events = None;
@@ -312,7 +380,14 @@ impl App {
             match receiver.try_recv() {
                 Ok((reader, snapshot)) => {
                     self.usage.sessions_reader = Some(reader);
-                    self.usage.sessions = snapshot;
+                    if snapshot.rows.is_empty()
+                        && snapshot.warnings > 0
+                        && !self.usage.sessions.rows.is_empty()
+                    {
+                        self.usage.sessions.warnings = snapshot.warnings;
+                    } else {
+                        self.usage.sessions = snapshot;
+                    }
                     self.usage.sessions_updated = Some(Instant::now());
                     self.usage.sessions_receiver = None;
                     changed = true;
@@ -375,29 +450,37 @@ impl App {
             scroll: 0,
             section: 0,
             session_sort_tokens: false,
+            session_follow_range: false,
+            session_search: String::new(),
+            session_searching: false,
             limit: Default::default(),
-            offset: Default::default(),
-            clicked: None,
-            table_area: Default::default(),
+            dashboard: Default::default(),
         });
     }
 
     pub(super) fn usage_key(&mut self, key: KeyEvent) -> bool {
-        if key.code == KeyCode::Char('q')
+        let searching = self
+            .usage
+            .page
+            .as_ref()
+            .is_some_and(|p| p.session_searching);
+        if (!searching && key.code == KeyCode::Char('q'))
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
             return true;
         }
-        if key.code == KeyCode::F(2) {
+        if !searching && key.code == KeyCode::F(2) {
             self.select_client_tab(ClientTab::Claude);
             return false;
         }
         if let Some(mut page) = self.usage.page.take() {
-            self.usage_enter(&mut page, key);
+            if !searching {
+                self.usage_enter(&mut page, key);
+            }
             if page.key(key, &self.usage.snapshot) {
                 self.usage.active = false;
             }
-            if key.code == KeyCode::Char('r') {
+            if !searching && key.code == KeyCode::Char('r') {
                 self.usage.updated = None;
                 self.usage.sessions_updated = None;
             }

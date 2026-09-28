@@ -54,6 +54,10 @@ impl App {
     pub(super) fn footer_uses_short_labels(&self, area: Rect, compact: bool) -> bool {
         let controls: Vec<_> = footer_controls(Rect::new(0, 0, 200, 1), compact, self.view_mode)
             .into_iter()
+            .chain(
+                (provider_workspace(self.screen) && self.view_mode != ViewMode::Home)
+                    .then_some((FooterControl::Quit, Rect::default())),
+            )
             .filter(|(control, _)| match control {
                 FooterControl::DeleteProfile => {
                     !self.home_all_selected && self.selected_profile().is_some()
@@ -84,6 +88,10 @@ impl App {
         let template_area = Rect::new(0, area.y, if area.width < 55 { 54 } else { 200 }, 1);
         let controls: Vec<_> = footer_controls(template_area, compact, self.view_mode)
             .into_iter()
+            .chain(
+                (provider_workspace(self.screen) && self.view_mode != ViewMode::Home)
+                    .then_some((FooterControl::Quit, Rect::default())),
+            )
             .filter(|(control, _)| {
                 *control != FooterControl::DeleteProfile
                     || (!self.home_all_selected && self.selected_profile().is_some())

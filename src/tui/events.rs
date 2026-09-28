@@ -113,7 +113,8 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
-            && self.view_mode == ViewMode::Home
+            && (self.view_mode == ViewMode::Home
+                || (provider_workspace(self.screen) && self.focus == Focus::Profiles))
             && self.modal.is_none()
             && !self.codex_ui.accounts
         {
@@ -146,6 +147,41 @@ impl App {
             self.start_model_test();
             return Ok(false);
         }
+        if provider_workspace(self.screen) && self.focus == Focus::Profiles {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+                KeyCode::Home => self.select_sidebar_index(0),
+                KeyCode::End => self.select_sidebar_index(
+                    self.config.profiles.len() + self.home_prefix_count() - 1,
+                ),
+                KeyCode::PageUp => self.move_selection(-5),
+                KeyCode::PageDown => self.move_selection(5),
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    if self.home_account_selected() || self.home_grok_oauth_selected() {
+                        self.enter_all_enabled_view();
+                    } else {
+                        self.focus = Focus::Models;
+                    }
+                }
+                KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
+                KeyCode::Char(' ') if self.selected_profile().is_some() => {
+                    self.toggle_selected_provider()?;
+                    self.init_provider_editor();
+                }
+                KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
+                KeyCode::Char('x') if self.selected_profile().is_some() => {
+                    self.modal = Some(Modal::DeleteProfile)
+                }
+                KeyCode::Char('n') => self.new_profile(),
+                KeyCode::Char('p') => self.sync_all_to_claude(),
+                KeyCode::Char('P') => self.open_proxy_manager(),
+                KeyCode::Char('?') => self.open_help(),
+                KeyCode::Char('q') => return Ok(true),
+                _ => {}
+            }
+            return Ok(false);
+        }
         match self.view_mode {
             ViewMode::Home => match key.code {
                 KeyCode::Char('q') => return Ok(true),
@@ -172,6 +208,9 @@ impl App {
                 _ => {}
             },
             ViewMode::AllEnabled => match key.code {
+                KeyCode::Tab | KeyCode::BackTab if provider_workspace(self.screen) => {
+                    self.toggle_focus()
+                }
                 KeyCode::Char('?') => self.open_help(),
                 KeyCode::Esc | KeyCode::Char('h') => self.return_home(),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -243,7 +282,12 @@ impl App {
                         }
                         KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
                         KeyCode::Left | KeyCode::Char('h') => {
-                            self.focus = Focus::Models;
+                            self.focus =
+                                if provider_workspace(self.screen) && self.focus == Focus::Models {
+                                    Focus::Profiles
+                                } else {
+                                    Focus::Models
+                                };
                         }
                         KeyCode::Right | KeyCode::Char('l') => {
                             self.focus = Focus::Details;
@@ -465,8 +509,7 @@ impl App {
             return Ok(MouseAction::None);
         }
         if self.usage.active {
-            self.usage_mouse(mouse, area);
-            return Ok(MouseAction::None);
+            return Ok(self.usage_mouse(mouse, area));
         }
         if self.codex_mouse(mouse, area)? {
             return Ok(MouseAction::None);
@@ -513,8 +556,63 @@ impl App {
             self.grok_auth_page_mouse(mouse, area)?;
             return Ok(MouseAction::None);
         }
+        self.screen = area;
         let pi = self.pi_enabled;
         let ui = ui_areas(area, self.focus, self.view_mode);
+        // The wide sidebar navigates in place and shares compact two-line hit targets.
+        if provider_workspace(area)
+            && let Some(panel) = ui.profiles
+            && contains(panel, mouse.column, mouse.row)
+        {
+            match mouse.kind {
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    self.focus = Focus::Profiles;
+                    self.move_selection(if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    });
+                }
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left) => {
+                    let count = self.config.profiles.len() + self.home_prefix_count();
+                    let visible = usize::from(panel.height.saturating_sub(2) / 2);
+                    let index = scrollbar_index(panel, mouse.column, mouse.row, count, visible)
+                        .or_else(|| {
+                            clicked_list_index(
+                                panel,
+                                mouse.column,
+                                mouse.row,
+                                self.profile_offset,
+                                2,
+                            )
+                        });
+                    if let Some(index) = index.filter(|index| *index < count) {
+                        let repeated = index == self.home_selected_index();
+                        if !repeated {
+                            self.select_sidebar_index(index);
+                        }
+                        self.focus = Focus::Profiles;
+                        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                            // Only the status dot toggles provider availability.
+                            let marker_x =
+                                panel.x + 1 + u16::from(self.theme.terminal_background());
+                            if !pi && index >= self.home_prefix_count() && mouse.column == marker_x
+                            {
+                                self.toggle_selected_provider()?;
+                                self.init_provider_editor();
+                            } else if repeated
+                                && (self.home_account_selected() || self.home_grok_oauth_selected())
+                            {
+                                self.enter_all_enabled_view();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return Ok(MouseAction::None);
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let delta = if mouse.kind == MouseEventKind::ScrollUp {
@@ -751,7 +849,9 @@ impl App {
                     });
                 }
 
-                if let Some(panel) = ui.profiles {
+                if let Some(panel) = ui.profiles
+                    && contains(panel, mouse.column, mouse.row)
+                {
                     let index = if self.view_mode == ViewMode::Home {
                         clicked_variable_item(
                             panel,

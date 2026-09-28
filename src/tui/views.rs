@@ -63,6 +63,20 @@ impl App {
             }
             return;
         }
+        // Enter the selected workspace in place; resizing never replaces the selection.
+        if provider_workspace(area)
+            && self.view_mode == ViewMode::Home
+            && !self.home_account_selected()
+            && !self.home_grok_oauth_selected()
+            && (!self.config.profiles.is_empty() || self.home_all_selected)
+        {
+            self.select_sidebar_index(self.home_selected_index());
+        } else if !provider_workspace(area)
+            && self.view_mode != ViewMode::Home
+            && self.focus == Focus::Profiles
+        {
+            self.focus = Focus::Models;
+        }
         let rows = app_rows(area);
         self.draw_route(frame, rows[0]);
         let ui = ui_areas(area, self.focus, self.view_mode);
@@ -115,7 +129,14 @@ impl App {
                 ),
             ]),
             ViewMode::Provider => Line::from(vec![
-                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
+                Span::styled(
+                    if provider_workspace(self.screen) {
+                        " Providers "
+                    } else {
+                        " ‹ Back (Esc) "
+                    },
+                    button_style(false, false, false),
+                ),
                 Span::styled(
                     format!("  {profile}  "),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -127,7 +148,14 @@ impl App {
                 ),
             ]),
             ViewMode::AllEnabled => Line::from(vec![
-                Span::styled(" ‹ Back (Esc) ", button_style(false, false, false)),
+                Span::styled(
+                    if provider_workspace(self.screen) {
+                        " Providers "
+                    } else {
+                        " ‹ Back (Esc) "
+                    },
+                    button_style(false, false, false),
+                ),
                 Span::styled(
                     "  All Models",
                     Style::default().add_modifier(Modifier::BOLD),
@@ -154,29 +182,98 @@ impl App {
 
     pub(super) fn draw_profiles(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let ids = self.profile_ids();
-        let is_home = self.view_mode == ViewMode::Home;
-        let content_width = area.width.saturating_sub(2);
+        let sidebar = provider_workspace(self.screen);
+        let is_home = self.view_mode == ViewMode::Home || sidebar;
+        let content_width = area
+            .width
+            .saturating_sub(2 + u16::from(self.theme.terminal_background()));
         let mut item_heights = Vec::with_capacity(ids.len().saturating_add(1));
         let mut items = Vec::with_capacity(ids.len().saturating_add(1));
         if is_home {
-            let lines = self.all_models_home_lines(content_width);
+            let lines = if sidebar {
+                vec![
+                    Line::styled("All Models", Style::default().add_modifier(Modifier::BOLD)),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{} enabled", self.all_enabled_model_count()),
+                            Style::default().fg(ENABLED),
+                        ),
+                        Span::styled(" · all providers", Style::default().fg(MUTED)),
+                    ]),
+                ]
+            } else {
+                self.all_models_home_lines(content_width)
+            };
             item_heights.push(lines.len());
             items.push(ListItem::new(lines));
             if self.codex_ui.enabled {
-                let account = self.chatgpt_provider_lines(content_width);
+                let account = if sidebar {
+                    vec![
+                        Line::styled(
+                            "ChatGPT Account",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Line::styled(
+                            "Subscription · saved logins",
+                            Style::default().fg(FIELD_LABEL),
+                        ),
+                    ]
+                } else {
+                    self.chatgpt_provider_lines(content_width)
+                };
                 item_heights.push(account.len());
                 items.push(ListItem::new(account));
             }
         }
         if is_home && self.grok_enabled {
-            let account = self.grok_oauth_provider_lines(content_width);
+            let account = if sidebar {
+                vec![
+                    Line::styled("Grok OAuth", Style::default().add_modifier(Modifier::BOLD)),
+                    Line::styled("Account · native models", Style::default().fg(FIELD_LABEL)),
+                ]
+            } else {
+                self.grok_oauth_provider_lines(content_width)
+            };
             item_heights.push(account.len());
             items.push(ListItem::new(account));
         }
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];
             if is_home {
-                let mut lines = self.provider_home_lines(id, content_width);
+                let mut lines = if sidebar {
+                    vec![
+                        Line::from(vec![
+                            Span::styled(
+                                if self.pi_enabled || profile.enabled {
+                                    "● "
+                                } else {
+                                    "○ "
+                                },
+                                Style::default().fg(if self.pi_enabled || profile.enabled {
+                                    ENABLED
+                                } else {
+                                    MUTED
+                                }),
+                            ),
+                            Span::styled(
+                                profile.name.clone(),
+                                Style::default().add_modifier(Modifier::BOLD),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled(
+                                format!("{}  ", profile.api_format.label()),
+                                Style::default().fg(FIELD_LABEL),
+                            ),
+                            Span::styled(
+                                format!("{} models", self.catalog_models_for(id).len()),
+                                Style::default().fg(MUTED),
+                            ),
+                        ]),
+                    ]
+                } else {
+                    self.provider_home_lines(id, content_width)
+                };
                 // Keep identity, default model and availability visible when a
                 // full provider card is taller than the short viewport.
                 if area.height < 12
@@ -197,7 +294,11 @@ impl App {
                 ]))
             }
         }));
-        let title = " Providers ";
+        let title = if sidebar {
+            " Providers · n add "
+        } else {
+            " Providers "
+        };
         let selected = if is_home {
             self.home_selected_index()
         } else {
@@ -211,7 +312,7 @@ impl App {
             List::new(items)
                 .block(panel(title, self.focus == Focus::Profiles))
                 .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
-                .highlight_symbol("▶"),
+                .highlight_symbol(self.theme.selection_symbol()),
             area,
             &mut state,
         );
@@ -274,7 +375,7 @@ impl App {
                 List::new(items)
                     .block(panel(&title, true))
                     .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
-                    .highlight_symbol("▶"),
+                    .highlight_symbol(self.theme.selection_symbol()),
                 area,
                 &mut state,
             );
@@ -490,7 +591,7 @@ impl App {
             frame.render_stateful_widget(
                 List::new(items)
                     .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
-                    .highlight_symbol("▶"),
+                    .highlight_symbol(self.theme.selection_symbol()),
                 inner,
                 &mut state,
             );
@@ -544,7 +645,7 @@ impl App {
             List::new(items)
                 .block(panel(title, self.focus == Focus::Models))
                 .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
-                .highlight_symbol("▶"),
+                .highlight_symbol(self.theme.selection_symbol()),
             area,
             &mut state,
         );
@@ -998,7 +1099,14 @@ impl App {
         let (name, shortcut) = match control {
             FooterControl::AddProfile => ("+ Provider", "n"),
             FooterControl::DeleteProfile => ("Delete", "x"),
-            FooterControl::Back => ("Back", "Esc"),
+            FooterControl::Back => (
+                if provider_workspace(self.screen) {
+                    "Providers"
+                } else {
+                    "Back"
+                },
+                "Esc",
+            ),
             FooterControl::Models => ("Models", "h"),
             FooterControl::Details => ("Details", "l"),
             FooterControl::Sync => (
