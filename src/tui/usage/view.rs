@@ -24,6 +24,7 @@ fn areas(area: Rect) -> Areas {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(u16::from(inner.height >= 20)),
         Constraint::Length(if inner.height >= 26 && inner.width >= 90 {
             6
         } else if inner.height >= 17 {
@@ -42,17 +43,17 @@ fn areas(area: Rect) -> Areas {
         Constraint::Min(60),
         Constraint::Length(if split { 29 } else { 0 }),
     ])
-    .split(rows[6]);
+    .split(rows[7]);
     Areas {
         clients: rows[0],
         date: rows[1],
         range: rows[2],
-        summary: rows[3],
-        insights: rows[4],
-        sections: rows[5],
+        summary: rows[4],
+        insights: rows[5],
+        sections: rows[6],
         body: columns[0],
         sidebar: columns[1],
-        footer: rows[7],
+        footer: rows[8],
     }
 }
 
@@ -265,12 +266,37 @@ fn tokens(t: &Totals) -> String {
         if t.unknown > 0 { " + ?" } else { "" }
     )
 }
+// Shared typography keeps the same token roles in summaries, tables and sessions.
+fn value_style(color: Color) -> Style {
+    let style = Style::default().fg(color);
+    if matches!(color, ROUTE | ENABLED | DATA_SECONDARY | DEFAULT_MODEL) {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
+}
+fn label(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::default().fg(FIELD_LABEL))
+}
+fn value(text: impl Into<String>, color: Color) -> Span<'static> {
+    Span::styled(text.into(), value_style(color))
+}
+fn separator() -> Span<'static> {
+    Span::styled("  ·  ", Style::default().fg(MUTED))
+}
 fn numeric(value: String, color: Color) -> Cell<'static> {
-    Cell::from(Line::styled(value, Style::default().fg(color)).alignment(Alignment::Right))
+    Cell::from(Line::styled(value, value_style(color)).alignment(Alignment::Right))
 }
 fn heading(label: &str) -> Cell<'static> {
+    let color = match label {
+        "Tokens" | "Range" => ROUTE,
+        "Input" => ENABLED,
+        "Output" => DATA_SECONDARY,
+        "Cache read" => DEFAULT_MODEL,
+        _ => FIELD_LABEL,
+    };
     Cell::from(
-        Line::styled(label.to_owned(), Style::default().fg(MUTED)).alignment(Alignment::Right),
+        Line::styled(label.to_owned(), Style::default().fg(color)).alignment(Alignment::Right),
     )
 }
 
@@ -308,17 +334,23 @@ impl App {
 
     fn draw_sessions(&self, frame: &mut ratatui::Frame, a: &Areas, page: &UsagePage) {
         let sessions = self.session_rows(page);
-        let mut summary = vec![Line::styled(
-            if a.summary.width < 52 {
-                format!("{} sessions · lifetime tokens", sessions.len())
-            } else {
-                format!("{} sessions · local logs · lifetime tokens", sessions.len())
-            },
-            Style::default().fg(ROUTE),
-        )];
+        let mut summary = vec![Line::from(vec![
+            value(sessions.len().to_string(), ROUTE),
+            label(" SESSIONS"),
+            separator(),
+            Span::styled(
+                if a.summary.width < 52 {
+                    "lifetime tokens"
+                } else {
+                    "local logs · lifetime tokens"
+                },
+                Style::default().fg(MUTED),
+            ),
+        ])];
         if a.summary.height >= 3 {
-            summary.push(Line::raw(
+            summary.push(Line::styled(
                 "Date filters last activity; input includes cache. Independent of proxy ledger.",
+                Style::default().fg(FIELD_LABEL),
             ));
             summary.push(Line::styled(
                 "Child sessions listed separately; forks may include inherited usage (*).",
@@ -385,17 +417,17 @@ impl App {
                         if s.child { " [child]" } else { "" },
                         if s.fork { " *" } else { "" }
                     )),
-                    Cell::from(s.client),
+                    Cell::from(Span::styled(s.client, Style::default().fg(FIELD_LABEL))),
                     numeric(value(s.tokens.total()), ROUTE),
                 ];
                 if medium {
                     cells.extend([
-                        numeric(value(s.tokens.input), Color::White),
-                        numeric(value(s.tokens.output), Color::White),
+                        numeric(value(s.tokens.input), ENABLED),
+                        numeric(value(s.tokens.output), DATA_SECONDARY),
                     ]);
                 }
                 if wide {
-                    cells.push(numeric(value(s.tokens.read), MUTED));
+                    cells.push(numeric(value(s.tokens.read), DEFAULT_MODEL));
                     cells.push(Cell::from(
                         chrono::DateTime::from_timestamp(s.updated, 0)
                             .map(|t| t.with_timezone(&zone).format("%m-%d %H:%M").to_string())
@@ -442,26 +474,42 @@ impl App {
                     ),
                     Style::default().fg(ROUTE),
                 ),
-                Line::raw(format!(
-                    "Input {} · Output {} · Total {}{}",
-                    count(s.tokens.input),
-                    count(s.tokens.output),
-                    count(s.tokens.total()),
-                    if s.incomplete { " + ? (partial)" } else { "" }
-                )),
-                Line::raw(if s.tokens.cache_known {
-                    format!(
-                        "Cache reuse {} · read {} · write {} (in input)",
-                        s.tokens
-                            .cache_reuse_percent()
-                            .map_or("—".into(), |rate| format!("{rate:.1}%")),
-                        count(s.tokens.read),
-                        count(s.tokens.write)
-                    )
+                Line::from(vec![
+                    label("IN "),
+                    value(count(s.tokens.input), ENABLED),
+                    separator(),
+                    label("OUT "),
+                    value(count(s.tokens.output), DATA_SECONDARY),
+                    separator(),
+                    label("TOTAL "),
+                    value(count(s.tokens.total()), ROUTE),
+                    Span::styled(
+                        if s.incomplete { " + ? (partial)" } else { "" },
+                        Style::default().fg(WARNING),
+                    ),
+                ]),
+                if s.tokens.cache_known {
+                    Line::from(vec![
+                        label("CACHE "),
+                        value(
+                            s.tokens
+                                .cache_reuse_percent()
+                                .map_or("—".into(), |rate| format!("{rate:.1}%")),
+                            DEFAULT_MODEL,
+                        ),
+                        label("  read "),
+                        value(count(s.tokens.read), DEFAULT_MODEL),
+                        label("  write "),
+                        value(count(s.tokens.write), DEFAULT_MODEL),
+                        Span::styled(" (in input)", Style::default().fg(MUTED)),
+                    ])
                 } else {
-                    "Cache usage unavailable in local log".into()
-                }),
-                Line::raw(format!("Project: {}", s.project)),
+                    Line::styled(
+                        "Cache usage unavailable in local log",
+                        Style::default().fg(MUTED),
+                    )
+                },
+                Line::from(vec![label("Project  "), Span::raw(s.project.clone())]),
                 Line::styled(
                     format!(
                         "Models: {}",
@@ -560,22 +608,30 @@ impl App {
             .iter()
             .map(|model| {
                 let mut cells = vec![
-                    Cell::from(if model.model.is_empty() {
-                        "(unspecified)".into()
-                    } else {
-                        model.model.clone()
-                    }),
+                    Cell::from(Span::styled(
+                        if model.model.is_empty() {
+                            "(unspecified)".into()
+                        } else {
+                            model.model.clone()
+                        },
+                        Style::default()
+                            .fg(DATA_SECONDARY)
+                            .add_modifier(Modifier::BOLD),
+                    )),
                     numeric(tokens(&model.daily), ROUTE),
                     numeric(number(model.daily.calls), Color::White),
                 ];
                 if medium {
                     cells.extend([
-                        numeric(tokens(&model.total), Color::White),
+                        numeric(tokens(&model.total), MUTED),
                         numeric(number(model.total.calls), MUTED),
                     ]);
                 }
                 if wide {
-                    cells.push(Cell::from(format!("{} / {}", model.provider, model.client)));
+                    cells.push(Cell::from(Span::styled(
+                        format!("{} / {}", model.provider, model.client),
+                        Style::default().fg(MUTED),
+                    )));
                 }
                 Row::new(cells)
             })
@@ -943,41 +999,40 @@ impl App {
                 .format("%H:%M:%S")
                 .to_string()
             });
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled("SUCCESS ", Style::default().fg(MUTED)),
-                    Span::styled(rate.clone(), Style::default().fg(CONNECTED)),
-                    Span::styled("  ·  CACHE READ ", Style::default().fg(MUTED)),
-                    Span::styled(cache.clone(), Style::default().fg(ROUTE)),
-                    Span::styled("  ·  AVG ", Style::default().fg(MUTED)),
-                    Span::styled(
-                        format!("{average} tok/call"),
-                        Style::default().fg(Color::White),
-                    ),
-                    Span::styled("  ·  UPDATED ", Style::default().fg(MUTED)),
+            let mut spans = vec![label("SUCCESS "), value(rate, CONNECTED)];
+            if a.insights.width >= 60 {
+                spans.extend([
+                    separator(),
+                    label("CACHE "),
+                    value(cache, DEFAULT_MODEL),
+                    separator(),
+                    label("AVG "),
+                    value(average, ROUTE),
+                ]);
+                if a.insights.width >= 90 {
+                    spans.push(Span::styled(" tok/call", Style::default().fg(MUTED)));
+                }
+            }
+            spans.push(separator());
+            if a.insights.width >= 90 {
+                spans.extend([
+                    label("UPDATED "),
                     Span::styled(refreshed, Style::default().fg(Color::White)),
                     Span::styled(
                         format!(" / {}s", self.config.usage_refresh_secs),
                         Style::default().fg(MUTED),
                     ),
-                ])),
-                a.insights,
-            );
-            if a.insights.width < 90 {
-                frame.render_widget(Clear, a.insights);
-                let text = if a.insights.width >= 60 {
-                    format!(
-                        "Success {rate} · Cache {cache} · Avg {average} · Auto {}s",
-                        self.config.usage_refresh_secs
-                    )
-                } else {
-                    format!("Success {rate} · Auto {}s", self.config.usage_refresh_secs)
-                };
-                frame.render_widget(
-                    Paragraph::new(text).style(Style::default().fg(MUTED).bg(theme::SURFACE)),
-                    a.insights,
-                );
+                ]);
+            } else {
+                spans.extend([
+                    label("AUTO "),
+                    Span::styled(
+                        format!("{}s", self.config.usage_refresh_secs),
+                        Style::default().fg(MUTED),
+                    ),
+                ]);
             }
+            frame.render_widget(Paragraph::new(Line::from(spans)), a.insights);
         }
         if !tracked {
             frame.render_widget(
@@ -1057,7 +1112,11 @@ impl App {
             0.0
         };
         frame.render_widget(
-            Paragraph::new("REQUEST OUTCOMES").style(Style::default().fg(MUTED)),
+            Paragraph::new("REQUEST OUTCOMES").style(
+                Style::default()
+                    .fg(FIELD_LABEL)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
         frame.render_widget(
@@ -1073,14 +1132,34 @@ impl App {
         );
         frame.render_widget(
             Paragraph::new(vec![
-                Line::styled(
-                    format!("Failed {:>5}  Pending {:>4}", total.failed, total.pending),
-                    Style::default().fg(if total.failed > 0 { ERROR } else { MUTED }),
-                ),
-                Line::styled(
-                    format!("Stopped {} · Unknown {}", total.interrupted, total.unknown),
-                    Style::default().fg(MUTED),
-                ),
+                Line::from(vec![
+                    label("Failed "),
+                    value(
+                        format!("{:>4}", total.failed),
+                        if total.failed > 0 { ERROR } else { MUTED },
+                    ),
+                    label("  Pending "),
+                    value(
+                        total.pending.to_string(),
+                        if total.pending > 0 { ROUTE } else { MUTED },
+                    ),
+                ]),
+                Line::from(vec![
+                    label("Stopped "),
+                    value(
+                        total.interrupted.to_string(),
+                        if total.interrupted > 0 {
+                            WARNING
+                        } else {
+                            MUTED
+                        },
+                    ),
+                    label(" · Unknown "),
+                    value(
+                        total.unknown.to_string(),
+                        if total.unknown > 0 { WARNING } else { MUTED },
+                    ),
+                ]),
             ]),
             Rect::new(inner.x, inner.y + 2, inner.width, 2),
         );
@@ -1091,7 +1170,11 @@ impl App {
             .map(|(_, t)| t.calls.max(0) as u64)
             .collect();
         frame.render_widget(
-            Paragraph::new("DAILY CALLS / ACTIVE DAYS").style(Style::default().fg(MUTED)),
+            Paragraph::new("DAILY ACTIVITY").style(
+                Style::default()
+                    .fg(FIELD_LABEL)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Rect::new(inner.x, inner.y + 5, inner.width, 1),
         );
         if inner.height >= 9 {
@@ -1113,7 +1196,11 @@ impl App {
         }
         if inner.height >= 13 {
             frame.render_widget(
-                Paragraph::new("TOP MODEL / CALLS").style(Style::default().fg(MUTED)),
+                Paragraph::new("TOP MODELS · CALLS").style(
+                    Style::default()
+                        .fg(FIELD_LABEL)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Rect::new(inner.x, inner.y + 10, inner.width, 1),
             );
             let models = self.usage_models(page);
@@ -1127,7 +1214,7 @@ impl App {
                             format!("{} ", compact(m.daily.calls)),
                             Style::default().fg(ROUTE),
                         ),
-                        Span::raw(m.model.clone()),
+                        Span::styled(m.model.clone(), Style::default().fg(DATA_SECONDARY)),
                     ])
                 })
                 .collect::<Vec<_>>();
@@ -1164,18 +1251,23 @@ impl App {
         let rows: Vec<_> = providers
             .iter()
             .map(|p| {
-                let label = if page.client().is_none() {
-                    format!("{} · {}", p.name, p.client)
-                } else {
-                    p.name.clone()
-                };
+                let mut identity = vec![Span::styled(
+                    p.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if page.client().is_none() {
+                    identity.push(Span::styled(
+                        format!(" · {}", p.client),
+                        Style::default().fg(MUTED),
+                    ));
+                }
                 let mut cells = vec![
-                    Cell::from(label),
+                    Cell::from(Line::from(identity)),
                     numeric(tokens(&p.daily), ROUTE),
                     numeric(number(p.daily.calls), Color::White),
                 ];
                 if medium {
-                    cells.push(numeric(tokens(&p.total), Color::White));
+                    cells.push(numeric(tokens(&p.total), MUTED));
                     cells.push(numeric(number(p.total.calls), MUTED));
                 }
                 if wide {
@@ -1232,7 +1324,10 @@ impl App {
                 }
                 if wide {
                     cells.extend([
-                        numeric(number(t.interrupted), WARNING),
+                        numeric(
+                            number(t.interrupted),
+                            if t.interrupted > 0 { WARNING } else { MUTED },
+                        ),
                         numeric(number(t.pending), MUTED),
                     ]);
                 }
@@ -1279,12 +1374,21 @@ impl App {
                 number(total.success),
                 CONNECTED,
             ),
-            ("Failed", number(daily.failed), number(total.failed), ERROR),
+            (
+                "Failed",
+                number(daily.failed),
+                number(total.failed),
+                if daily.failed > 0 { ERROR } else { MUTED },
+            ),
             (
                 "Interrupted",
                 number(daily.interrupted),
                 number(total.interrupted),
-                WARNING,
+                if daily.interrupted > 0 {
+                    WARNING
+                } else {
+                    MUTED
+                },
             ),
             (
                 "Pending",
@@ -1296,31 +1400,31 @@ impl App {
                 "Input tokens",
                 known(daily, daily.input),
                 known(total, total.input),
-                Color::White,
+                ENABLED,
             ),
             (
                 "Output tokens",
                 known(daily, daily.output),
                 known(total, total.output),
-                Color::White,
+                DATA_SECONDARY,
             ),
             (
                 "Cache read",
                 number(daily.cache_read),
                 number(total.cache_read),
-                MUTED,
+                DEFAULT_MODEL,
             ),
             (
                 "Cache write",
                 number(daily.cache_write),
                 number(total.cache_write),
-                MUTED,
+                DEFAULT_MODEL,
             ),
             (
                 "Missing usage",
                 number(daily.unknown),
                 number(total.unknown),
-                WARNING,
+                if daily.unknown > 0 { WARNING } else { MUTED },
             ),
             (
                 "Compaction calls",
@@ -1348,7 +1452,7 @@ impl App {
                 Row::new(vec![
                     Cell::from(name),
                     numeric(day, color),
-                    numeric(total, color),
+                    numeric(total, MUTED),
                 ])
             })
             .collect();
@@ -1389,20 +1493,17 @@ fn draw_summary(
             "1 month" => "30d",
             _ => "All",
         };
-        let compact = if range_label == "All time" {
-            format!("{} tok", tokens(daily))
-        } else {
-            format!("{} tok  │  All {} tok", tokens(daily), tokens(total))
-        };
-        let line = Line::from(vec![
-            Span::styled(format!("{range} "), Style::default().fg(ROUTE)),
-            Span::styled(
-                compact,
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]);
+        let mut spans = vec![
+            label(format!("{range} ")),
+            value(format!("{} tok", tokens(daily)), ROUTE),
+        ];
+        if range_label != "All time" {
+            spans.extend([
+                Span::styled("  │  All ", Style::default().fg(MUTED)),
+                Span::styled(format!("{} tok", tokens(total)), Style::default().fg(MUTED)),
+            ]);
+        }
+        let line = Line::from(spans);
         frame.render_widget(Paragraph::new(line), area);
         return;
     }
@@ -1427,21 +1528,31 @@ fn draw_summary(
         frame.render_widget(block, columns[2]);
         frame.render_widget(
             Paragraph::new(vec![
-                Line::styled(
-                    format!("{} calls", compact(daily.calls)),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Line::styled(format!("{rate} success"), Style::default().fg(CONNECTED)),
-                Line::styled(
-                    format!("{} failed / {} stopped", daily.failed, daily.interrupted),
-                    Style::default().fg(if daily.failed > 0 { ERROR } else { MUTED }),
-                ),
-                Line::styled(
-                    format!("{} in flight", daily.pending),
-                    Style::default().fg(ROUTE),
-                ),
+                Line::from(vec![value(compact(daily.calls), ROUTE), label(" CALLS")]),
+                Line::from(vec![value(rate, CONNECTED), label(" success")]),
+                Line::from(vec![
+                    value(
+                        daily.failed.to_string(),
+                        if daily.failed > 0 { ERROR } else { MUTED },
+                    ),
+                    label(" failed  /  "),
+                    value(
+                        daily.interrupted.to_string(),
+                        if daily.interrupted > 0 {
+                            WARNING
+                        } else {
+                            MUTED
+                        },
+                    ),
+                    label(" stopped"),
+                ]),
+                Line::from(vec![
+                    value(
+                        daily.pending.to_string(),
+                        if daily.pending > 0 { ROUTE } else { MUTED },
+                    ),
+                    label(" in flight"),
+                ]),
             ]),
             inner,
         );
@@ -1462,7 +1573,7 @@ fn draw_stat_card(
     totals: &Totals,
     featured: bool,
 ) {
-    let accent = if featured { ROUTE } else { MUTED };
+    let accent = if featured { FIELD_LABEL } else { MUTED };
     let title = format!(" {label} ");
     let block = if area.height >= 6 {
         panel(&title, featured)
@@ -1495,7 +1606,11 @@ fn draw_stat_card(
     let lines = vec![
         Line::from(vec![
             Span::styled(
-                format!("{}  ", label.to_ascii_uppercase()),
+                if area.height >= 6 {
+                    "TOTAL  ".into()
+                } else {
+                    format!("{}  ", label.to_ascii_uppercase())
+                },
                 Style::default().fg(accent).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -1507,16 +1622,16 @@ fn draw_stat_card(
             Span::styled(
                 amount,
                 Style::default()
-                    .fg(if featured { ROUTE } else { Color::White })
+                    .fg(if featured { ROUTE } else { MUTED })
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" TOKENS", Style::default().fg(MUTED)),
+            Span::styled(" TOKENS", Style::default().fg(FIELD_LABEL)),
         ]),
         Line::from(vec![
-            Span::styled("IN ", Style::default().fg(MUTED)),
-            Span::styled(compact(totals.input), Style::default().fg(Color::White)),
-            Span::styled("   OUT ", Style::default().fg(MUTED)),
-            Span::styled(compact(totals.output), Style::default().fg(WARNING)),
+            Span::styled("IN ", Style::default().fg(FIELD_LABEL)),
+            value(compact(totals.input), ENABLED),
+            Span::styled("   OUT ", Style::default().fg(FIELD_LABEL)),
+            value(compact(totals.output), DATA_SECONDARY),
         ]),
         token_composition(totals, inner.width),
     ];
@@ -1532,8 +1647,11 @@ fn token_composition(totals: &Totals, width: u16) -> Line<'static> {
     let input = ((totals.input as f64 / total as f64) * width as f64).round() as usize;
     let input = input.min(width);
     Line::from(vec![
-        Span::styled("━".repeat(input), Style::default().fg(ROUTE)),
-        Span::styled("━".repeat(width - input), Style::default().fg(WARNING)),
+        Span::styled("━".repeat(input), Style::default().fg(ENABLED)),
+        Span::styled(
+            "━".repeat(width - input),
+            Style::default().fg(DATA_SECONDARY),
+        ),
     ])
 }
 
@@ -1567,13 +1685,14 @@ fn draw_table(
         .header(
             Row::new(headers).style(
                 Style::default()
-                    .fg(MUTED)
+                    .fg(FIELD_LABEL)
                     .bg(theme::SURFACE)
                     .add_modifier(Modifier::BOLD),
             ),
         )
         .column_spacing(1)
-        .row_highlight_style(Style::default().bg(SELECTION));
+        .row_highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+        .highlight_symbol("▶");
     frame.render_stateful_widget(table, area, &mut state);
     page.offset.set(state.offset());
 }
@@ -1609,8 +1728,8 @@ mod tests {
         assert!(row(0).contains("1 DAY"));
         assert!(row(1).contains("12,000 TOKENS"));
         assert!(row(2).contains("IN 9,000   OUT 3,000"));
-        assert_eq!(buffer[(1, 3)].fg, ROUTE);
-        assert_eq!(buffer[(31, 3)].fg, WARNING);
+        assert_eq!(buffer[(1, 3)].fg, ENABLED);
+        assert_eq!(buffer[(31, 3)].fg, DATA_SECONDARY);
 
         let mut narrow = Terminal::new(TestBackend::new(40, 3)).unwrap();
         narrow

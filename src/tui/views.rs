@@ -134,7 +134,7 @@ impl App {
                 ),
                 Span::styled(
                     format!("  ·  {} models", self.all_enabled_model_count()),
-                    Style::default().fg(CONNECTED),
+                    Style::default().fg(ENABLED),
                 ),
             ]),
         };
@@ -176,13 +176,22 @@ impl App {
         items.extend(ids.iter().map(|id| {
             let profile = &self.config.profiles[id];
             if is_home {
-                let lines = self.provider_home_lines(id, content_width);
+                let mut lines = self.provider_home_lines(id, content_width);
+                // Keep identity, default model and availability visible when a
+                // full provider card is taller than the short viewport.
+                if area.height < 12
+                    && let Some(endpoint) = lines
+                        .iter()
+                        .position(|line| line.to_string().trim_start().starts_with("Endpoint:"))
+                {
+                    lines.truncate(endpoint);
+                }
                 item_heights.push(lines.len());
                 ListItem::new(lines)
             } else {
                 item_heights.push(1);
                 ListItem::new(Line::from(vec![
-                    Span::styled("● ", Style::default().fg(CONNECTED)),
+                    Span::styled("● ", Style::default().fg(ENABLED)),
                     Span::raw(profile.name.clone()),
                     Span::styled(format!("  {id}"), Style::default().fg(MUTED)),
                 ]))
@@ -201,13 +210,8 @@ impl App {
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(title, self.focus == Focus::Profiles))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(SELECTION)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(" "),
+                .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                .highlight_symbol("▶"),
             area,
             &mut state,
         );
@@ -235,7 +239,7 @@ impl App {
                         Line::from(vec![
                             Span::styled(
                                 if entry.enabled { "● " } else { "○ " },
-                                Style::default().fg(if entry.enabled { CONNECTED } else { MUTED }),
+                                Style::default().fg(if entry.enabled { ENABLED } else { MUTED }),
                             ),
                             Span::styled(
                                 entry.profile_name.clone(),
@@ -269,13 +273,8 @@ impl App {
             frame.render_stateful_widget(
                 List::new(items)
                     .block(panel(&title, true))
-                    .highlight_style(
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(SELECTION)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .highlight_symbol(" "),
+                    .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                    .highlight_symbol("▶"),
                 area,
                 &mut state,
             );
@@ -373,7 +372,7 @@ impl App {
                         },
                     ),
                     if editor.search_active {
-                        Span::styled("▌", Style::default().fg(CONNECTED))
+                        Span::styled("▌", Style::default().fg(ROUTE))
                     } else {
                         Span::raw("")
                     },
@@ -450,11 +449,11 @@ impl App {
                         "○"
                     };
                     let marker_color = if is_def && is_en {
-                        WARNING
+                        DEFAULT_MODEL
                     } else if is_def && !is_en {
                         MUTED
                     } else if is_req || is_en {
-                        CONNECTED
+                        ENABLED
                     } else {
                         MUTED
                     };
@@ -477,7 +476,7 @@ impl App {
                         ),
                         Span::styled(
                             if is_1m { "  [1M]" } else { "" },
-                            Style::default().fg(CONNECTED),
+                            Style::default().fg(DEFAULT_MODEL),
                         ),
                     ];
                     ListItem::new(Line::from(spans))
@@ -490,13 +489,8 @@ impl App {
                 .with_selected((!items.is_empty()).then_some(editor.selected));
             frame.render_stateful_widget(
                 List::new(items)
-                    .highlight_style(
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(SELECTION)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .highlight_symbol(" "),
+                    .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                    .highlight_symbol("▶"),
                 inner,
                 &mut state,
             );
@@ -549,13 +543,8 @@ impl App {
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(title, self.focus == Focus::Models))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(SELECTION)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(" "),
+                .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                .highlight_symbol("▶"),
             area,
             &mut state,
         );
@@ -616,7 +605,7 @@ impl App {
                     .unwrap_or_else(|| "unset".into())
             )),
             Line::from(vec![
-                Span::styled(" Model: ", Style::default().fg(MUTED)),
+                Span::styled(" Model: ", Style::default().fg(FIELD_LABEL)),
                 Span::styled(
                     model.label(),
                     Style::default()
@@ -626,21 +615,23 @@ impl App {
                 if is_default {
                     Span::styled(
                         "  ◆ Default model",
-                        Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(DEFAULT_MODEL)
+                            .add_modifier(Modifier::BOLD),
                     )
                 } else {
                     Span::raw("")
                 },
             ]),
             Line::from(vec![
-                Span::styled(" ID: ", Style::default().fg(MUTED)),
+                Span::styled(" ID: ", Style::default().fg(FIELD_LABEL)),
                 Span::styled(
                     &effective_id,
                     Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
-                Span::styled(" Status: ", Style::default().fg(MUTED)),
+                Span::styled(" Status: ", Style::default().fg(FIELD_LABEL)),
                 Span::styled(
                     if self.pi_enabled {
                         "● Configured"
@@ -650,15 +641,15 @@ impl App {
                         "○ Disabled"
                     },
                     Style::default()
-                        .fg(if is_enabled { CONNECTED } else { MUTED })
+                        .fg(if is_enabled { ENABLED } else { MUTED })
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
-                Span::styled(" Context: ", Style::default().fg(MUTED)),
+                Span::styled(" Context: ", Style::default().fg(FIELD_LABEL)),
                 Span::styled(
                     if is_1m { "1M" } else { "Standard" },
-                    Style::default().fg(if is_1m { CONNECTED } else { MUTED }),
+                    Style::default().fg(if is_1m { DEFAULT_MODEL } else { MUTED }),
                 ),
             ]),
             Line::from(vec![if let Some(alias) = alias {
@@ -803,7 +794,11 @@ impl App {
             },
         );
         let provider_identity = if selected {
-            provider_identity.style(Style::default().bg(SELECTION).add_modifier(Modifier::BOLD))
+            provider_identity.style(
+                Style::default()
+                    .bg(theme::PROVIDER_SELECTION)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             provider_identity
         };
@@ -814,8 +809,8 @@ impl App {
             detail("API format", &api_format),
             detail("Endpoint", &profile.base_url),
             detail("Credential", &profile.credential.masked()),
-            detail("Default", &profile.default_model),
-            detail(
+            detail_value("Default", &profile.default_model, DEFAULT_MODEL),
+            detail_value(
                 "Models",
                 &if self.pi_enabled {
                     format!("{} configured", profile.models.len())
@@ -826,6 +821,7 @@ impl App {
                         self.catalog_models().len()
                     )
                 },
+                ENABLED,
             ),
             detail(
                 match self.config_tab() {
@@ -1069,7 +1065,7 @@ impl App {
                         Style::default().fg(MUTED),
                     ),
                     Line::raw(""),
-                    Line::styled("Enter/i import · s skip", Style::default().fg(WARNING)),
+                    Line::styled("Enter/i import · s skip", Style::default().fg(ROUTE)),
                 ]);
                 frame.render_widget(
                     Paragraph::new(lines).block(panel(" Import preview ", true)),
@@ -1098,11 +1094,17 @@ impl App {
                         };
                         lines.push(Line::styled(
                             format!("{} {label}", if selected == index { "▶" } else { " " }),
-                            Style::default().fg(if selected == index {
-                                WARNING
-                            } else {
-                                Color::White
-                            }),
+                            Style::default()
+                                .fg(if selected == index {
+                                    ROUTE
+                                } else {
+                                    Color::White
+                                })
+                                .add_modifier(if selected == index {
+                                    Modifier::BOLD
+                                } else {
+                                    Modifier::empty()
+                                }),
                         ));
                     }
                     frame.render_widget(

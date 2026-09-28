@@ -101,7 +101,7 @@ impl App {
             vec![
                 (
                     (if selected { " ● " } else { " ○ " }).into(),
-                    Style::default().fg(if selected { CONNECTED } else { MUTED }),
+                    Style::default().fg(if selected { ENABLED } else { MUTED }),
                 ),
                 (
                     "ChatGPT Account".into(),
@@ -117,7 +117,7 @@ impl App {
                     "     Configured: {name}   {} saved",
                     self.config.codex.accounts.len()
                 ),
-                WARNING,
+                DEFAULT_MODEL,
             ),
             (
                 format!(
@@ -128,7 +128,7 @@ impl App {
                         "Disabled · API providers available"
                     }
                 ),
-                if selected { CONNECTED } else { MUTED },
+                if selected { ENABLED } else { MUTED },
             ),
             ("     Credential: Saved Codex login".into(), MUTED),
         ] {
@@ -811,13 +811,8 @@ impl App {
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(" ChatGPT accounts ", true))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(SELECTION)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(" "),
+                .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                .highlight_symbol("▶"),
             rows[1],
             &mut state,
         );

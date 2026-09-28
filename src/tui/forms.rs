@@ -586,6 +586,7 @@ impl ModelForm {
             instance: uuid::Uuid::new_v4(),
             original_profile: None,
             original_model_id: None,
+            default_one_m: false,
             api_query: String::new(),
             api_query_cursor: 0,
             api_scroll: 0,
@@ -662,6 +663,20 @@ impl ModelForm {
         let model = self.filtered_api_models().get(index).copied().cloned();
         if let Some(model) = model {
             let base_id = canonical_model_id(&model.id);
+            let one_m = self
+                .original_profile
+                .as_ref()
+                .and_then(|profile| {
+                    profile
+                        .models
+                        .iter()
+                        .find(|entry| canonical_model_id(&entry.id) == base_id)
+                })
+                .map(|saved| has_1m_suffix(&saved.id))
+                .unwrap_or_else(|| {
+                    has_1m_suffix(&model.id)
+                        || (self.default_one_m && self.fields[3].value == "true")
+                });
             if canonical_model_id(&self.fields[0].value) != base_id {
                 let saved = self.original_profile.as_ref().and_then(|p| {
                     p.models
@@ -697,7 +712,7 @@ impl ModelForm {
             }
             self.fields[2].value = model.description.clone().unwrap_or_default();
             self.fields[2].cursor = self.fields[2].char_count();
-            self.fields[3].value = has_1m_suffix(&model.id).to_string();
+            self.fields[3].value = one_m.to_string();
             self.api_status = format!("Selected API model: {base_id}");
         }
     }
@@ -1118,15 +1133,29 @@ fn draw_fields_with_context(
         let line = Line::from(vec![
             Span::styled(
                 format!("{label:>label_width$}  "),
-                Style::default().fg(if current { ROUTE } else { MUTED }),
+                Style::default()
+                    .fg(if current { ROUTE } else { FIELD_LABEL })
+                    .add_modifier(if current {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
             Span::styled(
                 shown,
-                Style::default().add_modifier(if current {
-                    Modifier::REVERSED
+                if current {
+                    Style::default().fg(Color::Black).bg(ROUTE)
                 } else {
-                    Modifier::empty()
-                }),
+                    Style::default().fg(if field.toggle {
+                        if field.value == "true" {
+                            ENABLED
+                        } else {
+                            MUTED
+                        }
+                    } else {
+                        Color::White
+                    })
+                },
             ),
         ]);
         frame.render_widget(
@@ -1340,13 +1369,23 @@ pub(super) fn draw_api_models(frame: &mut ratatui::Frame, api_area: Rect, form: 
                     let mut spans = vec![
                         Span::styled(
                             if is_active { "▶ " } else { "● " },
-                            Style::default().fg(if is_active { WARNING } else { CONNECTED }),
+                            Style::default()
+                                .fg(if is_active { ROUTE } else { MUTED })
+                                .add_modifier(if is_active {
+                                    Modifier::BOLD
+                                } else {
+                                    Modifier::empty()
+                                }),
                         ),
                         Span::styled(
                             &model.id,
                             Style::default()
-                                .fg(if is_active { WARNING } else { Color::White })
-                                .add_modifier(Modifier::BOLD),
+                                .fg(if is_active { ROUTE } else { Color::White })
+                                .add_modifier(if is_active {
+                                    Modifier::BOLD
+                                } else {
+                                    Modifier::empty()
+                                }),
                         ),
                     ];
                     if let Some(label) = &model.label {
@@ -1650,7 +1689,7 @@ pub(super) fn draw_confirmation(frame: &mut ratatui::Frame, area: Rect, message:
             Line::raw(""),
             Line::styled(
                 "Enter/y confirm · n/Esc cancel",
-                Style::default().fg(WARNING),
+                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
             ),
         ])
         .alignment(Alignment::Center)

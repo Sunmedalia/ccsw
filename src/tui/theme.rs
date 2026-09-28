@@ -1,31 +1,38 @@
 use super::*;
 
-// Semantic paint tokens. Only marked panel edges are restyled; chart and text
-// glyphs are left intact. This keeps the same hit targets in every theme.
+// Semantic paint tokens. Themes recolor rendered cells without changing their
+// text or hit targets.
 pub(super) const SURFACE: Color = Color::Rgb(1, 2, 3);
 pub(super) const EDGE: Color = Color::Rgb(1, 2, 4);
 pub(super) const ACTIVE_EDGE: Color = Color::Rgb(1, 2, 5);
+pub(super) const PROVIDER_SELECTION: Color = Color::Rgb(1, 2, 10);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Theme {
-    Classic,
     #[default]
+    Classic,
     Slate,
     Moss,
     Sand,
     Plum,
     Pulse,
+    Arctic,
+    Ember,
+    Orchid,
 }
 
 impl Theme {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::Classic,
         Self::Slate,
         Self::Moss,
         Self::Sand,
         Self::Plum,
         Self::Pulse,
+        Self::Arctic,
+        Self::Ember,
+        Self::Orchid,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -36,6 +43,9 @@ impl Theme {
             Self::Sand => "Paper / light ledger",
             Self::Plum => "Nightfall / soft panels",
             Self::Pulse => "Pulse / instrument panel",
+            Self::Arctic => "Arctic / terminal ice blue",
+            Self::Ember => "Ember / terminal warm copper",
+            Self::Orchid => "Orchid / terminal violet",
         }
     }
 
@@ -56,11 +66,14 @@ impl Theme {
     pub(super) fn description(self) -> &'static str {
         match self {
             Self::Classic => "Terminal background · square edges · compact highlights",
-            Self::Slate => "Graphite canvas · quiet rails · raised selection",
-            Self::Moss => "Forest panels · heavy frames · bold navigation",
-            Self::Sand => "Warm paper · ruled frames · underlined selection",
-            Self::Plum => "Midnight canvas · rounded panels · soft emphasis",
-            Self::Pulse => "Blue instruments · double frames · bright readouts",
+            Self::Slate => "Graphite canvas · ice blue models / mauve status · ivory headings",
+            Self::Moss => "Forest panels · sage models / copper status · parchment headings",
+            Self::Sand => "Warm paper · ink blue models / umber status · underlined focus",
+            Self::Plum => "Midnight canvas · lilac models / sea glass status · rose headings",
+            Self::Pulse => "Blue instruments · cyan models / gold status · crisp readouts",
+            Self::Arctic => "Terminal background · ice blue / lilac / mint · arrow focus",
+            Self::Ember => "Terminal background · copper / sky blue / honey · arrow focus",
+            Self::Orchid => "Terminal background · violet / sea glass / rose · arrow focus",
         }
     }
 
@@ -75,7 +88,9 @@ impl Theme {
             _ => return symbol,
         };
         (match self {
-            Self::Classic => ["┌", "┐", "└", "┘", "─", "│"],
+            Self::Classic | Self::Arctic | Self::Ember | Self::Orchid => {
+                ["┌", "┐", "└", "┘", "─", "│"]
+            }
             Self::Slate => ["▏", "▕", "▏", "▕", " ", "│"],
             Self::Moss => ["┏", "┓", "┗", "┛", "━", "┃"],
             Self::Sand => ["┌", "┐", "└", "┘", "─", "│"],
@@ -88,11 +103,19 @@ impl Theme {
         self.apply_region(buffer, buffer.area);
     }
 
+    pub(super) fn terminal_background(self) -> bool {
+        matches!(self, Self::Arctic | Self::Ember | Self::Orchid)
+    }
+
     fn apply_region(self, buffer: &mut ratatui::buffer::Buffer, region: Rect) {
         let palette = self.palette();
         for y in region.y..region.bottom() {
             for x in region.x..region.right() {
                 let cell = &mut buffer[(x, y)];
+                if cell.symbol() == "▶" && cell.bg == PROVIDER_SELECTION {
+                    cell.fg = ROUTE;
+                    cell.modifier |= Modifier::BOLD;
+                }
                 let edge = matches!(cell.fg, EDGE | ACTIVE_EDGE);
                 if edge {
                     let symbol = self.edge(cell.symbol()).to_owned();
@@ -104,16 +127,33 @@ impl Theme {
                     };
                 }
                 let selected = cell.bg == SELECTION;
+                let accent_fill = cell.bg == ROUTE;
+                if self.terminal_background() {
+                    cell.modifier.remove(Modifier::REVERSED);
+                    if selected || accent_fill {
+                        cell.modifier |= Modifier::UNDERLINED;
+                    }
+                    if accent_fill {
+                        cell.modifier |= Modifier::BOLD;
+                    }
+                }
                 if selected {
                     cell.modifier |= match self {
                         Self::Sand => Modifier::UNDERLINED,
-                        Self::Moss | Self::Pulse => Modifier::BOLD,
                         _ => Modifier::empty(),
                     };
                 }
                 let Some(p) = &palette else {
+                    cell.fg = match cell.fg {
+                        DEFAULT_MODEL | DEFAULT_LABEL | DATA_SECONDARY => WARNING,
+                        ENABLED => CONNECTED,
+                        FIELD_LABEL => MUTED,
+                        color => color,
+                    };
                     if cell.bg == SURFACE {
                         cell.bg = Color::Reset;
+                    } else if cell.bg == PROVIDER_SELECTION {
+                        cell.bg = SELECTION;
                     }
                     continue;
                 };
@@ -124,11 +164,17 @@ impl Theme {
                 } else if cell.fg == Color::Reset {
                     p.text
                 } else if cell.fg == Color::Black {
-                    p.on_accent
+                    if self.terminal_background() {
+                        p.accent
+                    } else {
+                        p.on_accent
+                    }
                 } else {
                     p.color(cell.fg)
                 };
-                cell.bg = if cell.bg == SURFACE {
+                cell.bg = if self.terminal_background() {
+                    Color::Reset
+                } else if cell.bg == SURFACE {
                     p.surface
                 } else if cell.bg == Color::Reset {
                     p.background
@@ -140,10 +186,51 @@ impl Theme {
     }
 
     fn palette(self) -> Option<Palette> {
+        if self.terminal_background() {
+            let values = match self {
+                Self::Arctic => [
+                    0, 0xc6d9e5, 0x8babbf, 0, 0x70cbea, 0, 0x548ba5, 0x9ed9b5, 0xf0c889, 0xf2949b,
+                    0xd9f4ff,
+                ],
+                Self::Ember => [
+                    0, 0xe1d0c2, 0xb99a84, 0, 0xedac7d, 0, 0xac7956, 0xbad5a0, 0xf2cf86, 0xf39891,
+                    0xffe4c2,
+                ],
+                Self::Orchid => [
+                    0, 0xd5cbe4, 0xa69abb, 0, 0xc4a2ed, 0, 0x8c70ac, 0x9fd6c5, 0xe7c78e, 0xf199b9,
+                    0xf0ddff,
+                ],
+                _ => unreachable!(),
+            };
+            let mut p = Palette::new(values);
+            p.background = Color::Reset;
+            p.surface = Color::Reset;
+            p.selection = Color::Reset;
+            p.on_accent = p.accent;
+            p.default_model = match self {
+                Self::Arctic => rgb(0xc5b1ef),
+                Self::Ember => rgb(0xa6cced),
+                Self::Orchid => rgb(0xa5dacf),
+                _ => unreachable!(),
+            };
+            p.label = match self {
+                Self::Arctic => rgb(0xe6bc98),
+                Self::Ember => rgb(0xb9d1b4),
+                Self::Orchid => rgb(0xa5c9e6),
+                _ => unreachable!(),
+            };
+            p.enabled = match self {
+                Self::Arctic => rgb(0xa8d9ce),
+                Self::Ember => rgb(0xe6cc98),
+                Self::Orchid => rgb(0xe2afcf),
+                _ => unreachable!(),
+            };
+            return Some(p);
+        }
         // Persisted IDs stay stable so existing user selections remain valid.
         let values = match self {
             Self::Classic => return None,
-            // Monochrome editorial UI with amber reserved for warnings.
+            // Graphite typography with separate blue model and mauve status roles.
             Self::Slate => [
                 0x18191b, 0xc9ced6, 0x9daebb, 0x33363b, 0xe2ded2, 0x18191b, 0x89919b, 0xa9c8b3,
                 0xdec08b, 0xe4a8a0, 0xf8f4eb,
@@ -168,15 +255,24 @@ impl Theme {
                 0x141e2a, 0xdfe9f0, 0x8ba1b5, 0x253747, 0x7bbeda, 0x141e2a, 0x304354, 0x93ccb2,
                 0xeac17e, 0xec8b83, 0xf1f5f7,
             ],
+            Self::Arctic | Self::Ember | Self::Orchid => unreachable!(),
         };
         let mut palette = Palette::new(values);
+        (palette.default_model, palette.enabled) = match self {
+            Self::Slate => (rgb(0xa9c8d9), rgb(0xd4b5cf)),
+            Self::Moss => (rgb(0xc6d6b0), rgb(0xe4b68c)),
+            Self::Sand => (rgb(0x284f70), rgb(0x764b12)),
+            Self::Plum => (rgb(0xd1b9e7), rgb(0x94d1c7)),
+            Self::Pulse => (rgb(0x7bbeda), rgb(0xeac17e)),
+            Self::Classic | Self::Arctic | Self::Ember | Self::Orchid => unreachable!(),
+        };
         palette.surface = match self {
             Self::Slate => Color::Rgb(31, 33, 37),
             Self::Moss => Color::Rgb(25, 43, 33),
             Self::Sand => Color::Rgb(249, 244, 231),
             Self::Plum => Color::Rgb(29, 40, 63),
             Self::Pulse => Color::Rgb(22, 35, 48),
-            Self::Classic => Color::Reset,
+            Self::Classic | Self::Arctic | Self::Ember | Self::Orchid => Color::Reset,
         };
         Some(palette)
     }
@@ -191,11 +287,22 @@ pub(super) enum PulseTheme {
     Moss,
     Sand,
     Plum,
+    Arctic,
+    Ember,
+    Orchid,
 }
 
 impl PulseTheme {
-    pub(super) const ALL: [Self; 5] =
-        [Self::Pulse, Self::Slate, Self::Moss, Self::Sand, Self::Plum];
+    pub(super) const ALL: [Self; 8] = [
+        Self::Pulse,
+        Self::Slate,
+        Self::Moss,
+        Self::Sand,
+        Self::Plum,
+        Self::Arctic,
+        Self::Ember,
+        Self::Orchid,
+    ];
 
     fn name(self) -> &'static str {
         match self {
@@ -204,6 +311,9 @@ impl PulseTheme {
             Self::Moss => "Tundra / framed console",
             Self::Sand => "Paper / light ledger",
             Self::Plum => "Nightfall / soft panels",
+            Self::Arctic => "Arctic / terminal ice blue",
+            Self::Ember => "Ember / terminal warm copper",
+            Self::Orchid => "Orchid / terminal violet",
         }
     }
 
@@ -214,18 +324,16 @@ impl PulseTheme {
             Self::Moss => Theme::Moss,
             Self::Sand => Theme::Sand,
             Self::Plum => Theme::Plum,
+            Self::Arctic => Theme::Arctic,
+            Self::Ember => Theme::Ember,
+            Self::Orchid => Theme::Orchid,
         }
     }
 
-    fn palette(self) -> Option<Palette> {
-        let theme = match self {
-            Self::Pulse => return None,
-            Self::Slate => Theme::Slate,
-            Self::Moss => Theme::Moss,
-            Self::Sand => Theme::Sand,
-            Self::Plum => Theme::Plum,
-        };
-        theme.palette()
+    fn palette(self) -> Palette {
+        self.design()
+            .palette()
+            .expect("Pulse themes have a palette")
     }
 
     pub(super) fn load(paths: &AppPaths) -> Self {
@@ -243,45 +351,65 @@ impl PulseTheme {
     }
 
     pub(super) fn apply(self, buffer: &mut ratatui::buffer::Buffer) {
-        let Some(p) = self.palette() else { return };
-        for cell in &mut buffer.content {
-            if cell.fg == quick::RAIL {
-                let symbol = self.design().edge(cell.symbol()).to_owned();
-                cell.set_symbol(&symbol);
-            }
-            if cell.bg == quick::RAIL {
-                cell.modifier |= if self == Self::Sand {
-                    Modifier::UNDERLINED
-                } else {
-                    Modifier::BOLD
+        self.apply_region(buffer, buffer.area);
+    }
+
+    fn apply_region(self, buffer: &mut ratatui::buffer::Buffer, region: Rect) {
+        let p = self.palette();
+        for y in region.y..region.bottom() {
+            for x in region.x..region.right() {
+                let cell = &mut buffer[(x, y)];
+                let accent_text = cell.fg == quick::BG && cell.bg == quick::BLUE;
+                let selected = matches!(cell.bg, quick::BLUE | quick::RAIL);
+                if cell.fg == quick::RAIL {
+                    let symbol = self.design().edge(cell.symbol()).to_owned();
+                    cell.set_symbol(&symbol);
+                }
+                if cell.bg == quick::RAIL {
+                    if self == Self::Sand {
+                        cell.modifier |= Modifier::UNDERLINED;
+                    }
+                }
+                cell.fg = match cell.fg {
+                    quick::INK if cell.modifier.contains(Modifier::BOLD) => p.heading,
+                    quick::INK => p.text,
+                    quick::SOFT => p.label,
+                    quick::BLUE => p.accent,
+                    quick::GOLD => p.warning,
+                    quick::RED => p.error,
+                    quick::GREEN => p.success,
+                    quick::METRIC => p.enabled,
+                    quick::RAIL => p.border,
+                    quick::BG => p.background,
+                    Color::Rgb(236, 104, 113) => p.error,
+                    Color::Rgb(180, 133, 222) => p.enabled,
+                    Color::Rgb(112, 171, 235) => p.accent,
+                    Color::Rgb(133, 212, 162) => p.success,
+                    Color::Rgb(244, 164, 101) => p.warning,
+                    Color::Rgb(239, 214, 111) => p.heading,
+                    Color::Rgb(112, 201, 228) => p.default_model,
+                    color => color,
                 };
-            }
-            cell.fg = match cell.fg {
-                quick::INK => p.text,
-                quick::SOFT => p.muted,
-                quick::BLUE => p.accent,
-                quick::GOLD => p.warning,
-                quick::RED => p.error,
-                quick::GREEN => p.success,
-                quick::RAIL => p.border,
-                quick::BG => p.background,
-                Color::Rgb(236, 104, 113) if self == Self::Sand => p.error,
-                Color::Rgb(180, 133, 222) if self == Self::Sand => Color::Rgb(106, 65, 138),
-                Color::Rgb(112, 171, 235) if self == Self::Sand => p.accent,
-                Color::Rgb(133, 212, 162) if self == Self::Sand => p.success,
-                Color::Rgb(244, 164, 101) if self == Self::Sand => Color::Rgb(139, 85, 31),
-                Color::Rgb(239, 214, 111) if self == Self::Sand => p.warning,
-                Color::Rgb(112, 201, 228) if self == Self::Sand => Color::Rgb(47, 99, 116),
-                color => color,
-            };
-            cell.bg = match cell.bg {
-                quick::BG => p.background,
-                quick::RAIL => p.selection,
-                quick::BLUE => p.accent,
-                color => color,
-            };
-            if cell.fg == p.background && cell.bg == p.accent {
-                cell.fg = p.on_accent;
+                cell.bg = match cell.bg {
+                    quick::BG => p.background,
+                    quick::RAIL => p.selection,
+                    quick::BLUE => p.accent,
+                    color => color,
+                };
+                if cell.fg == p.background && cell.bg == p.accent {
+                    cell.fg = p.on_accent;
+                }
+                if self.design().terminal_background() {
+                    cell.bg = Color::Reset;
+                    cell.modifier.remove(Modifier::REVERSED);
+                    if selected {
+                        cell.modifier |= Modifier::UNDERLINED;
+                    }
+                    if accent_text {
+                        cell.fg = p.accent;
+                        cell.modifier |= Modifier::BOLD;
+                    }
+                }
             }
         }
     }
@@ -300,6 +428,13 @@ struct Palette {
     warning: Color,
     error: Color,
     heading: Color,
+    default_model: Color,
+    enabled: Color,
+    label: Color,
+}
+
+fn rgb(value: u32) -> Color {
+    Color::Rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 
 impl Palette {
@@ -330,17 +465,24 @@ impl Palette {
             warning,
             error,
             heading,
+            default_model: accent,
+            enabled: success,
+            label: muted,
         }
     }
 
     fn color(&self, color: Color) -> Color {
         match color {
             ROUTE => self.accent,
-            SELECTION => self.selection,
+            SELECTION | PROVIDER_SELECTION => self.selection,
             CONNECTED => self.success,
             WARNING => self.warning,
             ERROR => self.error,
             MUTED => self.muted,
+            DEFAULT_MODEL => self.default_model,
+            DEFAULT_LABEL | FIELD_LABEL => self.label,
+            DATA_SECONDARY => self.enabled,
+            ENABLED => self.enabled,
             Color::White => self.text,
             Color::DarkGray => self.border,
             _ => color,
@@ -384,7 +526,15 @@ mod tests {
             let backgrounds = [p.background, p.surface, p.selection];
             for bg in backgrounds {
                 for fg in [
-                    p.text, p.heading, p.muted, p.accent, p.success, p.warning, p.error,
+                    p.text,
+                    p.heading,
+                    p.muted,
+                    p.accent,
+                    p.success,
+                    p.warning,
+                    p.error,
+                    p.default_model,
+                    p.enabled,
                 ] {
                     let a = luminance(fg);
                     let b = luminance(bg);
@@ -427,6 +577,235 @@ mod tests {
         assert_eq!(pulse[(0, 0)].bg, Theme::Slate.palette().unwrap().background);
         assert_eq!(pulse[(1, 0)].bg, Theme::Slate.palette().unwrap().accent);
         assert_eq!(pulse[(1, 0)].fg, Theme::Slate.palette().unwrap().on_accent);
+    }
+
+    #[test]
+    fn classic_restores_original_default_and_enabled_colors() {
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 3, 1));
+        for (x, color) in [DEFAULT_LABEL, DEFAULT_MODEL, ENABLED]
+            .into_iter()
+            .enumerate()
+        {
+            buffer[(x as u16, 0)].set_fg(color).set_bg(SURFACE);
+        }
+        Theme::Classic.apply(&mut buffer);
+        assert_eq!(buffer[(0, 0)].fg, WARNING);
+        assert_eq!(buffer[(1, 0)].fg, WARNING);
+        assert_eq!(buffer[(2, 0)].fg, CONNECTED);
+        assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
+    }
+
+    #[test]
+    fn terminal_themes_never_paint_backgrounds_or_reverse_text() {
+        assert_eq!(Theme::default(), Theme::Classic);
+        for theme in [Theme::Arctic, Theme::Ember, Theme::Orchid] {
+            let palette = theme.palette().unwrap();
+            assert_ne!(palette.label, palette.muted);
+            assert_ne!(palette.default_model, palette.accent);
+            assert_ne!(palette.default_model, palette.enabled);
+            let (_temp, mut app) = super::super::tests::persisted_app();
+            app.theme = theme;
+            for size in [(40, 12), (80, 24), (120, 36)] {
+                for settings in [false, true] {
+                    app.modal = None;
+                    if settings {
+                        app.open_appearance();
+                    }
+                    let mut terminal =
+                        Terminal::new(ratatui::backend::TestBackend::new(size.0, size.1)).unwrap();
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    if !settings {
+                        let area =
+                            ui_areas(Rect::new(0, 0, size.0, size.1), app.focus, ViewMode::Home)
+                                .profiles
+                                .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        for y in area.y..area.bottom() {
+                            for x in area.x..area.right() {
+                                assert!(
+                                    !buffer[(x, y)].modifier.contains(Modifier::UNDERLINED),
+                                    "{theme:?}: provider card underline at {x},{y}"
+                                );
+                            }
+                        }
+                        assert!(
+                            buffer.content.iter().any(|cell| cell.symbol() == "▶"
+                                && cell.modifier.contains(Modifier::BOLD))
+                        );
+                    }
+                    assert!(
+                        terminal
+                            .backend()
+                            .buffer()
+                            .content
+                            .iter()
+                            .all(|cell| cell.bg == Color::Reset
+                                && !cell.modifier.contains(Modifier::REVERSED)),
+                        "{theme:?} {size:?} settings={settings}"
+                    );
+                }
+            }
+            let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+            buffer[(0, 0)]
+                .set_symbol("X")
+                .set_fg(Color::Black)
+                .set_bg(ROUTE);
+            buffer[(1, 0)]
+                .set_symbol("X")
+                .set_fg(DEFAULT_MODEL)
+                .set_bg(SELECTION);
+            theme.apply(&mut buffer);
+            assert_eq!(buffer[(0, 0)].fg, theme.palette().unwrap().accent);
+            assert!(buffer.content.iter().all(
+                |cell| cell.bg == Color::Reset && cell.modifier.contains(Modifier::UNDERLINED)
+            ));
+        }
+        for theme in [PulseTheme::Arctic, PulseTheme::Ember, PulseTheme::Orchid] {
+            let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+            buffer[(0, 0)]
+                .set_symbol("X")
+                .set_fg(quick::BG)
+                .set_bg(quick::BLUE);
+            buffer[(1, 0)]
+                .set_symbol("X")
+                .set_fg(quick::INK)
+                .set_bg(quick::RAIL);
+            theme.apply(&mut buffer);
+            assert!(buffer.content.iter().all(
+                |cell| cell.bg == Color::Reset && cell.modifier.contains(Modifier::UNDERLINED)
+            ));
+            assert_eq!(buffer[(0, 0)].fg, theme.palette().accent);
+        }
+    }
+
+    #[test]
+    fn home_text_roles_survive_selection_wrapping_and_disabled_providers() {
+        use ratatui::backend::TestBackend;
+        let (_temp, mut app) = super::super::tests::persisted_app();
+        let profile: Profile = toml::from_str(
+            "name='command_goat'\nbase_url='https://api.example/v1'\napi_format='openai-chat'\ndefault_model='deepseek/deepseek-v4.1-flash[1m]'\nenabled_models=['another-model']",
+        ).unwrap();
+        app.config.profiles = BTreeMap::from([("command_goat".into(), profile)]);
+        app.view_mode = ViewMode::Home;
+        app.profile_idx = 0;
+        for theme in Theme::ALL {
+            app.theme = theme;
+            let default_color = theme.palette().map_or(WARNING, |p| p.default_model);
+            let enabled_color = theme.palette().map_or(CONNECTED, |p| p.enabled);
+            for (width, height) in [(40, 12), (80, 24), (120, 36)] {
+                for selected in [false, true] {
+                    app.home_all_selected = !selected;
+                    app.profile_offset = 0;
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    let cells = &terminal.backend().buffer().content;
+                    if width >= 80 || selected {
+                        assert!(
+                            cells
+                                .iter()
+                                .any(|c| c.fg == default_color && c.symbol() == "d"),
+                            "{theme:?} {width} selected={selected}"
+                        );
+                    }
+                    assert!(
+                        cells
+                            .iter()
+                            .any(|c| c.fg == enabled_color && c.symbol() == "2"),
+                        "{theme:?} {width} selected={selected}"
+                    );
+                    assert!(
+                        cells
+                            .iter()
+                            .all(|c| !matches!(c.fg, DEFAULT_MODEL | ENABLED | EDGE | ACTIVE_EDGE))
+                    );
+                    if selected && let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+                        std::fs::create_dir_all(&directory).unwrap();
+                        let cells: Vec<_> = cells.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
+                        std::fs::write(std::path::Path::new(&directory).join(format!("{theme:?}-{width}-home.json")), serde_json::to_vec(&serde_json::json!({"width": width, "height": height, "cells": cells})).unwrap()).unwrap();
+                    }
+                }
+            }
+            app.config.profiles.get_mut("command_goat").unwrap().enabled = false;
+            let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let disabled_color = theme.palette().map_or(MUTED, |p| p.muted);
+            let mut found_disabled = false;
+            for y in 0..36 {
+                let text: String = (0..120).map(|x| buffer[(x, y)].symbol()).collect();
+                if let Some(x) = text.find("provider disabled") {
+                    found_disabled = true;
+                    let x = text[..x].chars().count();
+                    assert_eq!(buffer[(x as u16, y)].fg, disabled_color);
+                    assert!(!buffer[(x as u16, y)].modifier.contains(Modifier::BOLD));
+                }
+            }
+            assert!(found_disabled, "{theme:?}: missing disabled provider");
+            app.config.profiles.get_mut("command_goat").unwrap().enabled = true;
+        }
+    }
+
+    #[test]
+    fn pulse_readouts_and_headings_follow_every_palette() {
+        for theme in PulseTheme::ALL {
+            let p = theme.palette();
+            let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 5, 1));
+            for (x, color) in [
+                quick::INK,
+                quick::SOFT,
+                quick::METRIC,
+                quick::GREEN,
+                quick::GOLD,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                buffer[(x as u16, 0)]
+                    .set_symbol("X")
+                    .set_fg(color)
+                    .set_bg(quick::BG);
+            }
+            buffer[(0, 0)].modifier = Modifier::BOLD;
+            theme.apply(&mut buffer);
+            for (x, color) in [p.heading, p.label, p.enabled, p.success, p.warning]
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(buffer[(x as u16, 0)].fg, color, "{theme:?}");
+                assert_eq!(buffer[(x as u16, 0)].bg, p.background);
+            }
+            // The preview must use the Pulse palette even over a light main UI.
+            let (_temp, mut app) = super::super::tests::persisted_app();
+            app.theme = Theme::Sand;
+            app.open_appearance();
+            if let Some(Modal::Appearance(form)) = &mut app.modal {
+                form.pulse_selected = true;
+                form.pulse_theme = theme;
+            }
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 36)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|c| c.fg == p.enabled && c.bg == p.background && c.symbol() == "4"),
+                "{theme:?}"
+            );
+            assert!(buffer.content.iter().all(|c| c.fg != quick::METRIC));
+            if let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+                std::fs::create_dir_all(&directory).unwrap();
+                let cells: Vec<_> = buffer.content.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
+                std::fs::write(
+                    std::path::Path::new(&directory).join(format!("Pulse-{theme:?}-preview.json")),
+                    serde_json::to_vec(
+                        &serde_json::json!({"width": 120, "height": 36, "cells": cells}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
     }
 }
 
@@ -575,27 +954,56 @@ pub(super) fn rows(area: Rect, form: &Appearance) -> Vec<(usize, Rect)> {
     } else {
         Theme::ALL.len()
     };
-    let roomy = gallery(area);
+    let compact = area.height < 14;
+    let columns = if compact { 2 } else { 1 };
+    let start = inner.y + if compact { 1 } else { 2 };
+    let end = refresh_row(area)
+        .y
+        .saturating_sub(if area.height >= 20 { 2 } else { 0 });
+    let available = end.saturating_sub(start);
+    let row_height = if gallery(area) && available as usize >= count * 2 {
+        2
+    } else {
+        1
+    };
+    let visible_rows = usize::from(available / row_height);
+    if visible_rows == 0 {
+        return vec![];
+    }
+    let selected = if form.pulse_selected {
+        PulseTheme::ALL
+            .iter()
+            .position(|theme| *theme == form.pulse_theme)
+            .unwrap_or(0)
+    } else {
+        Theme::ALL
+            .iter()
+            .position(|theme| *theme == form.theme)
+            .unwrap_or(0)
+    };
+    let offset = (selected / columns).saturating_sub(visible_rows - 1);
     (0..count)
-        .map(|index| {
-            let compact = area.height < 14;
-            let column = if compact { index % 2 } else { 0 };
-            let row = if compact { index / 2 } else { index };
-            (
+        .filter_map(|index| {
+            let row = index / columns;
+            if row < offset || row >= offset + visible_rows {
+                return None;
+            }
+            let column = index % columns;
+            Some((
                 index,
                 Rect::new(
                     inner.x + column as u16 * (inner.width / 2),
-                    inner.y + if compact { 1 } else { 2 } + row as u16 * if roomy { 2 } else { 1 },
+                    start + (row - offset) as u16 * row_height,
                     if compact {
                         inner.width / 2
-                    } else if roomy {
+                    } else if gallery(area) {
                         inner.width * 44 / 100
                     } else {
                         inner.width
                     },
-                    if roomy { 2 } else { 1 },
+                    row_height,
                 ),
-            )
+            ))
         })
         .collect()
 }
@@ -659,12 +1067,12 @@ pub(super) fn draw(
             name
         };
         let mut lines = vec![Line::styled(
-            format!(" {}  {}", if selected { "●" } else { "○" }, name),
+            format!(" {}  {}", if selected { "▶" } else { " " }, name),
             Style::default()
                 .fg(if selected { ROUTE } else { Color::White })
                 .add_modifier(Modifier::BOLD),
         )];
-        if gallery(area) {
+        if rect.height > 1 {
             lines.push(Line::styled(
                 format!(
                     "    {}",
@@ -737,44 +1145,78 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, area: Rect, form: &Appear
         12,
     );
     frame.render_widget(Clear, preview);
-    frame.render_widget(panel(" Preview / sample usage ", true), preview);
     let body = panel_inner(preview);
-    let lines = vec![
-        Line::styled(" TODAY / GATEWAY", Style::default().fg(MUTED)),
-        Line::styled(
-            " 128,400 TOKENS",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Line::from(vec![
-            Span::styled(" ━━━━━━━━━━━", Style::default().fg(ROUTE)),
-            Span::styled("━━━━", Style::default().fg(WARNING)),
-        ]),
-        Line::raw(" Input 96K    Output 32.4K"),
-        Line::raw(""),
-        Line::styled(
-            " Provider       Calls     Tokens",
-            Style::default().fg(MUTED),
-        ),
-        Line::styled(
-            " › Primary        128     98.2K",
-            Style::default().fg(ROUTE).bg(SELECTION),
-        ),
-        Line::raw("   Fallback        42     30.2K"),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled(" ● Connected", Style::default().fg(CONNECTED)),
-            Span::styled("  ! 2 retries", Style::default().fg(WARNING)),
-        ]),
-    ];
-    frame.render_widget(Paragraph::new(lines), body);
     let design = if form.pulse_selected {
         form.pulse_theme.design()
     } else {
         form.theme
     };
-    design.apply_region(frame.buffer_mut(), preview);
+    if form.pulse_selected {
+        frame.render_widget(
+            Block::default()
+                .title(Span::styled(
+                    " Pulse / sample usage ",
+                    Style::default()
+                        .fg(quick::BLUE)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(quick::RAIL))
+                .style(Style::default().fg(quick::INK).bg(quick::BG)),
+            preview,
+        );
+        frame.render_widget(Paragraph::new(quick::preview_lines(body.width)), body);
+        form.pulse_theme.apply_region(frame.buffer_mut(), preview);
+    } else {
+        frame.render_widget(panel(" Preview / providers & status ", true), preview);
+        let profile = Profile {
+            name: "command_goat".into(),
+            enabled: true,
+            base_url: "https://api.example/v1".into(),
+            models_url: None,
+            api_format: ApiFormat::OpenaiChat,
+            credential: Credential::None,
+            default_model: "deepseek/deepseek-v4.1-flash[1m]".into(),
+            aliases: RoleModels::default(),
+            subagent_model: None,
+            fallback_models: vec![],
+            enabled_models: vec![],
+            disabled_models: vec![],
+            models: vec![],
+        };
+        let mut lines = home_profile_lines("command_goat", &profile, 2, body.width, false);
+        if let Some(endpoint) = lines
+            .iter()
+            .position(|line| line.to_string().trim_start().starts_with("Endpoint:"))
+        {
+            lines.truncate(endpoint);
+        }
+        lines.extend([
+            Line::raw(""),
+            Line::styled(
+                " ◆ Default model / selected",
+                Style::default()
+                    .fg(DEFAULT_MODEL)
+                    .bg(SELECTION)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::from(vec![
+                Span::styled(" ● Connected", Style::default().fg(CONNECTED)),
+                Span::styled("  ! 2 retries", Style::default().fg(WARNING)),
+            ]),
+            Line::styled(" × Failed request", Style::default().fg(ERROR)),
+            Line::from(vec![
+                Span::styled(" ○ Disabled  ", Style::default().fg(MUTED)),
+                Span::styled(
+                    "Enter",
+                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" open", Style::default().fg(MUTED)),
+            ]),
+        ]);
+        frame.render_widget(Paragraph::new(lines), body);
+        design.apply_region(frame.buffer_mut(), preview);
+    }
     if area.height >= 24 {
         let info = Rect::new(preview.x, preview.bottom() + 1, preview.width, 3);
         frame.render_widget(Clear, info);

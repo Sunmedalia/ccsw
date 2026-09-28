@@ -16,6 +16,7 @@ pub(super) const BLUE: Color = Color::Rgb(123, 190, 218);
 pub(super) const GOLD: Color = Color::Rgb(234, 193, 126);
 pub(super) const RED: Color = Color::Rgb(236, 139, 131);
 pub(super) const GREEN: Color = Color::Rgb(147, 204, 178);
+pub(super) const METRIC: Color = Color::Rgb(1, 3, 1);
 pub(super) const RAIL: Color = Color::Rgb(48, 67, 84);
 const LABEL: &str = "CCSW Pulse";
 mod accounts;
@@ -510,13 +511,19 @@ fn mini_speed_line(totals: &Totals, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 fn section(title: &str, width: u16) -> Line<'static> {
-    line(
-        format!(
-            "{title} {}",
-            "─".repeat(usize::from(width).saturating_sub(title.width() + 1))
+    Line::from(vec![
+        Span::styled(
+            title.to_owned(),
+            Style::default().fg(INK).add_modifier(Modifier::BOLD),
         ),
-        SOFT,
-    )
+        Span::styled(
+            format!(
+                " {}",
+                "─".repeat(usize::from(width).saturating_sub(title.width() + 1))
+            ),
+            Style::default().fg(RAIL),
+        ),
+    ])
 }
 fn section_action(title: &str, action: &str, width: u16) -> Line<'static> {
     let available = usize::from(width).saturating_sub(action.width() + 1);
@@ -534,6 +541,29 @@ fn section_action(title: &str, action: &str, width: u16) -> Line<'static> {
             Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
         ),
     ])
+}
+
+// Appearance uses the same typography and data components as the live pane.
+pub(super) fn preview_lines(width: u16) -> Vec<Line<'static>> {
+    vec![
+        section("TODAY / GATEWAY", width),
+        pair("Tokens", "128,400", width, BLUE),
+        duo_line(
+            width,
+            ("Input", "IN", "96K", BLUE),
+            ("Output", "OUT", "32.4K", METRIC),
+        ),
+        Line::default(),
+        section("CURRENT SESSION", width),
+        pair("Tokens", "42,800", width, METRIC),
+        pair("Cache reuse", "68%", width, METRIC),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("● Connected", Style::default().fg(GREEN)),
+            Span::styled("  ! 2 retries", Style::default().fg(GOLD)),
+        ]),
+        line("× Failed request", RED),
+    ]
 }
 fn compact_reset(reset: &str) -> String {
     let time = chrono::DateTime::parse_from_rfc3339(reset)
@@ -689,7 +719,7 @@ fn compact_token_meter(input: i64, output: i64, width: u16) -> Line<'static> {
     Line::from(vec![
         Span::styled("I/O ", Style::default().fg(SOFT)),
         Span::styled("█".repeat(input_cells), Style::default().fg(BLUE)),
-        Span::styled("█".repeat(output_cells), Style::default().fg(GOLD)),
+        Span::styled("█".repeat(output_cells), Style::default().fg(METRIC)),
         Span::styled(
             "░".repeat(cells.saturating_sub(input_cells + output_cells)),
             Style::default().fg(RAIL),
@@ -1118,7 +1148,7 @@ impl Monitor {
         out.push(duo_line(
             width,
             ("↑ Input", "↑", &input, BLUE),
-            ("↓ Output", "↓", &output, GOLD),
+            ("↓ Output", "↓", &output, METRIC),
         ));
         if ready {
             out.extend(gateway_cache_meter(&totals, unknown, width));
@@ -1460,7 +1490,7 @@ impl Monitor {
             ),
         ]);
         if let Some(active) = self.active_row() {
-            out.push(mini_line("CURRENT SESSION", width, GREEN));
+            out.push(mini_line("CURRENT SESSION", width, METRIC));
             out.push(mini_line(
                 format!("● {} session", active.client),
                 width,
@@ -1471,7 +1501,7 @@ impl Monitor {
             } else {
                 "?".into()
             };
-            out.extend(mini_token_total(&total, width, GREEN));
+            out.extend(mini_token_total(&total, width, METRIC));
             if active.tokens.known {
                 out.push(mini_line(
                     format!(
@@ -1780,7 +1810,7 @@ impl Monitor {
                 ),
                 "— tok",
                 width,
-                GREEN,
+                METRIC,
             ));
             out.push(line("Waiting for local session log…", SOFT));
             return out;
@@ -1802,7 +1832,7 @@ impl Monitor {
                 ),
                 width.into(),
             ),
-            GREEN,
+            METRIC,
         ));
         out.push(pair(
             "Session",
@@ -1817,7 +1847,7 @@ impl Monitor {
             out.push(line("Token usage unavailable in local log", SOFT));
             return out;
         }
-        out.extend(token_digits(&short(s.tokens.total()), GREEN));
+        out.extend(token_digits(&short(s.tokens.total()), METRIC));
         if self.roomy_visual {
             out.push(Line::default());
         }
@@ -1977,7 +2007,7 @@ impl Monitor {
                 ),
                 "— tok",
                 width,
-                GREEN,
+                METRIC,
             ));
             out.push(line(
                 clipped("Waiting for local session log…", width.into()),
@@ -2002,7 +2032,7 @@ impl Monitor {
                 ),
                 width.into(),
             ),
-            GREEN,
+            METRIC,
         ));
         out.push(pair(
             "Session",
@@ -2019,7 +2049,7 @@ impl Monitor {
         }
         let suffix = if s.incomplete { "+?" } else { "" };
         out.push(Line::default());
-        out.extend(token_digits(&short(s.tokens.total()), GREEN));
+        out.extend(token_digits(&short(s.tokens.total()), METRIC));
         if !suffix.is_empty() {
             out.push(line("+? partial token log", GOLD));
         }
@@ -2028,7 +2058,7 @@ impl Monitor {
         out.push(duo_line(
             width,
             ("↑ Input", "↑", &input, BLUE),
-            ("↓ Output", "↓", &output, GOLD),
+            ("↓ Output", "↓", &output, METRIC),
         ));
         let read = if s.tokens.cache_known {
             short(s.tokens.read)
@@ -2042,7 +2072,7 @@ impl Monitor {
         };
         out.push(duo_line(
             width,
-            ("↺ Read", "R", &read, GREEN),
+            ("↺ Read", "R", &read, METRIC),
             ("Write", "W", &write, SOFT),
         ));
         out.push(pair(
@@ -2051,7 +2081,7 @@ impl Monitor {
                 .cache_reuse_percent()
                 .map_or("—".into(), |rate| format!("{rate:.1}%")),
             width,
-            GREEN,
+            METRIC,
         ));
         out
     }
@@ -2157,7 +2187,7 @@ impl Monitor {
         out.push(duo_line(
             width,
             ("↑ Input", "↑", &input, BLUE),
-            ("↓ Output", "↓", &output, GOLD),
+            ("↓ Output", "↓", &output, METRIC),
         ));
         if t.unknown > 0 {
             out.push(line(

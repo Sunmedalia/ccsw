@@ -129,7 +129,7 @@ impl App {
             vec![
                 (
                     (if active { " ● " } else { " ○ " }).into(),
-                    Style::default().fg(if active { CONNECTED } else { MUTED }),
+                    Style::default().fg(if active { ENABLED } else { MUTED }),
                 ),
                 (
                     "Grok OAuth Account".into(),
@@ -661,13 +661,8 @@ impl App {
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(" Grok accounts ", true))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(SELECTION)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(" "),
+                .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
+                .highlight_symbol("▶"),
             rows[1],
             &mut state,
         );

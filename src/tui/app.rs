@@ -520,6 +520,10 @@ impl App {
             .and_then(|id| self.cache.profiles.get(&id).map(|c| c.models.clone()))
             .unwrap_or_default();
         let mut form = ModelForm::with_api_models(cached);
+        if self.client_tab() == ClientTab::Claude {
+            form.default_one_m = true;
+            form.fields[3].value = "true".into();
+        }
         if self.pi_enabled {
             form.fields
                 .retain(|field| field.label != "Enable now" && field.label != "Reasoning max");

@@ -487,9 +487,13 @@ pub(super) fn panel(title: &str, active: bool) -> Block<'_> {
 }
 
 pub(super) fn detail(label: &str, value: &str) -> Line<'static> {
+    detail_value(label, value, Color::Reset)
+}
+
+pub(super) fn detail_value(label: &str, value: &str, color: Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{label:<13} "), Style::default().fg(MUTED)),
-        Span::raw(value.to_owned()),
+        Span::styled(format!("{label:<13} "), Style::default().fg(FIELD_LABEL)),
+        Span::styled(value.to_owned(), Style::default().fg(color)),
     ])
 }
 
@@ -503,6 +507,12 @@ pub(super) fn wrap_styled_segments(
     let mut used = 0_usize;
 
     for (text, style) in segments {
+        // Keep short semantic segments (badges, counts and labels) together.
+        let segment_width = UnicodeWidthStr::width(text.as_str());
+        if used > 0 && segment_width <= max_width && used + segment_width > max_width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
         let mut chunk = String::new();
         for ch in text.chars() {
             let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
@@ -538,7 +548,7 @@ pub(super) fn all_enabled_lines(
         vec![
             (
                 if active { " ● " } else { " ○ " }.into(),
-                Style::default().fg(if active { CONNECTED } else { MUTED }),
+                Style::default().fg(if active { ENABLED } else { MUTED }),
             ),
             (
                 "All Models".into(),
@@ -552,7 +562,7 @@ pub(super) fn all_enabled_lines(
                         "  {total_count} models · {model_count} enabled · {provider_count} providers"
                     )
                 },
-                Style::default().fg(CONNECTED),
+                Style::default().fg(ENABLED),
             ),
         ],
         width,
@@ -570,7 +580,7 @@ pub(super) fn home_profile_lines(
 ) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let signal = if profile.enabled { " ● " } else { " ○ " };
-    let signal_color = if profile.enabled { CONNECTED } else { MUTED };
+    let signal_color = if profile.enabled { ENABLED } else { MUTED };
     let mut lines = wrap_styled_segments(
         vec![
             (signal.into(), Style::default().fg(signal_color)),
@@ -585,9 +595,12 @@ pub(super) fn home_profile_lines(
     );
 
     let summary = vec![
+        ("     Default: ".into(), Style::default().fg(DEFAULT_LABEL)),
         (
-            format!("     Default: {}", profile.default_model),
-            Style::default().fg(WARNING),
+            profile.default_model.clone(),
+            Style::default()
+                .fg(DEFAULT_MODEL)
+                .add_modifier(Modifier::BOLD),
         ),
         (
             if pi {
@@ -597,7 +610,7 @@ pub(super) fn home_profile_lines(
             } else {
                 "   provider disabled".into()
             },
-            Style::default().fg(if profile.enabled { CONNECTED } else { WARNING }),
+            Style::default().fg(if profile.enabled { ENABLED } else { MUTED }),
         ),
     ];
     if width >= 96
@@ -636,14 +649,14 @@ pub(super) fn home_profile_lines(
     }
     lines.extend(wrap_styled_segments(
         vec![
-            ("     Endpoint: ".into(), Style::default().fg(MUTED)),
+            ("     Endpoint: ".into(), Style::default().fg(FIELD_LABEL)),
             (profile.base_url.clone(), Style::default()),
         ],
         width,
     ));
     lines.extend(wrap_styled_segments(
         vec![
-            ("     Credential: ".into(), Style::default().fg(MUTED)),
+            ("     Credential: ".into(), Style::default().fg(FIELD_LABEL)),
             (profile.credential.masked(), Style::default().fg(MUTED)),
         ],
         width,

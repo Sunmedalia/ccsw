@@ -188,17 +188,38 @@ impl App {
         } else {
             format!("{step} {}", if series.hourly { "hours" } else { "days" })
         };
-        let title = format!(
-            " {} / {interval} · max {}{} ",
-            if page.chart_tokens { "Tokens" } else { "Calls" },
-            max,
-            if missing { " · ? unknown" } else { "" }
-        );
+        let metric_color = if page.chart_tokens { ROUTE } else { ENABLED };
+        let mut title = vec![
+            Span::styled(
+                if page.chart_tokens {
+                    " Tokens "
+                } else {
+                    " Calls "
+                },
+                Style::default()
+                    .fg(metric_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("/ {interval} · peak "),
+                Style::default().fg(FIELD_LABEL),
+            ),
+            Span::styled(
+                short_value(max, 10),
+                Style::default()
+                    .fg(metric_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        if missing {
+            title.push(Span::styled(" · ? unknown", Style::default().fg(WARNING)));
+        }
+        title.push(Span::raw(" "));
         // Unknown buckets use '?' on the value baseline; zero buckets use '0'.
         let block = Block::default()
             .borders(Borders::TOP)
             .border_style(Style::default().fg(theme::EDGE))
-            .title(title);
+            .title(Line::from(title));
         let plot = block.inner(chart_area);
         frame.render_widget(block, chart_area);
         let bars_area = Rect {
@@ -210,8 +231,12 @@ impl App {
             .bar_width(width)
             .bar_gap(1)
             .max(max.max(1))
-            .bar_style(Style::default().fg(ROUTE))
-            .value_style(Style::default().fg(Color::Black).bg(ROUTE));
+            .bar_style(Style::default().fg(metric_color))
+            .value_style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_widget(chart, bars_area);
         for (i, value) in values.iter().enumerate() {
             if value.is_none() || *value == Some(0) {

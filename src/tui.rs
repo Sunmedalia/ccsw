@@ -69,6 +69,12 @@ const CONNECTED: Color = Color::Rgb(135, 215, 135);
 const WARNING: Color = Color::Rgb(255, 215, 95);
 const ERROR: Color = Color::Rgb(255, 107, 107);
 const MUTED: Color = Color::Rgb(128, 138, 148);
+// Content roles stay separate from connection and warning status colors.
+const DEFAULT_MODEL: Color = Color::Rgb(1, 2, 6);
+const ENABLED: Color = Color::Rgb(1, 2, 7);
+const DEFAULT_LABEL: Color = Color::Rgb(1, 2, 8);
+const DATA_SECONDARY: Color = Color::Rgb(1, 2, 9);
+const FIELD_LABEL: Color = Color::Rgb(1, 2, 11);
 
 pub fn run_quick(paths: AppPaths, open: bool) -> Result<()> {
     if open {

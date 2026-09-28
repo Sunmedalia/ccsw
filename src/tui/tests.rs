@@ -4,6 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 #[test]
 fn tui_theme_preview_cancel_save_and_restart_do_not_touch_provider_config() {
     let (_temp, mut app) = persisted_app();
+    app.theme = theme::Theme::Slate;
     let before = std::fs::read(&app.paths.config).unwrap();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.handle_key(key(KeyCode::F(4))).unwrap();
@@ -126,6 +127,7 @@ use std::path::PathBuf;
 #[test]
 fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
     let (_temp, mut app) = persisted_app();
+    app.theme = theme::Theme::Slate;
     let mut form = PreferencesForm::new(app.config.claude.clone(), serde_json::json!({}));
     form.return_theme = Some(theme::Theme::Plum);
     app.modal = Some(Modal::Preferences(form.clone()));
@@ -150,8 +152,9 @@ fn claude_settings_returns_to_theme_preview_and_confirms_dirty_drafts() {
 }
 
 #[test]
-fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
+fn all_themes_fit_small_settings_and_cycle_both_directions() {
     let (_temp, mut app) = persisted_app();
+    app.theme = theme::Theme::Slate;
     app.open_appearance();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     for expected in [
@@ -159,6 +162,9 @@ fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
         theme::Theme::Sand,
         theme::Theme::Plum,
         theme::Theme::Pulse,
+        theme::Theme::Arctic,
+        theme::Theme::Ember,
+        theme::Theme::Orchid,
         theme::Theme::Classic,
         theme::Theme::Slate,
     ] {
@@ -185,6 +191,9 @@ fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
         "Paper",
         "Nightfall",
         "Pulse",
+        "Arctic",
+        "Ember",
+        "Orchid",
     ] {
         assert!(text.contains(name), "{name}: {text}");
     }
@@ -195,6 +204,7 @@ fn all_six_themes_fit_small_settings_and_cycle_both_directions() {
 #[test]
 fn pulse_pane_theme_is_saved_independently_and_recolors_its_buffer() {
     let (_temp, mut app) = persisted_app();
+    app.theme = theme::Theme::Slate;
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.open_appearance();
     app.handle_key(key(KeyCode::Tab)).unwrap();
@@ -2165,7 +2175,7 @@ fn save_from_model_search_and_last_toggle_both_submit() {
             config::load(&app.paths.config).unwrap().profiles["one"]
                 .models
                 .iter()
-                .any(|model| model.id == "new-model")
+                .any(|model| model.id == "new-model[1m]")
         );
         assert_eq!(app.background.status, sync::Status::NotConnected);
         assert!(

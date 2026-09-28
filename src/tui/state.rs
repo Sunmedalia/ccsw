@@ -201,6 +201,7 @@ pub(super) struct ProfileForm {
 #[derive(Clone)]
 pub(super) struct ModelForm {
     pub(super) original_model_id: Option<String>,
+    pub(super) default_one_m: bool,
     pub(super) instance: uuid::Uuid,
     pub(super) original_profile: Option<Box<Profile>>,
     pub(super) fields: Vec<FormField>,

@@ -122,19 +122,19 @@ pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static
             format!("{key}  ")
         };
         lines.push(Line::from(vec![
-            Span::styled(key, Style::default().fg(WARNING)),
+            Span::styled(key, Style::default().fg(ROUTE).add_modifier(Modifier::BOLD)),
             Span::raw(*action),
         ]));
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
-        Span::styled("●", Style::default().fg(CONNECTED)),
+        Span::styled("●", Style::default().fg(ENABLED)),
         Span::styled(" enabled  ", Style::default().fg(MUTED)),
         Span::styled("○", Style::default().fg(MUTED)),
         Span::styled(" disabled  ", Style::default().fg(MUTED)),
-        Span::styled("◆", Style::default().fg(ROUTE)),
+        Span::styled("◆", Style::default().fg(DEFAULT_MODEL)),
         Span::styled(" default  ", Style::default().fg(MUTED)),
-        Span::styled("◈", Style::default().fg(WARNING)),
+        Span::styled("◈", Style::default().fg(ENABLED)),
         Span::styled(" role dependency", Style::default().fg(MUTED)),
     ]));
     lines
@@ -408,7 +408,10 @@ fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
     rows.iter()
         .map(|(key, action)| {
             Line::from(vec![
-                Span::styled(format!("{key}  "), Style::default().fg(WARNING)),
+                Span::styled(
+                    format!("{key}  "),
+                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(*action),
             ])
         })
