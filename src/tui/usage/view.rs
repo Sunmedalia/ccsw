@@ -493,6 +493,7 @@ impl Canvas<'_, '_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gateway_lines(
     t: &Totals,
     total: &Totals,
@@ -1188,15 +1189,14 @@ impl App {
                     width.saturating_sub(3),
                 );
                 for line in lines {
-                    if line.to_string().contains("View this day") {
-                        if let Some(screen_y) = c.visible(y)
-                            && c.frame.is_some()
-                        {
-                            c.state.controls.push((
-                                Rect::new(x + 2, screen_y, width.saturating_sub(3), 1),
-                                Action::Activate(1),
-                            ));
-                        }
+                    if line.to_string().contains("View this day")
+                        && let Some(screen_y) = c.visible(y)
+                        && c.frame.is_some()
+                    {
+                        c.state.controls.push((
+                            Rect::new(x + 2, screen_y, width.saturating_sub(3), 1),
+                            Action::Activate(1),
+                        ));
                     }
                     c.detail_content(x, y, width, line);
                     y += 1;
@@ -1909,7 +1909,8 @@ impl App {
         c.scroll = scroll;
         c.frame = Some(frame);
         self.dashboard_content(&mut c, page, &d);
-        drop(c);
+        // End the canvas borrow before rendering the footer.
+        let _ = c;
         let status = if self.usage.error.is_some() {
             "STALE · cached gateway data · r retry".into()
         } else if self.usage.updated.is_none() {
@@ -2218,7 +2219,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        if let Ok(dir) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+        if let Ok(dir) = std::env::var("MUX_UI_PREVIEW_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             let cells: Vec<_> = buffer.content.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
             std::fs::write(

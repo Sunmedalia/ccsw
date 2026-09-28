@@ -7,6 +7,7 @@ mod grok;
 mod herdr_install;
 mod import;
 mod managed_process;
+mod migration;
 mod pi;
 mod platform;
 mod proxy;
@@ -31,7 +32,7 @@ const MIN_CLAUDE_VERSION: &str = "2.1.242";
 
 #[derive(Parser)]
 #[command(
-    name = "ccsw",
+    name = "mux",
     version,
     about = "Manage Claude Code providers, models, and proxy settings; Codex APIs and subscription accounts; Pi Agent API configuration; Grok native configuration"
 )]
@@ -44,7 +45,7 @@ struct Cli {
 enum Commands {
     /// Install this checkout as a Herdr plugin and configure its shortcut
     HerdrInstall {
-        /// Checkout containing herdr-plugin.toml and target/release/ccsw
+        /// Checkout containing herdr-plugin.toml and target/release/mux
         #[arg(long, default_value = ".")]
         source: PathBuf,
         /// Shortcut to add; existing unrelated bindings are never overwritten
@@ -70,7 +71,7 @@ enum Commands {
         #[command(subcommand)]
         command: codex::Command,
     },
-    /// Remove this user's CCSW configuration and startup entry (binary retained)
+    /// Remove this user's Mux configuration and startup entry (binary retained)
     Uninstall {
         /// Execute the displayed cleanup plan
         #[arg(long, conflicts_with = "dry_run")]
@@ -90,6 +91,15 @@ enum Commands {
         /// Update a Herdr source checkout with a fast-forward pull and rebuild
         #[arg(long, value_name = "CHECKOUT")]
         source: Option<PathBuf>,
+    },
+    /// Convert a previous installation's custom data paths to Mux
+    Migrate {
+        #[arg(long, value_name = "FILE")]
+        config: PathBuf,
+        #[arg(long, value_name = "DIRECTORY")]
+        state_dir: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        cache: PathBuf,
     },
     /// Diagnose Claude, configuration, and gateway connectivity
     Doctor,
@@ -196,11 +206,28 @@ fn main() -> Result<()> {
     if let Some(Commands::Update { check, source }) = &cli.command {
         return update::run(*check, source.as_deref());
     }
+    if let Some(Commands::Migrate {
+        config,
+        state_dir,
+        cache,
+    }) = &cli.command
+    {
+        return migration::from_paths(
+            &paths,
+            &AppPaths {
+                config: std::path::absolute(config)?,
+                state_dir: std::path::absolute(state_dir)?,
+                cache: std::path::absolute(cache)?,
+            },
+        );
+    }
+    migration::run(&paths)?;
     let _session = uninstall::session(&paths)?;
     match cli.command {
         Some(Commands::Quick { open }) => tui::run_quick(paths, open),
         Some(Commands::Uninstall { .. }) => unreachable!(),
         Some(Commands::Update { .. }) => unreachable!(),
+        Some(Commands::Migrate { .. }) => unreachable!(),
         Some(Commands::HerdrInstall { .. }) => unreachable!(),
         Some(Commands::HerdrBind) => unreachable!(),
         None => {
@@ -239,14 +266,14 @@ fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
         ProxyCommand::Port { port } => {
             let status = proxy::set_port(paths, port)?;
             println!(
-                "Saved proxy listen address: {}. Start the proxy, then sync with p or ccsw apply --profile <id>.",
+                "Saved proxy listen address: {}. Start the proxy, then sync with p or mux apply --profile <id>.",
                 status.listen
             );
         }
         ProxyCommand::Start { listen } => {
             let status = proxy::start(paths, listen.as_deref())?;
             println!(
-                "CCSW proxy running at {} ({} routes)",
+                "Mux proxy running at {} ({} routes)",
                 status.listen, status.routes
             );
         }
@@ -265,15 +292,15 @@ fn proxy_command(paths: &AppPaths, command: ProxyCommand) -> Result<()> {
         }
         ProxyCommand::Stop => {
             proxy::stop(paths)?;
-            println!("CCSW proxy stopped; models synced to Claude require it to run.");
+            println!("Mux proxy stopped; models synced to Claude require it to run.");
         }
         ProxyCommand::Install => {
             let path = proxy::install(paths)?;
-            println!("Installed CCSW proxy user service at {}", path.display());
+            println!("Installed Mux proxy user service at {}", path.display());
         }
         ProxyCommand::Uninstall => match proxy::uninstall()? {
-            Some(path) => println!("Removed CCSW proxy user service at {}", path.display()),
-            None => println!("CCSW proxy user service was not installed."),
+            Some(path) => println!("Removed Mux proxy user service at {}", path.display()),
+            None => println!("Mux proxy user service was not installed."),
         },
     }
     Ok(())
@@ -310,7 +337,7 @@ fn import_existing(paths: &AppPaths, yes: bool) -> Result<()> {
         println!("{line}");
     }
     if !yes {
-        println!("\nPreview only. Run `ccsw import --yes` to save this profile.");
+        println!("\nPreview only. Run `mux import --yes` to save this profile.");
         return Ok(());
     }
     let config = config::load(&paths.config)?;
@@ -329,8 +356,8 @@ fn import_existing(paths: &AppPaths, yes: bool) -> Result<()> {
 
 fn doctor(paths: &AppPaths) -> Result<()> {
     let mut failed = false;
-    println!("CCSW doctor\n");
-    let claude_bin = platform::nonempty_env("CCSW_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
+    println!("Mux doctor\n");
+    let claude_bin = platform::nonempty_env("MUX_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
     let version = platform::resolve_program(&claude_bin).and_then(|program| {
         managed_process::output_timeout(
             Command::new(program).arg("--version"),
@@ -402,17 +429,17 @@ fn doctor(paths: &AppPaths) -> Result<()> {
             if has_profiles {
                 match proxy::status(paths) {
                     Ok(status) if status.running => {
-                        println!("✓ CCSW proxy: {}", status.listen)
+                        println!("✓ Mux proxy: {}", status.listen)
                     }
                     Ok(status) => {
                         println!(
-                            "! CCSW proxy is stopped; it will start when profiles are synced ({})",
+                            "! Mux proxy is stopped; it will start when profiles are synced ({})",
                             status.listen
                         )
                     }
                     Err(error) => {
                         failed = true;
-                        println!("✗ CCSW proxy: {error:#}");
+                        println!("✗ Mux proxy: {error:#}");
                     }
                 }
             }

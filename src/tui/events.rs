@@ -774,77 +774,76 @@ impl App {
             self.grok_auth_page_mouse(mouse, area)?;
             return Ok(MouseAction::None);
         }
-        if self.grok_enabled && self.home_grok_oauth_selected() && provider_workspace(area) {
-            if let Some(panel) = self.provider_ui_areas(area).details
-                && contains(panel, mouse.column, mouse.row)
+        if self.grok_enabled
+            && self.home_grok_oauth_selected()
+            && provider_workspace(area)
+            && let Some(panel) = self.provider_ui_areas(area).details
+            && contains(panel, mouse.column, mouse.row)
+        {
+            if self.grok_auth.page.is_none()
+                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
             {
-                if self.grok_auth.page.is_none()
-                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                {
-                    self.open_grok_auth();
-                }
-                let content = panel_inner(panel);
-                let rows = embedded_account_rows(content, self.grok_auth.busy);
-                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                    if self
-                        .grok_auth
-                        .page
-                        .as_ref()
-                        .is_some_and(|page| page.confirm_logout)
-                    {
-                        if let Some(index) =
-                            modal_button_rects(grok_auth::confirmation_area(content), 2)
-                                .iter()
-                                .position(|rect| contains(*rect, mouse.column, mouse.row))
-                        {
-                            self.grok_auth_page_key(KeyEvent::new(
-                                KeyCode::Char(if index == 0 { 'y' } else { 'n' }),
-                                KeyModifiers::NONE,
-                            ))?;
-                        }
-                        return Ok(MouseAction::None);
-                    }
-                    if let Some(index) = grok_auth::account_actions(content)
-                        .iter()
-                        .position(|rect| contains(*rect, mouse.column, mouse.row))
-                    {
-                        if index == 6 {
-                            return Ok(MouseAction::None);
-                        }
-                        if self.grok_auth.busy {
-                            if index == 6 {
-                                self.cancel_grok_auth();
-                            }
-                        } else {
-                            if let Some(page) = self.grok_auth.page.as_mut() {
-                                page.selected = index + 1;
-                            }
-                            self.grok_auth_page_key(KeyEvent::new(
-                                KeyCode::Enter,
-                                KeyModifiers::NONE,
-                            ))?;
-                        }
-                        return Ok(MouseAction::None);
-                    }
-                    let inner = panel_inner(rows[2]);
-                    if mouse.row == inner.y && contains(inner, mouse.column, mouse.row) {
-                        if let Some(page) = self.grok_auth.page.as_mut() {
-                            page.selected = 0;
-                        }
-                    }
-                } else if contains(rows[2], mouse.column, mouse.row) {
-                    if let Some(page) = self.grok_auth.page.as_mut() {
-                        page.scroll = if mouse.kind == MouseEventKind::ScrollDown {
-                            page.scroll.saturating_add(1)
-                        } else if mouse.kind == MouseEventKind::ScrollUp {
-                            page.scroll.saturating_sub(1)
-                        } else {
-                            page.scroll
-                        };
-                    }
-                }
-                return Ok(MouseAction::None);
+                self.open_grok_auth();
             }
+            let content = panel_inner(panel);
+            let rows = embedded_account_rows(content, self.grok_auth.busy);
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                if self
+                    .grok_auth
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| page.confirm_logout)
+                {
+                    if let Some(index) =
+                        modal_button_rects(grok_auth::confirmation_area(content), 2)
+                            .iter()
+                            .position(|rect| contains(*rect, mouse.column, mouse.row))
+                    {
+                        self.grok_auth_page_key(KeyEvent::new(
+                            KeyCode::Char(if index == 0 { 'y' } else { 'n' }),
+                            KeyModifiers::NONE,
+                        ))?;
+                    }
+                    return Ok(MouseAction::None);
+                }
+                if let Some(index) = grok_auth::account_actions(content)
+                    .iter()
+                    .position(|rect| contains(*rect, mouse.column, mouse.row))
+                {
+                    if index == 6 {
+                        return Ok(MouseAction::None);
+                    }
+                    if self.grok_auth.busy {
+                        if index == 6 {
+                            self.cancel_grok_auth();
+                        }
+                    } else {
+                        if let Some(page) = self.grok_auth.page.as_mut() {
+                            page.selected = index + 1;
+                        }
+                        self.grok_auth_page_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+                    }
+                    return Ok(MouseAction::None);
+                }
+                let inner = panel_inner(rows[2]);
+                if mouse.row == inner.y
+                    && contains(inner, mouse.column, mouse.row)
+                    && let Some(page) = self.grok_auth.page.as_mut()
+                {
+                    page.selected = 0;
+                }
+            } else if contains(rows[2], mouse.column, mouse.row)
+                && let Some(page) = self.grok_auth.page.as_mut()
+            {
+                page.scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                    page.scroll.saturating_add(1)
+                } else if mouse.kind == MouseEventKind::ScrollUp {
+                    page.scroll.saturating_sub(1)
+                } else {
+                    page.scroll
+                };
+            }
+            return Ok(MouseAction::None);
         }
         self.screen = area;
         let pi = self.pi_enabled;
@@ -1931,7 +1930,7 @@ impl App {
                             |latest| {
                                 if latest.profiles.get(&id) != original.as_ref() {
                                     anyhow::bail!(
-                                        "provider changed in another CCSW instance; reopen before deleting"
+                                        "provider changed in another Mux instance; reopen before deleting"
                                     );
                                 }
                                 latest.profiles.remove(&id);
@@ -2230,7 +2229,7 @@ impl App {
                                     let current = latest
                                         .profiles
                                         .get(original_id)
-                                        .context("provider was removed in another CCSW instance")?;
+                                        .context("provider was removed in another Mux instance")?;
                                     config::merge_profile(original_profile, &profile, current)?
                                 } else {
                                     profile

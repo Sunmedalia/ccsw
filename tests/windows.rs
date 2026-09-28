@@ -17,7 +17,7 @@ fn windows_directory_precedence_empty_overrides_and_literal_paths() {
         let mut command = support::command(&root);
         command
             .args(["config", "path"])
-            .env("CCSW_CONFIG", "")
+            .env("MUX_CONFIG", "")
             .env("XDG_CONFIG_HOME", "");
         for (key, value) in extra {
             command.env(key, value);
@@ -32,13 +32,13 @@ fn windows_directory_precedence_empty_overrides_and_literal_paths() {
     );
     assert_eq!(
         Path::new(String::from_utf8(output.stdout).unwrap().trim()),
-        root.join("roaming/ccsw/config.toml")
+        root.join("roaming/mux/config.toml")
     );
     let output = run(&[("APPDATA", ""), ("HOME", "Z:\\wrong-home")]);
     assert!(output.status.success());
     assert_eq!(
         Path::new(String::from_utf8(output.stdout).unwrap().trim()),
-        root.join("AppData/Roaming/ccsw/config.toml")
+        root.join("AppData/Roaming/mux/config.toml")
     );
     let output = support::command(&root)
         .args(["config", "path"])
@@ -55,7 +55,7 @@ fn windows_directory_precedence_empty_overrides_and_literal_paths() {
     );
     let output = support::command(&root)
         .args(["config", "path"])
-        .env("ccsw_config", root.join("小写 config.toml"))
+        .env("mux_config", root.join("小写 config.toml"))
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -104,7 +104,7 @@ fn path_identity_handles_existing_extended_paths_and_missing_children() {
 fn install_helper(directory: &Path) -> PathBuf {
     fs::create_dir_all(directory).unwrap();
     let binary = directory.join("client helper.exe");
-    fs::copy(env!("CARGO_BIN_EXE_ccsw-test-helper"), &binary).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_mux-test-helper"), &binary).unwrap();
     binary
 }
 
@@ -119,9 +119,9 @@ fn doctor_finds_native_and_batch_clients_and_preserves_environment() {
     let run = |program: &Path| {
         support::command(&root)
             .arg("doctor")
-            .env("CCSW_CLAUDE_BIN", program)
-            .env("CCSW_HELPER_RECORD", &record)
-            .env("CCSW_HELPER_LITERAL", literal)
+            .env("MUX_CLAUDE_BIN", program)
+            .env("MUX_HELPER_RECORD", &record)
+            .env("MUX_HELPER_LITERAL", literal)
             .output()
             .unwrap()
     };
@@ -147,7 +147,7 @@ fn doctor_finds_native_and_batch_clients_and_preserves_environment() {
     );
     let output = support::command(&root)
         .arg("doctor")
-        .env("CCSW_CLAUDE_BIN", "claude")
+        .env("MUX_CLAUDE_BIN", "claude")
         .env("PATH", &shim_dir)
         .env("PATHEXT", ".CMD;.EXE")
         .output()
@@ -169,9 +169,9 @@ fn doctor_timeout_reaps_launcher_and_descendant() {
     let pid_path = temp.path().join("descendant.pid");
     let output = support::command(temp.path())
         .arg("doctor")
-        .env("CCSW_CLAUDE_BIN", binary)
-        .env("CCSW_HELPER_TREE", "1")
-        .env("CCSW_HELPER_PID", &pid_path)
+        .env("MUX_CLAUDE_BIN", binary)
+        .env("MUX_HELPER_TREE", "1")
+        .env("MUX_HELPER_PID", &pid_path)
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("timed out"));
@@ -207,7 +207,7 @@ fn uninstall_rejects_junction_without_deleting_target() {
     );
     let output = support::command(root)
         .args(["uninstall", "--yes"])
-        .env("CCSW_CONFIG", junction.join("config.toml"))
+        .env("MUX_CONFIG", junction.join("config.toml"))
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -232,7 +232,7 @@ fn startup_uses_registry_directory_before_taking_session_lock() {
             .status
             .success()
     );
-    let registry = root.path().join("state/ccsw/proxy.json");
+    let registry = root.path().join("state/mux/proxy.json");
     let output = support::command(root.path())
         .args(["internal", "proxy-start", "--registry"])
         .arg(&registry)
@@ -291,5 +291,5 @@ fn extended_long_state_path_survives_proxy_restart() {
             String::from_utf8_lossy(&stopped.stderr)
         );
     }
-    assert!(state.join("ccsw/proxy.json").is_file());
+    assert!(state.join("mux/proxy.json").is_file());
 }

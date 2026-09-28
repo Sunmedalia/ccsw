@@ -1081,10 +1081,10 @@ impl App {
                     "Edit the display name only.\nEmail and plan come from your login."
                 }
                 Some(Input::Subscription(Some(_))) => {
-                    "Use this account and pause API providers.\nCCSW will restart the shared Codex service; active sessions may disconnect."
+                    "Use this account and pause API providers.\nMUX will restart the shared Codex service; active sessions may disconnect."
                 }
                 Some(Input::Switch(_)) => {
-                    "Use this account in new Codex sessions.\nCCSW will restart the shared Codex service; active sessions may disconnect."
+                    "Use this account in new Codex sessions.\nMUX will restart the shared Codex service; active sessions may disconnect."
                 }
                 Some(Input::Subscription(None)) => {
                     "Restore previously enabled API providers and their models.\nPreviously disabled providers stay disabled. Restart Codex after applying."

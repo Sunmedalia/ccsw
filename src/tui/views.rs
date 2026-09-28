@@ -29,9 +29,9 @@ impl App {
                         && !self.codex_ui.accounts
                         && self.grok_auth.page.is_none()
                     {
-                        "CCSW · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit"
+                        "Mux · Terminal too small\nResize to at least 40 × 12\nq / Ctrl+C to quit"
                     } else {
-                        "CCSW · Terminal too small\nResize to at least 40 × 12\nEsc to go back"
+                        "Mux · Terminal too small\nResize to at least 40 × 12\nEsc to go back"
                     },
                 )
                 .wrap(Wrap { trim: false }),
@@ -47,14 +47,14 @@ impl App {
             }
             return;
         }
-        if matches!(self.modal, Some(Modal::Help(_))) {
-            if let Some(previous) = &self.help_return {
-                self.draw_client_tabs(frame, area);
-                self.draw_modal(frame, previous);
-                self.draw_page_header_actions(frame, modal_area_for(previous, area));
-                self.draw_modal(frame, self.modal.as_ref().unwrap());
-                return;
-            }
+        if matches!(self.modal, Some(Modal::Help(_)))
+            && let Some(previous) = &self.help_return
+        {
+            self.draw_client_tabs(frame, area);
+            self.draw_modal(frame, previous);
+            self.draw_page_header_actions(frame, modal_area_for(previous, area));
+            self.draw_modal(frame, self.modal.as_ref().unwrap());
+            return;
         }
         if self.usage.active {
             self.draw_client_tabs(frame, area);
@@ -886,7 +886,7 @@ impl App {
                 "{} · {}",
                 profile.api_format.label(),
                 if pi_proxy.is_some() {
-                    "CCSW proxy"
+                    "Mux proxy"
                 } else {
                     "direct API"
                 }
@@ -1136,7 +1136,6 @@ impl App {
 
     pub(super) fn provider_action_text(&self, control: FooterControl) -> String {
         let (name, shortcut) = self.footer_control_name(control);
-        let name = name;
         if shortcut.is_empty() {
             name.into()
         } else {

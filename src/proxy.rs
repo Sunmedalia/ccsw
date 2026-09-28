@@ -219,7 +219,7 @@ pub fn aggregate_profile(
     let registry = load_registry(&proxy_paths)?;
     let expose = |model: &str| resolve_aggregate_model_id(&targets, default_profile_id, model);
     let mut routed = default_profile.clone();
-    routed.name = "CCSW · all providers".into();
+    routed.name = "Mux · all providers".into();
     routed.api_format = ApiFormat::Anthropic;
     routed.base_url = format!("http://{}/r/{route_id}", registry.listen);
     routed.credential = Credential::Bearer {
@@ -227,10 +227,10 @@ pub fn aggregate_profile(
     };
     routed.default_model = default_model;
     routed.aliases = config::RoleModels {
-        opus: Some("ccsw-role::opus".into()),
-        sonnet: Some("ccsw-role::sonnet".into()),
-        haiku: Some("ccsw-role::haiku".into()),
-        fable: Some("ccsw-role::fable".into()),
+        opus: Some("mux-role::opus".into()),
+        sonnet: Some("mux-role::sonnet".into()),
+        haiku: Some("mux-role::haiku".into()),
+        fable: Some("mux-role::fable".into()),
     };
     routed.subagent_model = routed.subagent_model.as_deref().and_then(expose);
     routed.fallback_models = routed
@@ -362,7 +362,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
             && wanted != status.listen
         {
             bail!(
-                "CCSW proxy already runs at {}; stop it before changing the address",
+                "Mux proxy already runs at {}; stop it before changing the address",
                 status.listen
             );
         }
@@ -380,7 +380,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         .parse()
         .with_context(|| format!("invalid proxy listen address {address}"))?;
     if !socket.ip().is_loopback() {
-        bail!("CCSW proxy only accepts loopback listen addresses");
+        bail!("Mux proxy only accepts loopback listen addresses");
     }
     let probe = available_listener(socket)?;
     update_registry(&proxy_paths, Some(address), |_| ())?;
@@ -395,7 +395,7 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         .open(&proxy_paths.log)?;
     set_private(&proxy_paths.log)?;
     let stderr = log.try_clone()?;
-    let executable = std::env::current_exe().context("cannot resolve ccsw executable")?;
+    let executable = std::env::current_exe().context("cannot resolve mux executable")?;
     let mut command = Command::new(executable);
     command
         .args(["internal", "proxy-serve", "--registry"])
@@ -426,9 +426,9 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
     }
     drop(probe);
     #[cfg(windows)]
-    crate::windows::spawn_background(&mut command).context("failed to start CCSW proxy")?;
+    crate::windows::spawn_background(&mut command).context("failed to start Mux proxy")?;
     #[cfg(not(windows))]
-    command.spawn().context("failed to start CCSW proxy")?;
+    command.spawn().context("failed to start Mux proxy")?;
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
         let current = status(paths)?;
@@ -437,13 +437,13 @@ pub fn start(paths: &AppPaths, listen: Option<&str>) -> Result<ProxyStatus> {
         }
     }
     bail!(
-        "CCSW proxy did not become ready; inspect {}",
+        "Mux proxy did not become ready; inspect {}",
         proxy_paths.log.display()
     )
 }
 
 fn health_matches_build(value: &Value) -> bool {
-    value["name"] == "ccsw-proxy"
+    value["name"] == "mux-proxy"
         && value["config_version"].as_u64() == Some(u64::from(config::CONFIG_VERSION))
         && value["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
         && value["grok_gateway"] == true
@@ -475,7 +475,7 @@ pub fn status(paths: &AppPaths) -> Result<ProxyStatus> {
         .bearer_auth(&registry.local_token)
         .send()
         .and_then(|response| response.json::<Value>())
-        .is_ok_and(|value| value.get("name").and_then(Value::as_str) == Some("ccsw-proxy"));
+        .is_ok_and(|value| value.get("name").and_then(Value::as_str) == Some("mux-proxy"));
     let pid = fs::read_to_string(&proxy_paths.pid)
         .ok()
         .and_then(|value| value.trim().parse().ok());
@@ -493,17 +493,17 @@ pub fn service_status() -> Result<ProxyServiceStatus> {
     #[cfg(target_os = "macos")]
     let (manager, path) = (
         "launchd",
-        home.join("Library/LaunchAgents/com.ccsw.proxy.plist"),
+        home.join("Library/LaunchAgents/com.mux.proxy.plist"),
     );
     #[cfg(target_os = "linux")]
     let (manager, path) = (
         "systemd user",
-        home.join(".config/systemd/user/ccsw-proxy.service"),
+        home.join(".config/systemd/user/mux-proxy.service"),
     );
     #[cfg(windows)]
     let (manager, path) = ("Windows Startup", crate::windows::startup_path()?);
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    let (manager, path) = ("unsupported", home.join(".ccsw-proxy-service"));
+    let (manager, path) = ("unsupported", home.join(".mux-proxy-service"));
     Ok(ProxyServiceStatus {
         installed: path.exists(),
         manager,
@@ -520,9 +520,9 @@ fn stop_locked(paths: &AppPaths) -> Result<()> {
     let proxy_paths = ProxyPaths::from_app(paths)?;
     if !status(paths)?.running {
         fs::remove_file(&proxy_paths.pid).ok();
-        bail!("CCSW proxy is not running");
+        bail!("Mux proxy is not running");
     }
-    shutdown_authenticated(paths).context("proxy does not support authenticated shutdown; stop the older daemon with its original CCSW version")?;
+    shutdown_authenticated(paths).context("proxy does not support authenticated shutdown; stop the older daemon with its original Mux version")?;
     let daemon = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -536,7 +536,7 @@ fn stop_locked(paths: &AppPaths) -> Result<()> {
             return Ok(());
         }
     }
-    bail!("CCSW proxy did not stop")
+    bail!("Mux proxy did not stop")
 }
 
 pub fn install(paths: &AppPaths) -> Result<PathBuf> {
@@ -550,8 +550,8 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
     {
         let directory = home.join("Library/LaunchAgents");
         fs::create_dir_all(&directory)?;
-        let path = directory.join("com.ccsw.proxy.plist");
-        let label = "com.ccsw.proxy";
+        let path = directory.join("com.mux.proxy.plist");
+        let label = "com.mux.proxy";
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -582,17 +582,17 @@ pub fn install(paths: &AppPaths) -> Result<PathBuf> {
     {
         let directory = home.join(".config/systemd/user");
         fs::create_dir_all(&directory)?;
-        let path = directory.join("ccsw-proxy.service");
+        let path = directory.join("mux-proxy.service");
         fs::write(
             &path,
             format!(
-                "[Unit]\nDescription=CCSW protocol proxy\n\n[Service]\nExecStart={} internal proxy-serve --registry {}\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+                "[Unit]\nDescription=Mux protocol proxy\n\n[Service]\nExecStart={} internal proxy-serve --registry {}\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
                 executable.display(),
                 proxy_paths.registry.display()
             ),
         )?;
         let status = Command::new("systemctl")
-            .args(["--user", "enable", "--now", "ccsw-proxy.service"])
+            .args(["--user", "enable", "--now", "mux-proxy.service"])
             .output()?
             .status;
         if !status.success() {
@@ -618,7 +618,7 @@ pub fn uninstall() -> Result<Option<PathBuf>> {
     let home = crate::platform::home()?;
     #[cfg(target_os = "macos")]
     {
-        let path = home.join("Library/LaunchAgents/com.ccsw.proxy.plist");
+        let path = home.join("Library/LaunchAgents/com.mux.proxy.plist");
         if !path.exists() {
             return Ok(None);
         }
@@ -631,12 +631,12 @@ pub fn uninstall() -> Result<Option<PathBuf>> {
     }
     #[cfg(target_os = "linux")]
     {
-        let path = home.join(".config/systemd/user/ccsw-proxy.service");
+        let path = home.join(".config/systemd/user/mux-proxy.service");
         if !path.exists() {
             return Ok(None);
         }
         let _ = Command::new("systemctl")
-            .args(["--user", "disable", "--now", "ccsw-proxy.service"])
+            .args(["--user", "disable", "--now", "mux-proxy.service"])
             .status();
         fs::remove_file(&path)?;
         return Ok(Some(path));
@@ -660,11 +660,7 @@ fn load_or_default_registry(paths: &ProxyPaths, listen: Option<&str>) -> Result<
     }
     Ok(Registry {
         listen: listen.unwrap_or(DEFAULT_LISTEN).to_owned(),
-        local_token: format!(
-            "ccsw-{}{}",
-            Uuid::new_v4().simple(),
-            Uuid::new_v4().simple()
-        ),
+        local_token: format!("mux-{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
         routes: BTreeMap::new(),
     })
 }
@@ -735,19 +731,19 @@ async fn serve_with_listener(
         .open(&proxy_paths.daemon_lock)?;
     singleton
         .try_lock_exclusive()
-        .context("another CCSW proxy is already running")?;
+        .context("another Mux proxy is already running")?;
     let usage = crate::usage::Writer::new(registry_path.with_file_name(crate::usage::FILE));
     let recovery = usage.clone();
     if tokio::task::spawn_blocking(move || recovery.recover())
         .await?
         .is_err()
     {
-        eprintln!("CCSW usage: database unavailable; request statistics may be incomplete");
+        eprintln!("Mux usage: database unavailable; request statistics may be incomplete");
     }
     let registry = load_registry(&proxy_paths)?;
     let address: SocketAddr = registry.listen.parse()?;
     if !address.ip().is_loopback() {
-        bail!("CCSW proxy refuses to bind a non-loopback address");
+        bail!("Mux proxy refuses to bind a non-loopback address");
     }
     fs::write(&proxy_paths.pid, std::process::id().to_string())?;
     set_private(&proxy_paths.pid)?;
@@ -823,7 +819,7 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             anyhow::anyhow!("invalid local proxy credential"),
         );
     }
-    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION"), "grok_gateway": true, "pi_proxy": true})).into_response()
+    Json(json!({"name":"mux-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION"), "grok_gateway": true, "pi_proxy": true})).into_response()
 }
 
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -854,7 +850,7 @@ async fn authenticated_target(
         .routes
         .get(route)
         .cloned()
-        .with_context(|| format!("unknown CCSW route {route}"))?;
+        .with_context(|| format!("unknown Mux route {route}"))?;
     let expected = format!("Bearer {}", registry.local_token);
     let actual = headers
         .get(header::AUTHORIZATION)
@@ -873,7 +869,7 @@ async fn authenticated_target(
 // Only recognize role aliases and Claude family IDs, never arbitrary names
 // containing a role (or another provider's namespaced route).
 fn requested_role(model: &str) -> Option<&'static str> {
-    let model = model.strip_prefix("ccsw-role::").unwrap_or(model);
+    let model = model.strip_prefix("mux-role::").unwrap_or(model);
     let normalized = model.to_ascii_lowercase();
     let normalized = strip_1m(&normalized);
     let family = normalized.strip_prefix("claude-").unwrap_or(&normalized);
@@ -983,11 +979,11 @@ fn resolve_profile_from_config(
             })
             .or_else(|| role_target(target, config, requested))
             .with_context(|| if target.grok {
-                format!("model '{requested}' is not synced by CCSW; press p to reconnect Grok")
+                format!("model '{requested}' is not synced by Mux; press p to reconnect Grok")
             } else if target.codex {
-                format!("model '{requested}' is not synced by CCSW; press p to sync, then restart Codex to reload /model")
+                format!("model '{requested}' is not synced by Mux; press p to sync, then restart Codex to reload /model")
             } else {
-                format!("model '{requested}' is not synced by CCSW; configure its role on the default provider and sync with p")
+                format!("model '{requested}' is not synced by Mux; configure its role on the default provider and sync with p")
             })?;
         (mapped.profile_id.as_str(), mapped.model_id.as_str())
     };
@@ -1882,7 +1878,7 @@ fn chat_response(value: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
     {
-        content.push(json!({"type":"thinking","thinking":reasoning,"signature":"ccsw-openai"}));
+        content.push(json!({"type":"thinking","thinking":reasoning,"signature":"mux-openai"}));
     }
     if let Some(text) = message
         .get("content")
@@ -1900,7 +1896,7 @@ fn chat_response(value: &Value) -> Result<Value> {
                 .unwrap_or("{}");
             content.push(json!({
                 "type":"tool_use",
-                "id":call.get("id").and_then(Value::as_str).unwrap_or("call_ccsw"),
+                "id":call.get("id").and_then(Value::as_str).unwrap_or("call_mux"),
                 "name":function.get("name").and_then(Value::as_str).context("tool call has no name")?,
                 "input":serde_json::from_str::<Value>(args).unwrap_or_else(|_| json!({"_raw":args}))
             }));
@@ -1944,7 +1940,7 @@ fn responses_response(value: &Value) -> Result<Value> {
                     .unwrap_or("{}");
                 content.push(json!({
                     "type":"tool_use",
-                    "id":item.get("call_id").or_else(|| item.get("id")).and_then(Value::as_str).unwrap_or("call_ccsw"),
+                    "id":item.get("call_id").or_else(|| item.get("id")).and_then(Value::as_str).unwrap_or("call_mux"),
                     "name":item.get("name").and_then(Value::as_str).context("function call has no name")?,
                     "input":serde_json::from_str::<Value>(args).unwrap_or_else(|_| json!({"_raw":args}))
                 }));
@@ -1958,7 +1954,7 @@ fn responses_response(value: &Value) -> Result<Value> {
                         .join("\n");
                     if !text.is_empty() {
                         content.push(
-                            json!({"type":"thinking","thinking":text,"signature":"ccsw-openai"}),
+                            json!({"type":"thinking","thinking":text,"signature":"mux-openai"}),
                         );
                     }
                 }
@@ -2005,7 +2001,7 @@ fn anthropic_message(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     json!({
-        "id":id.unwrap_or("msg_ccsw"),"type":"message","role":"assistant",
+        "id":id.unwrap_or("msg_mux"),"type":"message","role":"assistant",
         "model":model.unwrap_or("openai-compatible"),"content":content,
         "stop_reason":stop,"stop_sequence":null,
         "usage":{"input_tokens":input_tokens,"output_tokens":output_tokens}
@@ -2098,7 +2094,7 @@ fn ensure_start(state: &mut StreamState, id: Option<&str>, model: Option<&str>) 
         return Vec::new();
     }
     state.started = true;
-    state.id = id.unwrap_or("msg_ccsw_stream").to_owned();
+    state.id = id.unwrap_or("msg_mux_stream").to_owned();
     state.model = model.unwrap_or("openai-compatible").to_owned();
     vec![sse(
         "message_start",
@@ -2212,11 +2208,11 @@ fn ensure_block(
         }
         BlockKind::Thinking => {
             state.thinking_block = Some(index);
-            json!({"type":"thinking","thinking":"","signature":"ccsw-openai"})
+            json!({"type":"thinking","thinking":"","signature":"mux-openai"})
         }
         BlockKind::Tool(tool) => {
             state.tools.insert(tool, index);
-            json!({"type":"tool_use","id":id.unwrap_or("call_ccsw"),"name":name.unwrap_or("tool"),"input":{}})
+            json!({"type":"tool_use","id":id.unwrap_or("call_mux"),"name":name.unwrap_or("tool"),"input":{}})
         }
     };
     out.push(sse(
@@ -2422,7 +2418,7 @@ pub(crate) fn prepare_grok_route(
         }
     }
     if models.is_empty() {
-        bail!("Enable at least one Grok model before using CCSW Gateway");
+        bail!("Enable at least one Grok model before using Mux Gateway");
     }
     start(paths, None)?;
     let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
@@ -2762,10 +2758,10 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        let model = &native["model"]["ccsw::provider::upstream-model"];
+        let model = &native["model"]["mux::provider::upstream-model"];
         assert_eq!(
             model["model"].as_str(),
-            Some("ccsw::provider::upstream-model")
+            Some("mux::provider::upstream-model")
         );
         assert_eq!(model["api_backend"].as_str(), Some("messages"));
         let url = format!("{}/messages", model["base_url"].as_str().unwrap());
@@ -2780,7 +2776,7 @@ mod tests {
         let response = client
             .post(url)
             .header("x-api-key", &token)
-            .json(&json!({"model":"ccsw::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}))
+            .json(&json!({"model":"mux::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}))
             .send()
             .await
             .unwrap();
@@ -2819,7 +2815,7 @@ mod tests {
             .unwrap();
         assert_eq!(native["models"]["default"].as_str(), Some("grok-build"));
         assert_eq!(
-            native["model"]["ccsw::provider::upstream-model"]["base_url"].as_str(),
+            native["model"]["mux::provider::upstream-model"]["base_url"].as_str(),
             model["base_url"].as_str()
         );
         assert_eq!(
@@ -2832,12 +2828,12 @@ mod tests {
         let response = client
             .post(format!(
                 "{}/messages",
-                native["model"]["ccsw::provider::upstream-model"]["base_url"]
+                native["model"]["mux::provider::upstream-model"]["base_url"]
                     .as_str()
                     .unwrap()
             ))
             .header("x-api-key", &token)
-            .json(&json!({"model":"ccsw::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"account default with API model"}]}))
+            .json(&json!({"model":"mux::provider::upstream-model","max_tokens":16,"messages":[{"role":"user","content":"account default with API model"}]}))
             .send()
             .await
             .unwrap();
@@ -2870,10 +2866,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             native["models"]["default"].as_str(),
-            Some("ccsw::provider::upstream-model")
+            Some("mux::provider::upstream-model")
         );
         assert_eq!(
-            native["model"]["ccsw::provider::upstream-model"]["api_backend"].as_str(),
+            native["model"]["mux::provider::upstream-model"]["api_backend"].as_str(),
             Some("messages")
         );
         assert_eq!(
@@ -2959,7 +2955,7 @@ mod tests {
 
     #[test]
     fn proxy_health_requires_current_config_and_binary_versions() {
-        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true});
+        let current = serde_json::json!({"name":"mux-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true});
         assert!(super::health_matches_build(&current));
         let mut without_grok = current.clone();
         without_grok.as_object_mut().unwrap().remove("grok_gateway");
@@ -2968,7 +2964,7 @@ mod tests {
         without_pi.as_object_mut().unwrap().remove("pi_proxy");
         assert!(!super::health_matches_build(&without_pi));
         assert!(!super::health_matches_build(
-            &serde_json::json!({"name":"ccsw-proxy"})
+            &serde_json::json!({"name":"mux-proxy"})
         ));
         let mut old = current.clone();
         old["config_version"] = serde_json::json!(4);
@@ -3023,7 +3019,7 @@ mod tests {
                     "route",
                     &target,
                     &config,
-                    &body(&first, "ccsw-role::sonnet"),
+                    &body(&first, "mux-role::sonnet"),
                     true
                 )
                 .unwrap()
@@ -3036,7 +3032,7 @@ mod tests {
                     "route",
                     &target,
                     &config,
-                    &body(&second, "ccsw-role::opus"),
+                    &body(&second, "mux-role::opus"),
                     true
                 )
                 .unwrap()

@@ -25,7 +25,7 @@ pub struct Settings {
 }
 #[derive(Subcommand)]
 pub enum Command {
-    /// Inspect native Pi files without importing them into CCSW.
+    /// Inspect native Pi files without importing them into Mux.
     Files,
     Import {
         #[arg(long)]
@@ -100,7 +100,7 @@ fn save(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 fn lock(home: &Path) -> Result<std::fs::File> {
     fs::create_dir_all(home)?;
-    let path = home.join(".ccsw-pi.lock");
+    let path = home.join(".mux-pi.lock");
     if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!("Invalid Pi lock");
     }
@@ -335,7 +335,7 @@ fn apply_locked(paths: &AppPaths, profile_id: &str, model: Option<&str>) -> Resu
         if models.is_empty() {
             continue;
         }
-        let key = format!("ccsw-{id}");
+        let key = format!("mux-{id}");
         if docs[0]["providers"].get(&key).is_some() {
             bail!("Pi provider name collision: {key}");
         }
@@ -382,19 +382,14 @@ fn apply_locked(paths: &AppPaths, profile_id: &str, model: Option<&str>) -> Resu
                 .collect(),
         );
         provider["baseUrl"] = json!(native_base_url(profile, &provider)?);
-        provider
-            .as_object_mut()
-            .unwrap()
-            .remove("ccswNativeBaseUrl");
-        provider.as_object_mut().unwrap().remove("ccswNativeApi");
+        provider.as_object_mut().unwrap().remove("muxNativeBaseUrl");
+        provider.as_object_mut().unwrap().remove("muxNativeApi");
         provider["api"] = json!(match profile.api_format {
             ApiFormat::Anthropic => "anthropic-messages",
             ApiFormat::OpenaiChat => "openai-completions",
             ApiFormat::OpenaiResponses => "openai-responses",
         });
-        provider["apiKey"] = json!(literal(
-            profile.credential.value().unwrap_or("ccsw-keyless")
-        ));
+        provider["apiKey"] = json!(literal(profile.credential.value().unwrap_or("mux-keyless")));
         provider.as_object_mut().unwrap().remove("authHeader");
         match &profile.credential {
             Credential::Bearer { .. } => provider["authHeader"] = json!(true),
@@ -415,7 +410,7 @@ fn apply_locked(paths: &AppPaths, profile_id: &str, model: Option<&str>) -> Resu
         keys.push(key);
     }
     if !profile_id.is_empty() {
-        docs[1]["defaultProvider"] = json!(format!("ccsw-{profile_id}"));
+        docs[1]["defaultProvider"] = json!(format!("mux-{profile_id}"));
         docs[1]["defaultModel"] = json!(strip_1m(wanted));
     }
     let state = Binding {
@@ -510,7 +505,7 @@ pub fn import(paths: &AppPaths, dry_run: bool) -> Result<String> {
     let mut reports = Vec::new();
     let edit = |config: &mut config::Config| -> Result<()> {
         for (name, provider) in providers {
-            if name.starts_with("ccsw-") {
+            if name.starts_with("mux-") {
                 continue;
             }
             let parsed = parse_provider(name, provider, &auth);
@@ -561,8 +556,8 @@ pub fn import(paths: &AppPaths, dry_run: bool) -> Result<String> {
             for field in ["apiKey", "baseUrl", "api", "oauth", "authHeader"] {
                 extras.as_object_mut().unwrap().remove(field);
             }
-            extras["ccswNativeBaseUrl"] = json!(profile.base_url);
-            extras["ccswNativeApi"] = json!(profile.api_format);
+            extras["muxNativeBaseUrl"] = json!(profile.base_url);
+            extras["muxNativeApi"] = json!(profile.api_format);
             config
                 .pi
                 .extras
@@ -692,7 +687,7 @@ fn parse_provider(name: &str, value: &Value, auth: &Value) -> Result<Profile> {
         name: value["name"].as_str().unwrap_or(name).into(),
         enabled: true,
         base_url: base_url.into(),
-        models_url: value["ccswModelsUrl"].as_str().map(str::to_owned),
+        models_url: value["muxModelsUrl"].as_str().map(str::to_owned),
         api_format,
         credential,
         default_model,
@@ -725,11 +720,11 @@ pub(crate) fn prepare_detach(paths: &AppPaths) -> Result<Option<DetachPlan>> {
         return Ok(None);
     };
     crate::uninstall::checked(&b.home)?;
-    for name in ["models.json", "settings.json", ".ccsw-pi.lock"] {
+    for name in ["models.json", "settings.json", ".mux-pi.lock"] {
         crate::uninstall::checked(&b.home.join(name))?;
     }
     if !crate::platform::same_path(&b.config, &paths.config)? {
-        bail!("Pi binding belongs to another CCSW configuration");
+        bail!("Pi binding belongs to another Mux configuration");
     }
     let before = documents(&b.home)?;
     let after = restored(&b, before.clone());
@@ -782,8 +777,8 @@ fn state_lock(paths: &AppPaths) -> Result<std::fs::File> {
 }
 
 fn native_base_url(profile: &Profile, extras: &Value) -> Result<String> {
-    if extras["ccswNativeBaseUrl"] == profile.base_url
-        && extras["ccswNativeApi"] == json!(profile.api_format)
+    if extras["muxNativeBaseUrl"] == profile.base_url
+        && extras["muxNativeApi"] == json!(profile.api_format)
     {
         return Ok(profile.base_url.clone());
     }

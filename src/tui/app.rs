@@ -907,7 +907,7 @@ impl App {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
-                .context("profile was removed in another CCSW instance")?;
+                .context("profile was removed in another Mux instance")?;
             let required = profile
                 .required_model_ids()
                 .iter()
@@ -1102,7 +1102,7 @@ impl App {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
-                .context("profile was removed in another CCSW instance")?;
+                .context("profile was removed in another Mux instance")?;
             if let Some(old) = old_default
                 && old != model_id
                 && !profile.enabled_models.contains(&old)
@@ -1157,7 +1157,7 @@ impl App {
             let profile = latest
                 .profiles
                 .get_mut(&profile_id)
-                .context("profile was removed in another CCSW instance")?;
+                .context("profile was removed in another Mux instance")?;
             if profile.default_model == old_id {
                 profile.default_model = new_id.clone();
             }

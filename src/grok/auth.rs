@@ -1,4 +1,4 @@
-//! Delegate OAuth to Grok Build. CCSW never stores or refreshes session tokens.
+//! Delegate OAuth to Grok Build. Mux never stores or refreshes session tokens.
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::{
@@ -85,7 +85,7 @@ fn entry_status(entry: &Value) -> Status {
     }
 }
 /// Read the same native session used for status. This value contains secrets and
-/// must never be logged, sent through UI channels, or serialized into CCSW config.
+/// must never be logged, sent through UI channels, or serialized into Mux config.
 pub(super) fn saved_entry(home: &Path) -> Result<Option<Value>> {
     let Some(auth) = read_auth(home)? else {
         return Ok(None);
@@ -234,7 +234,7 @@ pub fn run(
     cancel: &AtomicBool,
     notify: impl FnMut(String),
 ) -> Result<Status> {
-    let program = crate::platform::nonempty_env("CCSW_GROK_BIN").unwrap_or_else(|| "grok".into());
+    let program = crate::platform::nonempty_env("MUX_GROK_BIN").unwrap_or_else(|| "grok".into());
     run_program(
         &program,
         action,
@@ -277,7 +277,7 @@ fn run_program(
         command.process_group(0);
     }
     let mut child = crate::managed_process::ManagedChild::spawn(&mut command)
-        .context("Cannot start Grok; install it or set CCSW_GROK_BIN")?;
+        .context("Cannot start Grok; install it or set MUX_GROK_BIN")?;
     let (sender, receiver) = mpsc::sync_channel(32);
     read_progress(
         child.stdout.take().context("Grok stdout unavailable")?,

@@ -304,7 +304,7 @@ type Namespaces = HashMap<String, (String, String)>;
 fn namespace_alias(namespace: &str, name: &str) -> String {
     use sha2::{Digest, Sha256};
     format!(
-        "ccsw_{}",
+        "mux_{}",
         &format!("{:x}", Sha256::digest(format!("{namespace}\0{name}")))[..32]
     )
 }

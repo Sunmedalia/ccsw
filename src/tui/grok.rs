@@ -30,7 +30,7 @@ impl Dialog {
         match self {
             Self::Import { candidate, .. } => candidate.preview.clone(),
             Self::Reconnect { conflicts, .. } => format!(
-                "These Grok fields changed outside CCSW:\n\n{}\n\nEnter replaces these managed fields with CCSW values. Esc cancels.",
+                "These Grok fields changed outside Mux:\n\n{}\n\nEnter replaces these managed fields with Mux values. Esc cancels.",
                 conflicts.join("\n")
             ),
             Self::Settings { .. } => String::new(),
@@ -154,7 +154,7 @@ impl App {
                 self.status_error = false;
             }
             KeyCode::Char('P') => {
-                self.status = "Grok API providers use CCSW Gateway after p connects".into();
+                self.status = "Grok API providers use Mux Gateway after p connects".into();
             }
             _ => return Ok(false),
         }
@@ -286,7 +286,7 @@ impl App {
             )?;
             if previous_default != applied_default
                 && previous_default.as_deref().is_some_and(|key| {
-                    key.starts_with("ccsw::") || self.config.grok.imports.values().any(|v| v == key)
+                    key.starts_with("mux::") || self.config.grok.imports.values().any(|v| v == key)
                 })
             {
                 self.config = self.update_client_config(|c| {

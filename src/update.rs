@@ -11,8 +11,8 @@ use std::{
     time::Duration,
 };
 
-const RELEASE_API: &str = "https://api.github.com/repos/Sunmedalia/ccsw/releases/latest";
-const ASSET_PREFIX: &str = "https://github.com/Sunmedalia/ccsw/releases/download/";
+const RELEASE_API: &str = "https://api.github.com/repos/Sunmedalia/mux/releases/latest";
+const ASSET_PREFIX: &str = "https://github.com/Sunmedalia/mux/releases/download/";
 const MAX_ARCHIVE: u64 = 100 * 1024 * 1024;
 const MAX_BINARY: u64 = 150 * 1024 * 1024;
 
@@ -32,11 +32,11 @@ struct Asset {
 
 fn asset_name() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => Ok("ccsw-macos-arm64.tar.gz"),
-        ("linux", "x86_64") => Ok("ccsw-linux-x86_64.tar.gz"),
-        ("linux", "aarch64") => Ok("ccsw-linux-arm64.tar.gz"),
-        ("windows", "x86_64") => Ok("ccsw-windows-x86_64.zip"),
-        _ => bail!("No CCSW release package for this operating system and architecture"),
+        ("macos", "aarch64") => Ok("mux-macos-arm64.tar.gz"),
+        ("linux", "x86_64") => Ok("mux-linux-x86_64.tar.gz"),
+        ("linux", "aarch64") => Ok("mux-linux-arm64.tar.gz"),
+        ("windows", "x86_64") => Ok("mux-windows-x86_64.zip"),
+        _ => bail!("No Mux release package for this operating system and architecture"),
     }
 }
 
@@ -52,7 +52,7 @@ fn release_version(release: &Release) -> Result<Version> {
 
 fn client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
-        .user_agent(format!("ccsw/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("mux/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
         .build()?)
 }
@@ -109,8 +109,8 @@ fn binary_from_archive(bytes: &[u8]) -> Result<Vec<u8>> {
     {
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
         let mut file = zip
-            .by_name("ccsw.exe")
-            .context("Release ZIP has no ccsw.exe")?;
+            .by_name("mux.exe")
+            .context("Release ZIP has no mux.exe")?;
         ensure!(
             file.is_file() && file.size() > 0 && file.size() <= MAX_BINARY,
             "Invalid release executable"
@@ -131,7 +131,7 @@ fn binary_from_archive(bytes: &[u8]) -> Result<Vec<u8>> {
         let mut binary = None;
         for entry in tar.entries()? {
             let mut entry = entry?;
-            if entry.path()?.as_ref() != Path::new("ccsw") {
+            if entry.path()?.as_ref() != Path::new("mux") {
                 continue;
             }
             ensure!(
@@ -152,7 +152,7 @@ fn binary_from_archive(bytes: &[u8]) -> Result<Vec<u8>> {
             );
             binary = Some(contents);
         }
-        binary.context("Release archive has no ccsw executable")
+        binary.context("Release archive has no mux executable")
     }
 }
 
@@ -165,15 +165,15 @@ fn install_binary(binary: &[u8]) -> Result<()> {
     ensure!(
         target
             .file_name()
-            .is_some_and(|name| name == "ccsw" || name == "ccsw.exe"),
-        "Run the installed ccsw binary to update it"
+            .is_some_and(|name| name == "mux" || name == "mux.exe"),
+        "Run the installed mux binary to update it"
     );
     let parent = target
         .parent()
         .context("Executable has no parent directory")?;
     ensure!(
         !parent.ends_with("target/release") && !parent.ends_with("target/debug"),
-        "This is a source build; use ccsw update --source <checkout>"
+        "This is a source build; use mux update --source <checkout>"
     );
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
     staged.write_all(binary)?;
@@ -185,13 +185,13 @@ fn install_binary(binary: &[u8]) -> Result<()> {
     {
         match staged.persist(&target) {
             Ok(_) => println!(
-                "Updated {}. Restart running CCSW windows and the proxy when idle.",
+                "Updated {}. Restart running Mux windows and the proxy when idle.",
                 target.display()
             ),
             Err(error) => {
                 let path = error.file.into_temp_path().keep()?;
                 println!(
-                    "Windows has locked the running executable. Verified update staged at {}. Close CCSW, replace {} with that file, then reopen.",
+                    "Windows has locked the running executable. Verified update staged at {}. Close Mux, replace {} with that file, then reopen.",
                     path.display(),
                     target.display()
                 );
@@ -203,7 +203,7 @@ fn install_binary(binary: &[u8]) -> Result<()> {
     {
         staged.persist(&target).map_err(|e| e.error)?;
         println!(
-            "Updated {}. Restart running CCSW windows and the proxy when idle.",
+            "Updated {}. Restart running Mux windows and the proxy when idle.",
             target.display()
         );
         Ok(())
@@ -218,7 +218,7 @@ fn command(source: &Path, program: &str, args: &[&str]) -> Result<()> {
         .with_context(|| format!("Cannot run {program}"))?;
     ensure!(
         status.success(),
-        "{program} failed; installed CCSW was not replaced"
+        "{program} failed; installed Mux was not replaced"
     );
     Ok(())
 }
@@ -231,8 +231,8 @@ fn update_source(source: &Path) -> Result<()> {
     let source = fs::canonicalize(source).context("Cannot find source checkout")?;
     let manifest: toml::Value = fs::read_to_string(source.join("herdr-plugin.toml"))?.parse()?;
     ensure!(
-        manifest.get("id").and_then(toml::Value::as_str) == Some("ccsw"),
-        "Not a CCSW Herdr checkout"
+        manifest.get("id").and_then(toml::Value::as_str) == Some("mux"),
+        "Not a Mux Herdr checkout"
     );
     let status = Command::new("git")
         .args(["status", "--porcelain", "--untracked-files=no"])
@@ -251,19 +251,19 @@ fn update_source(source: &Path) -> Result<()> {
             "--locked",
             "--release",
             "--bin",
-            "ccsw",
+            "mux",
             "--target-dir",
             "target",
         ],
     )?;
-    let status = Command::new(source.join("target/release/ccsw"))
+    let status = Command::new(source.join("target/release/mux"))
         .arg("herdr-install")
         .arg("--source")
         .arg(&source)
         .status()
-        .context("Cannot run updated CCSW installer")?;
-    ensure!(status.success(), "Updated CCSW plugin installer failed");
-    println!("Source checkout updated. Reopen existing CCSW panes to load the new version.");
+        .context("Cannot run updated Mux installer")?;
+    ensure!(status.success(), "Updated Mux plugin installer failed");
+    println!("Source checkout updated. Reopen existing Mux panes to load the new version.");
     Ok(())
 }
 
@@ -317,10 +317,10 @@ mod tests {
     fn release_asset_matches_target() {
         let name = asset_name().unwrap();
         match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "aarch64") => assert_eq!(name, "ccsw-linux-arm64.tar.gz"),
-            ("linux", "x86_64") => assert_eq!(name, "ccsw-linux-x86_64.tar.gz"),
-            ("macos", "aarch64") => assert_eq!(name, "ccsw-macos-arm64.tar.gz"),
-            ("windows", "x86_64") => assert_eq!(name, "ccsw-windows-x86_64.zip"),
+            ("linux", "aarch64") => assert_eq!(name, "mux-linux-arm64.tar.gz"),
+            ("linux", "x86_64") => assert_eq!(name, "mux-linux-x86_64.tar.gz"),
+            ("macos", "aarch64") => assert_eq!(name, "mux-macos-arm64.tar.gz"),
+            ("windows", "x86_64") => assert_eq!(name, "mux-windows-x86_64.zip"),
             _ => unreachable!(),
         }
     }
@@ -345,7 +345,7 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             archive
-                .append_data(&mut header, "ccsw", &b"binary"[..])
+                .append_data(&mut header, "mux", &b"binary"[..])
                 .unwrap();
             archive.into_inner().unwrap().finish().unwrap();
         }
@@ -362,7 +362,7 @@ mod tests {
             .unwrap();
         archive.write_all(b"readme").unwrap();
         archive
-            .start_file("ccsw.exe", zip::write::FileOptions::default())
+            .start_file("mux.exe", zip::write::FileOptions::default())
             .unwrap();
         archive.write_all(b"binary").unwrap();
         let bytes = archive.finish().unwrap().into_inner();

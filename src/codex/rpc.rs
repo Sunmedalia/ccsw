@@ -22,7 +22,7 @@ pub struct Client {
 impl Client {
     pub fn start(home: &Path) -> Result<Self> {
         let binary =
-            crate::platform::nonempty_env("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
+            crate::platform::nonempty_env("MUX_CODEX_BIN").unwrap_or_else(|| "codex".into());
         let binary = crate::platform::resolve_program(&binary)?;
         let doc: toml::Value = toml::from_str(&std::fs::read_to_string(home.join("config.toml"))?)?;
         if doc
@@ -44,7 +44,7 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = crate::managed_process::ManagedChild::spawn(&mut command)
-            .context("Cannot start Codex; install Codex CLI or set CCSW_CODEX_BIN")?;
+            .context("Cannot start Codex; install Codex CLI or set MUX_CODEX_BIN")?;
         let input = child.stdin.take().context("Codex stdin unavailable")?;
         let out = child.stdout.take().context("Codex stdout unavailable")?;
         let (sender, output) = mpsc::channel();
@@ -80,7 +80,7 @@ impl Client {
             sequence: 0,
             pending: vec![],
         };
-        client.call("initialize", json!({"clientInfo":{"name":"ccsw","title":"CCSW","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))?;
+        client.call("initialize", json!({"clientInfo":{"name":"mux","title":"Mux","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))?;
         client.send(json!({"method":"initialized"}))?;
         Ok(client)
     }

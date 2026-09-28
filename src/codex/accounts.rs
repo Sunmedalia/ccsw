@@ -355,14 +355,14 @@ pub fn activate_and_sync(paths: &AppPaths, id: &str) -> Result<&'static str> {
             "Saved on disk; this active Codex task prevents a safe background restart. Finish it, then run `codex app-server daemon restart`.",
         );
     }
-    if std::env::var_os("CCSW_MOCK_AUTH").is_some() {
+    if std::env::var_os("MUX_MOCK_AUTH").is_some() {
         return Ok("Account applied to the configured Codex home.");
     }
     let binary_name =
-        crate::platform::nonempty_env("CCSW_CODEX_BIN").unwrap_or_else(|| "codex".into());
+        crate::platform::nonempty_env("MUX_CODEX_BIN").unwrap_or_else(|| "codex".into());
     let binary = match crate::platform::resolve_program(&binary_name) {
         Ok(binary) => binary,
-        Err(_) if std::env::var_os("CCSW_CODEX_BIN").is_none() => {
+        Err(_) if std::env::var_os("MUX_CODEX_BIN").is_none() => {
             return Ok("Account saved on disk; install Codex CLI to start a session.");
         }
         Err(error) => return Err(error),
@@ -376,7 +376,7 @@ pub fn activate_and_sync(paths: &AppPaths, id: &str) -> Result<&'static str> {
         Ok(version) => version,
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
-                && std::env::var_os("CCSW_CODEX_BIN").is_none() =>
+                && std::env::var_os("MUX_CODEX_BIN").is_none() =>
         {
             return Ok("Account saved on disk; install Codex CLI to start a session.");
         }

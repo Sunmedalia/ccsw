@@ -2,7 +2,7 @@
 
 ## v0.1.10 原生 CI 补充（2026-09-16）
 
-[原生验证运行](https://github.com/Sunmedalia/ccsw/actions/runs/35046297299) 对应提交 `8700d5ed8edced0d6fb9c02c54bc5ccce98d5169`。Windows Server 2022 的 185 项测试全部通过（153 单元、11 Codex、5 隔离、5 Pi、3 卸载、8 Windows 集成），包括 junction、长路径、实际快捷方式、锁文件和进程树清理；真实 npm `.cmd` shim 也通过。Rust 1.88、macOS/Linux 测试、卸载安全套件及安全审计通过。原生 release 构建、PE 导入检查、ZIP 打包和解压后运行验证也通过。
+[原生验证运行](https://github.com/Sunmedalia/mux/actions/runs/35046297299) 对应提交 `8700d5ed8edced0d6fb9c02c54bc5ccce98d5169`。Windows Server 2022 的 185 项测试全部通过（153 单元、11 Codex、5 隔离、5 Pi、3 卸载、8 Windows 集成），包括 junction、长路径、实际快捷方式、锁文件和进程树清理；真实 npm `.cmd` shim 也通过。Rust 1.88、macOS/Linux 测试、卸载安全套件及安全审计通过。原生 release 构建、PE 导入检查、ZIP 打包和解压后运行验证也通过。
 
 本次原生验证发现并修复 Windows 强制字节范围锁导致的卸载读取失败，同时升级 rustls 至 0.23.45 以修复 RUSTSEC-2026-0285。Git 推送认证可用，GitHub CLI 可通过同一凭据访问 CI；下方初始记录中的认证和原生 CI 限制已解除。Windows 10/11 桌面交互、真实认证、注销登录自启动和实际 UNC 共享仍需桌面验收。
 
@@ -28,7 +28,7 @@ Wine 无法创建测试所需的 junction，故此环境排除该项；原生 Wi
 
 ## 构建产物
 
-`target/dist/ccsw-windows-x86_64.zip` 仅包含 `ccsw.exe`、`README-Windows.md` 和 `LICENSE`。
+`target/dist/mux-windows-x86_64.zip` 仅包含 `mux.exe`、`README-Windows.md` 和 `LICENSE`。
 同目录的 `.zip.sha256` 提供校验值。已检查 ZIP CRC 和解压后 EXE 与 release EXE 的 SHA-256 一致。
 此包在 macOS 使用 cargo-xwin 0.23.1、Rust 1.95.0 构建，目标为 `x86_64-pc-windows-msvc`。
 
@@ -42,7 +42,7 @@ cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets --all-featur
 cargo test --locked --target x86_64-pc-windows-msvc --all-targets --all-features
 cargo +1.88.0 check --locked --target x86_64-pc-windows-msvc --all-targets --all-features
 .\scripts\npm-shim-smoke.ps1
-cargo build --locked --release --target x86_64-pc-windows-msvc --bin ccsw
+cargo build --locked --release --target x86_64-pc-windows-msvc --bin mux
 .\scripts\package-windows.ps1
 ```
 

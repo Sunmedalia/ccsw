@@ -60,20 +60,20 @@ pub fn directories() -> Result<(PathBuf, PathBuf, PathBuf)> {
             }
         })
     };
-    // XDG variables designate the parent of ccsw, rather than the app directory.
+    // XDG variables designate the parent of mux, rather than the app directory.
     let xdg = |key, suffix, local| {
         if let Some(value) = nonempty_env(key) {
-            Ok(std::path::absolute(PathBuf::from(value).join("ccsw"))?)
+            Ok(std::path::absolute(PathBuf::from(value).join("mux"))?)
         } else {
             directory(key, suffix, local)
         }
     };
     #[cfg(windows)]
-    let defaults = ("ccsw", "ccsw/state", "ccsw/cache");
+    let defaults = ("mux", "mux/state", "mux/cache");
     #[cfg(not(windows))]
-    let defaults = (".config/ccsw", ".local/state/ccsw", ".cache/ccsw");
+    let defaults = (".config/mux", ".local/state/mux", ".cache/mux");
     // A full config override does not require a default config directory.
-    let config = if let Some(value) = nonempty_env("CCSW_CONFIG") {
+    let config = if let Some(value) = nonempty_env("MUX_CONFIG") {
         std::path::absolute(value)?
             .parent()
             .context("config has no parent")?

@@ -18,7 +18,7 @@ pub(super) const RED: Color = Color::Rgb(236, 139, 131);
 pub(super) const GREEN: Color = Color::Rgb(147, 204, 178);
 pub(super) const METRIC: Color = Color::Rgb(1, 3, 1);
 pub(super) const RAIL: Color = Color::Rgb(48, 67, 84);
-const LABEL: &str = "CCSW Pulse";
+const LABEL: &str = "Mux Pulse";
 mod accounts;
 #[cfg(test)]
 use super::meters::digits;
@@ -1068,7 +1068,7 @@ impl Monitor {
             }
             if self.refreshed.is_some() && metrics(&self.snapshot, Some("Grok")).total.calls == 0 {
                 out.push(line(
-                    "Use a CCSW API model via /model to record Gateway usage",
+                    "Use a Mux API model via /model to record Gateway usage",
                     SOFT,
                 ));
             }
@@ -1141,7 +1141,7 @@ impl Monitor {
             }
             if totals.calls == 0 {
                 out.push(line("○ No gateway traffic", SOFT));
-                out.push(line("Select a CCSW API model with /model", SOFT));
+                out.push(line("Select a Mux API model with /model", SOFT));
             }
         } else {
             out.push(line("◌ Loading gateway…", SOFT));
@@ -2057,7 +2057,7 @@ impl Monitor {
                 line("for the focused agent pane.", INK),
                 Line::default(),
                 line("Today's gateway totals: only", SOFT),
-                line("this CCSW config's traffic.", SOFT),
+                line("this Mux config's traffic.", SOFT),
                 line("Direct API and subscription", SOFT),
                 line("traffic aren't in that total.", SOFT),
                 Line::default(),
@@ -2568,7 +2568,7 @@ impl Monitor {
         self.roomy_visual = area.height >= 32;
         let inner = area.inner(Margin::new(2, 0));
         let title = if self.help {
-            "◈ CCSW / HELP"
+            "◈ Mux / HELP"
         } else if self.sessions_mode {
             "◈ SESSIONS / ALL TIME"
         } else if self.chart_mode {
@@ -2832,7 +2832,7 @@ fn follow_focus_events(
     let path = std::env::var_os("HERDR_SOCKET_PATH").context("Herdr socket unavailable")?;
     let mut socket = focus_event_socket(std::path::Path::new(&path))?;
     let request = serde_json::json!({
-        "id": "ccsw_focus",
+        "id": "mux_focus",
         "method": "events.subscribe",
         "params": {"subscriptions": [
             {"type": "pane.focused"},
@@ -2885,7 +2885,7 @@ fn follow_focus_events(
 }
 
 pub(super) fn run(paths: AppPaths) -> Result<()> {
-    let initial = initial_client(std::env::var("CCSW_MONITOR_CLIENT").ok().as_deref());
+    let initial = initial_client(std::env::var("MUX_MONITOR_CLIENT").ok().as_deref());
     let (account_send, account_updates) = mpsc::sync_channel(1);
     let (account_refresh, account_requests) = mpsc::sync_channel(1);
     accounts::spawn(paths.clone(), account_send, account_requests, initial);
@@ -2893,11 +2893,11 @@ pub(super) fn run(paths: AppPaths) -> Result<()> {
     let (refresh, requests) = mpsc::sync_channel(1);
     let (session_send, session_updates) = mpsc::sync_channel(1);
     let (session_refresh, session_requests) = mpsc::sync_channel(1);
-    let source_pane = std::env::var("CCSW_MONITOR_SOURCE_PANE")
+    let source_pane = std::env::var("MUX_MONITOR_SOURCE_PANE")
         .ok()
         .filter(|id| !id.is_empty());
-    let workspace = std::env::var("CCSW_MONITOR_WORKSPACE").ok();
-    let tab = std::env::var("CCSW_MONITOR_TAB").ok();
+    let workspace = std::env::var("MUX_MONITOR_WORKSPACE").ok();
+    let tab = std::env::var("MUX_MONITOR_TAB").ok();
     let theme_paths = paths.clone();
     let (active_send, active_updates) = mpsc::sync_channel(1);
     if let Some(source) = source_pane.clone() {
@@ -3238,13 +3238,13 @@ pub(super) fn open_pane() -> Result<()> {
     let pane = &current["result"]["pane"];
     // Capture the invoking agent before creating the new, agent-free monitor pane.
     let client = ["claude", "codex", "grok", "all"][initial_client(pane["agent"].as_str())];
-    let client_env = format!("CCSW_MONITOR_CLIENT={client}");
+    let client_env = format!("MUX_MONITOR_CLIENT={client}");
     let workspace = pane["workspace_id"].as_str().context("Missing workspace")?;
     let tab = pane["tab_id"].as_str().context("Missing tab")?;
     let target = pane["pane_id"].as_str().context("Missing calling pane")?;
-    let source_env = format!("CCSW_MONITOR_SOURCE_PANE={target}");
-    let workspace_env = format!("CCSW_MONITOR_WORKSPACE={workspace}");
-    let tab_env = format!("CCSW_MONITOR_TAB={tab}");
+    let source_env = format!("MUX_MONITOR_SOURCE_PANE={target}");
+    let workspace_env = format!("MUX_MONITOR_WORKSPACE={workspace}");
+    let tab_env = format!("MUX_MONITOR_TAB={tab}");
     let list = herdr(&["pane", "list", "--workspace", workspace])?;
     if let Some(existing) = list["result"]["panes"].as_array().and_then(|panes| {
         panes
@@ -3256,13 +3256,13 @@ pub(super) fn open_pane() -> Result<()> {
             .context("Missing monitor pane")?;
         let process = herdr(&["pane", "process-info", "--pane", id])?;
         let binary = std::env::current_exe()?;
-        let plugin = herdr(&["plugin", "list", "--plugin", "ccsw", "--json"])?;
+        let plugin = herdr(&["plugin", "list", "--plugin", "mux", "--json"])?;
         let linked_binary = plugin["result"]["plugins"]
             .as_array()
             .and_then(|plugins| plugins.first())
             .and_then(|plugin| plugin["plugin_root"].as_str())
             .and_then(|root| {
-                std::fs::canonicalize(std::path::Path::new(root).join("target/release/ccsw")).ok()
+                std::fs::canonicalize(std::path::Path::new(root).join("target/release/mux")).ok()
             });
         let is_monitor = process["result"]["process_info"]["foreground_processes"]
             .as_array()
@@ -3292,7 +3292,7 @@ pub(super) fn open_pane() -> Result<()> {
             });
         anyhow::ensure!(
             is_monitor,
-            "The pane named CCSW Pulse is no longer running the monitor; leave it open"
+            "The pane named Mux Pulse is no longer running the monitor; leave it open"
         );
         return herdr(&["pane", "close", id]).map(|_| ());
     }
@@ -3307,7 +3307,7 @@ pub(super) fn open_pane() -> Result<()> {
         "pane",
         "open",
         "--plugin",
-        "ccsw",
+        "mux",
         "--entrypoint",
         "quick",
         "--placement",
@@ -3352,7 +3352,7 @@ pub(super) fn open_pane() -> Result<()> {
 fn open_editor() -> Result<()> {
     anyhow::ensure!(
         std::env::var("HERDR_ENV").as_deref() == Ok("1"),
-        "Edit requires Herdr; run ccsw in another terminal"
+        "Edit requires Herdr; run mux in another terminal"
     );
     let workspace = std::env::var("HERDR_WORKSPACE_ID").context("Missing Herdr workspace")?;
     let opened = herdr(&[
@@ -3360,7 +3360,7 @@ fn open_editor() -> Result<()> {
         "pane",
         "open",
         "--plugin",
-        "ccsw",
+        "mux",
         "--entrypoint",
         "editor",
         "--placement",
@@ -4594,7 +4594,7 @@ mod account_page_tests {
                         "Account: Personal".into(),
                         "Email: codex@example.com".into(),
                         "Plan: plus".into(),
-                        "State: Applied by CCSW".into(),
+                        "State: Applied by Mux".into(),
                     ],
                     card: Some(accounts::Card {
                         name: "Personal".into(),

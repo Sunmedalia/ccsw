@@ -32,7 +32,7 @@ pub fn isolate(command: &mut Command, root: &Path) {
         "HOMEPATH",
         "APPDATA",
         "LOCALAPPDATA",
-        "CCSW_CONFIG",
+        "MUX_CONFIG",
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
         "GROK_HOME",
@@ -40,8 +40,8 @@ pub fn isolate(command: &mut Command, root: &Path) {
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
         "XDG_CACHE_HOME",
-        "CCSW_CODEX_BIN",
-        "CCSW_CLAUDE_BIN",
+        "MUX_CODEX_BIN",
+        "MUX_CLAUDE_BIN",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
@@ -63,7 +63,7 @@ pub fn isolate(command: &mut Command, root: &Path) {
         .env("USERPROFILE", root)
         .env("APPDATA", root.join("roaming"))
         .env("LOCALAPPDATA", root.join("local"))
-        .env("CCSW_CONFIG", root.join("config.toml"))
+        .env("MUX_CONFIG", root.join("config.toml"))
         .env("XDG_CONFIG_HOME", root.join("config-root"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CACHE_HOME", root.join("cache"))
@@ -77,7 +77,7 @@ pub fn isolate(command: &mut Command, root: &Path) {
 }
 
 pub fn command(root: &Path) -> Command {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin("ccsw"));
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin("mux"));
     isolate(&mut command, root);
     command
 }

@@ -1,4 +1,4 @@
-"""Exercise the real TUI in a Linux PTY, using an isolated copy of current CCSW config."""
+"""Exercise the real TUI in a Linux PTY, using an isolated copy of current Mux config."""
 import fcntl
 import os
 from pathlib import Path
@@ -11,13 +11,13 @@ import tempfile
 import termios
 import time
 
-with tempfile.TemporaryDirectory(prefix='ccsw-pi-tui-') as directory:
+with tempfile.TemporaryDirectory(prefix='mux-pi-tui-') as directory:
     root=Path(directory)
-    shutil.copyfile(Path(os.environ['CCSW_TEST_INPUT'])/'ccsw.toml',root/'config.toml')
-    env=dict(os.environ,HOME=directory,TERM='xterm-256color',CCSW_CONFIG=str(root/'config.toml'),PI_CODING_AGENT_DIR=str(root/'pi'),CODEX_HOME=str(root/'codex'),XDG_STATE_HOME=str(root/'state'),XDG_CACHE_HOME=str(root/'cache'),CLAUDE_CONFIG_DIR=str(root/'claude'))
+    shutil.copyfile(Path(os.environ['MUX_TEST_INPUT'])/'mux.toml',root/'config.toml')
+    env=dict(os.environ,HOME=directory,TERM='xterm-256color',MUX_CONFIG=str(root/'config.toml'),PI_CODING_AGENT_DIR=str(root/'pi'),CODEX_HOME=str(root/'codex'),XDG_STATE_HOME=str(root/'state'),XDG_CACHE_HOME=str(root/'cache'),CLAUDE_CONFIG_DIR=str(root/'claude'))
     master,slave=pty.openpty()
     fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',36,120,0,0))
-    process=subprocess.Popen([os.environ['CCSW_TEST_BINARY']],env=env,stdin=slave,stdout=slave,stderr=slave)
+    process=subprocess.Popen([os.environ['MUX_TEST_BINARY']],env=env,stdin=slave,stdout=slave,stderr=slave)
     os.close(slave)
     def read():
         data=b'';end=time.monotonic()+0.5
@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-tui-') as directory:
         return data.decode(errors='replace')
     def key(value):os.write(master,value);return read()
     try:
-        assert 'CCSW' in read()
+        assert 'Mux' in read()
         assert 'Codex API' in key(b'\x1bOQ')
         assert 'Accounts' in key(b'\x1bOR')
         assert 'Pi API' in key(b'\x1b[<0;30;1M')

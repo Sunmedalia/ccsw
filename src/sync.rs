@@ -449,7 +449,7 @@ default_model = "model-z"
                                     Ok(count) => request.extend_from_slice(&chunk[..count]),
                                 }
                             }
-                            let body = json!({"name":"ccsw-proxy", "config_version":config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true}).to_string();
+                            let body = json!({"name":"mux-proxy", "config_version":config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true}).to_string();
                             let _ = write!(
                                 stream,
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -661,7 +661,7 @@ default_model = "model-z"
         assert_eq!(fixture.value()["env"]["KEEP_ME"], "yes");
         assert_eq!(
             fixture.value()["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-            "ccsw-role::haiku"
+            "mux-role::haiku"
         );
         assert!(
             !fs::read_to_string(settings)
@@ -761,7 +761,7 @@ default_model = "model-z"
                 .enabled_models
                 .push("model-c".into())
         });
-        let backup = fixture.settings.with_extension("json.ccsw-backup");
+        let backup = fixture.settings.with_extension("json.mux-backup");
         fs::remove_file(&backup).unwrap();
         fs::create_dir(&backup).unwrap();
         assert!(apply(&fixture.paths, &fixture.settings, None, false).is_err());

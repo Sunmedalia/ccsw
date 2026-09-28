@@ -70,7 +70,7 @@ pub fn spawn_background(command: &mut Command) -> Result<std::process::Child> {
 
 pub fn startup_path() -> Result<PathBuf> {
     Ok(crate::platform::appdata(false)?
-        .join("Microsoft/Windows/Start Menu/Programs/Startup/CCSW Proxy.lnk"))
+        .join("Microsoft/Windows/Start Menu/Programs/Startup/Mux Proxy.lnk"))
 }
 
 // Each operation initializes COM on its calling thread, then releases interfaces
@@ -135,7 +135,7 @@ fn parse_registry(arguments: &OsStr) -> Result<PathBuf> {
         Foundation::{HLOCAL, LocalFree},
         UI::Shell::CommandLineToArgvW,
     };
-    let mut command = OsString::from("ccsw.exe ");
+    let mut command = OsString::from("mux.exe ");
     command.push(arguments);
     let command = wide(&command);
     let mut count = 0;
@@ -157,7 +157,7 @@ fn parse_registry(arguments: &OsStr) -> Result<PathBuf> {
         || values[2] != "proxy-start"
         || values[3] != "--registry"
     {
-        anyhow::bail!("invalid CCSW startup shortcut arguments");
+        anyhow::bail!("invalid Mux startup shortcut arguments");
     }
     let path = PathBuf::from(&values[4]);
     if !path.is_absolute() || path.file_name().is_none_or(|name| name != "proxy.json") {
@@ -212,7 +212,7 @@ fn owned_registry(path: &Path, executable: &Path) -> Result<PathBuf> {
     let (target, args) = read_shortcut(path)?;
     if !crate::platform::same_path(&target, executable)? {
         anyhow::bail!(
-            "startup shortcut targets another executable; remove it using the original CCSW installation"
+            "startup shortcut targets another executable; remove it using the original Mux installation"
         );
     }
     parse_registry(&args)
@@ -225,7 +225,7 @@ pub fn install(executable: &Path, registry: &Path) -> Result<PathBuf> {
     if path.exists()
         && !crate::platform::same_path(&owned_registry(&path, &executable)?, &registry)?
     {
-        anyhow::bail!("startup belongs to another CCSW configuration");
+        anyhow::bail!("startup belongs to another Mux configuration");
     }
     fs::create_dir_all(path.parent().context("startup has no parent")?)?;
     let temporary = tempfile::Builder::new()
@@ -249,7 +249,7 @@ pub fn uninstall() -> Result<Option<PathBuf>> {
     let registry = startup_registry(&path)?;
     let paths = crate::config::AppPaths::discover()?;
     if !crate::platform::same_path(&registry, &paths.state_dir.join("proxy.json"))? {
-        anyhow::bail!("startup belongs to another CCSW configuration");
+        anyhow::bail!("startup belongs to another Mux configuration");
     }
     if crate::proxy::status(&paths)?.running {
         crate::proxy::stop(&paths)?;

@@ -3,7 +3,7 @@ use std::{fs, process::Command};
 
 #[test]
 fn cli_exposes_configuration_commands_without_a_claude_launcher() {
-    let binary = assert_cmd::cargo::cargo_bin("ccsw");
+    let binary = assert_cmd::cargo::cargo_bin("mux");
     let output = Command::new(&binary).arg("--help").output().unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
@@ -57,11 +57,11 @@ value = "anthropic-upstream-secret"
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let listen = listener.local_addr().unwrap().to_string();
     drop(listener);
-    let binary = assert_cmd::cargo::cargo_bin("ccsw");
+    let binary = assert_cmd::cargo::cargo_bin("mux");
     let common = |command: &mut Command| {
         support::isolate(command, temp.path());
         command
-            .env("CCSW_CONFIG", &config)
+            .env("MUX_CONFIG", &config)
             .env("HOME", temp.path())
             .env("USERPROFILE", temp.path())
             .env("XDG_STATE_HOME", temp.path().join("state"))
@@ -120,7 +120,7 @@ fn separate_user_state_can_use_distinct_ports_without_stopping_each_other() {
                 .args(args)
                 .env("HOME", self.root.path())
                 .env("USERPROFILE", self.root.path())
-                .env("CCSW_CONFIG", self.root.path().join("config.toml"))
+                .env("MUX_CONFIG", self.root.path().join("config.toml"))
                 .env("XDG_STATE_HOME", self.root.path().join("state"))
                 .env("XDG_CACHE_HOME", self.root.path().join("cache"))
                 .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
@@ -185,7 +185,7 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
         let mut cmd = support::command(&root);
         cmd.args(args)
             .env_remove("HOME")
-            .env_remove("CCSW_CONFIG")
+            .env_remove("MUX_CONFIG")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_STATE_HOME")
             .env_remove("XDG_CACHE_HOME")
@@ -199,7 +199,7 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
     assert!(config.status.success());
     assert_eq!(
         std::path::Path::new(String::from_utf8(config.stdout).unwrap().trim()),
-        root.join("roaming/ccsw/config.toml")
+        root.join("roaming/mux/config.toml")
     );
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = socket.local_addr().unwrap().port().to_string();
@@ -211,7 +211,7 @@ fn windows_defaults_without_home_and_authenticated_shutdown() {
             .status
             .success()
     );
-    let registry = root.join("local/ccsw/state/proxy.json");
+    let registry = root.join("local/mux/state/proxy.json");
     // The same entry point used by the login shortcut must outlive its launcher.
     let started = command(&[
         "internal",
@@ -253,7 +253,7 @@ fn windows_login_install_and_uninstall_use_isolated_startup_directory() {
             .env("USERPROFILE", root.path())
             .env("APPDATA", root.path().join("roaming"))
             .env("LOCALAPPDATA", root.path().join("local"))
-            .env("CCSW_CONFIG", root.path().join("config.toml"))
+            .env("MUX_CONFIG", root.path().join("config.toml"))
             .env("XDG_STATE_HOME", root.path().join("custom 用户 state"))
             .output()
             .unwrap()
@@ -270,7 +270,7 @@ fn windows_login_install_and_uninstall_use_isolated_startup_directory() {
     );
     let shortcut = root
         .path()
-        .join("roaming/Microsoft/Windows/Start Menu/Programs/Startup/CCSW Proxy.lnk");
+        .join("roaming/Microsoft/Windows/Start Menu/Programs/Startup/Mux Proxy.lnk");
     assert!(shortcut.exists());
     assert!(command(&["proxy", "stop"]).status.success());
     // Launch the actual link from the test process, which does NOT carry the

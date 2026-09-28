@@ -1,4 +1,4 @@
-"""Test read-only /input/{ccsw.toml,codex.toml,auth.json} copies.
+"""Test read-only /input/{mux.toml,codex.toml,auth.json} copies.
 Run with --offline and Docker --network none for subscription snapshot checks.
 Live mode sends one small Responses request per configured provider. Never prints credentials.
 """
@@ -19,24 +19,24 @@ OFFLINE = '--offline' in sys.argv
 failures = 0
 sources = [p for p in Path('/input').iterdir() if p.is_file()]
 before = {p: hashlib.sha256(p.read_bytes()).digest() for p in sources}
-with tempfile.TemporaryDirectory(prefix='ccsw-current-') as directory:
+with tempfile.TemporaryDirectory(prefix='mux-current-') as directory:
     root = Path(directory)
     (root / 'codex').mkdir(mode=0o700)
     original = Path('/input/codex.toml').read_bytes()
     (root / 'codex/config.toml').write_bytes(original)
-    config = Path('/input/ccsw.toml').read_text()
+    config = Path('/input/mux.toml').read_text()
     if not OFFLINE:
         config = config.replace('127.0.0.1:20128', 'host.docker.internal:20128')
     (root / 'config.toml').write_text(config)
     profiles = tomllib.loads(config)['profiles']
     env = dict(os.environ, HOME=directory, USERPROFILE=directory,
-               CODEX_HOME=str(root / 'codex'), CCSW_CONFIG=str(root / 'config.toml'),
+               CODEX_HOME=str(root / 'codex'), MUX_CONFIG=str(root / 'config.toml'),
                XDG_STATE_HOME=str(root / 'state'), XDG_CACHE_HOME=str(root / 'cache'),
                CLAUDE_CONFIG_DIR=str(root / 'claude'))
     for name in ['OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_AUTH']:
         env.pop(name, None)
     def run(*args):
-        result = subprocess.run(['/usr/local/bin/ccsw-test', *args], env=env,
+        result = subprocess.run(['/usr/local/bin/mux-test', *args], env=env,
                                 capture_output=True, text=True, timeout=25)
         if result.returncode:
             raise RuntimeError('Command failed: ' + ' '.join(args[:3]))
@@ -63,9 +63,9 @@ with tempfile.TemporaryDirectory(prefix='ccsw-current-') as directory:
                 continue
             run('codex', 'apply', '--profile', name)
             applied = tomllib.loads((root / 'codex/config.toml').read_text())
-            assert applied['model_provider'] == 'ccsw'
+            assert applied['model_provider'] == 'mux'
             assert not applied['model'].endswith('[1m]')
-            provider = applied['model_providers']['ccsw']
+            provider = applied['model_providers']['mux']
             if OFFLINE:
                 run('codex', 'accounts', 'use', account)
                 assert json.loads((root / 'codex/auth.json').read_bytes()) == json.loads(auth)

@@ -1,5 +1,5 @@
-id = "ccsw"
-name = "CCSW Pulse"
+id = "mux"
+name = "Mux Pulse"
 version = "0.1.18"
 description = "Persistent side-pane monitor for Claude, Codex accounts and Grok usage"
 min_herdr_version = "0.7.0"
@@ -10,17 +10,17 @@ command = ["bash", "scripts/download-herdr-binary.sh"]
 
 [[panes]]
 id = "quick"
-title = "CCSW Pulse"
+title = "Mux Pulse"
 placement = "split"
-command = ["./target/release/ccsw", "quick"]
+command = ["./target/release/mux", "quick"]
 
 [[panes]]
 id = "editor"
-title = "CCSW"
+title = "Mux"
 placement = "tab"
-command = ["./target/release/ccsw"]
+command = ["./target/release/mux"]
 
 [[actions]]
 id = "open"
-title = "Toggle CCSW Pulse at the right edge"
-command = ["./target/release/ccsw", "quick", "--open"]
+title = "Toggle Mux Pulse at the right edge"
+command = ["./target/release/mux", "quick", "--open"]

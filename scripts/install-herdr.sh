@@ -17,10 +17,10 @@ for program in cargo herdr; do
     fi
 done
 
-ccsw_source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-echo "正在构建 CCSW：$ccsw_source_dir"
+mux_source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+echo "正在构建 Mux：$mux_source_dir"
 # Herdr's manifest uses this exact target path even with a custom Cargo target dir.
-cargo build --locked --release --bin ccsw \
-    --manifest-path "$ccsw_source_dir/Cargo.toml" \
-    --target-dir "$ccsw_source_dir/target"
-"$ccsw_source_dir/target/release/ccsw" herdr-install --source "$ccsw_source_dir" "$@"
+cargo build --locked --release --bin mux \
+    --manifest-path "$mux_source_dir/Cargo.toml" \
+    --target-dir "$mux_source_dir/target"
+"$mux_source_dir/target/release/mux" herdr-install --source "$mux_source_dir" "$@"

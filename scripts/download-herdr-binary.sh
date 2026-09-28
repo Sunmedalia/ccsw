@@ -24,15 +24,15 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     echo '需要 sha256sum 或 shasum 校验发布包。' >&2; exit 1
 fi
-asset="ccsw-$platform.tar.gz"
-base="https://github.com/Sunmedalia/ccsw/releases/download/v$version"
+asset="mux-$platform.tar.gz"
+base="https://github.com/Sunmedalia/mux/releases/download/v$version"
 work="$(mktemp -d)"
 staged=''
 trap 'rm -rf "$work"; if [[ -n "$staged" ]]; then rm -f "$staged"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-echo "下载 CCSW v$version ($platform)"
+echo "下载 Mux v$version ($platform)"
 if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/archive"; then
     echo "无法下载 $asset，请确认 v$version Release 已发布对应二进制。" >&2; exit 1
 fi
@@ -43,25 +43,25 @@ actual="$("${checksum[@]}" "$work/archive")"
 actual="${actual%% *}"
 [[ "$actual" == "$expected" ]] || { echo 'SHA-256 校验失败，未安装。' >&2; exit 1; }
 # Stream only this entry; never extract archive paths or symlinks.
-tar -xzOf "$work/archive" ccsw > "$work/ccsw"
-[[ -s "$work/ccsw" ]] || { echo '发布包中的程序为空。' >&2; exit 1; }
-chmod 755 "$work/ccsw"
-[[ "$("$work/ccsw" --version)" == "ccsw $version" ]] || {
+tar -xzOf "$work/archive" mux > "$work/mux"
+[[ -s "$work/mux" ]] || { echo '发布包中的程序为空。' >&2; exit 1; }
+chmod 755 "$work/mux"
+[[ "$("$work/mux" --version)" == "mux $version" ]] || {
     echo '二进制版本与插件清单不一致，未安装。' >&2; exit 1;
 }
 destination="$root/target/release"
 mkdir -p "$destination"
-[[ ! -L "$destination/ccsw" && ! -d "$destination/ccsw" ]] || {
+[[ ! -L "$destination/mux" && ! -d "$destination/mux" ]] || {
     echo '插件程序路径是链接或目录，请先手动处理。' >&2; exit 1;
 }
-staged="$(mktemp "$destination/.ccsw-download.XXXXXX")"
-cp "$work/ccsw" "$staged"
+staged="$(mktemp "$destination/.mux-download.XXXXXX")"
+cp "$work/mux" "$staged"
 chmod 755 "$staged"
-mv -f "$staged" "$destination/ccsw"
+mv -f "$staged" "$destination/mux"
 staged=''
-echo "已准备插件程序: $destination/ccsw"
+echo "已准备插件程序: $destination/mux"
 # Releases from before automatic binding do not have this subcommand. Keep
 # their installation working; the next release will configure the key here.
-if ! "$destination/ccsw" herdr-bind; then
-    echo '此发布版未能自动配置快捷键；可手动绑定 ccsw.open。' >&2
+if ! "$destination/mux" herdr-bind; then
+    echo '此发布版未能自动配置快捷键；可手动绑定 mux.open。' >&2
 fi

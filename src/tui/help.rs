@@ -397,7 +397,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
         HelpSection::Pulse => &[
             (
                 "Pulse",
-                "Standalone monitor (ccsw pulse), separate from Usage",
+                "Standalone monitor (mux pulse), separate from Usage",
             ),
             ("q / Ctrl+C", "Quit monitor"),
             ("?", "Toggle monitor help"),
@@ -685,11 +685,6 @@ fn help_tab_lines(active: HelpSection, width: u16) -> Vec<Line<'static>> {
     }
     rows.push(Line::from(spans));
     rows
-}
-
-#[cfg(test)]
-pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static>> {
-    format_help_rows(section, help_commands(section), wide)
 }
 
 fn format_help_rows(section: HelpSection, rows: &[(&str, &str)], wide: bool) -> Vec<Line<'static>> {

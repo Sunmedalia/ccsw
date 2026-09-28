@@ -1,6 +1,6 @@
 {
-  "name": "ccsw-launcher-fixture",
+  "name": "mux-launcher-fixture",
   "version": "1.0.0",
   "private": true,
-  "bin": { "ccsw-fixture-claude": "cli.js" }
+  "bin": { "mux-fixture-claude": "cli.js" }
 }

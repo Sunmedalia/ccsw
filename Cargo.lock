@@ -280,7 +280,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccsw"
+name = "mux"
 version = "0.1.18"
 dependencies = [
  "anyhow",

@@ -1478,7 +1478,7 @@ pub(super) fn draw_proxy_manager(
         Span::styled(client, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled("  ──▶  ", Style::default().fg(MUTED)),
         Span::styled(
-            format!("CCSW proxy {}", if running { '●' } else { '○' }),
+            format!("Mux proxy {}", if running { '●' } else { '○' }),
             Style::default()
                 .fg(runtime_color)
                 .add_modifier(Modifier::BOLD),

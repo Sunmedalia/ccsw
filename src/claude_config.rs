@@ -73,7 +73,7 @@ fn apply_expected(
         .parent()
         .context("Claude settings path has no parent")?;
     fs::create_dir_all(parent)?;
-    let lock_path = path.with_extension("json.ccsw.lock");
+    let lock_path = path.with_extension("json.mux.lock");
     let lock = OpenOptions::new()
         .create(true)
         .read(true)
@@ -175,7 +175,7 @@ fn apply_expected(
         "previous_preferences": crate::claude_preferences::from_snapshot(previous)}),
     )?;
     let backup = if path.exists() {
-        let backup = path.with_extension("json.ccsw-backup");
+        let backup = path.with_extension("json.mux-backup");
         fs::copy(path, &backup)?;
         set_private(&backup)?;
         Some(backup)
@@ -286,7 +286,7 @@ pub fn clear_expected(path: &Path, expected: Option<&Value>) -> Result<ApplyResu
         .parent()
         .context("Claude settings path has no parent")?;
     fs::create_dir_all(parent)?;
-    let lock_path = path.with_extension("json.ccsw.lock");
+    let lock_path = path.with_extension("json.mux.lock");
     let lock = OpenOptions::new()
         .create(true)
         .read(true)
@@ -313,7 +313,7 @@ pub fn clear_expected(path: &Path, expected: Option<&Value>) -> Result<ApplyResu
     root.remove("modelPicker");
 
     let backup = if path.exists() {
-        let backup = path.with_extension("json.ccsw-backup");
+        let backup = path.with_extension("json.mux-backup");
         fs::copy(path, &backup)?;
         set_private(&backup)?;
         Some(backup)
@@ -385,7 +385,7 @@ fn model_picker_row(model: &ModelEntry) -> Value {
 }
 
 fn preferences_journal(path: &Path) -> std::path::PathBuf {
-    path.with_extension("json.ccsw-preferences-journal")
+    path.with_extension("json.mux-preferences-journal")
 }
 fn write_preferences_journal(path: &Path, snapshot: &Value) -> Result<()> {
     let mut temp = NamedTempFile::new_in(path.parent().context("missing settings parent")?)?;
@@ -453,7 +453,7 @@ pub(crate) fn disconnect_owned(path: &Path, snapshot: &Value) -> Result<Vec<Stri
         .truncate(false)
         .read(true)
         .write(true)
-        .open(path.with_extension("json.ccsw.lock"))?;
+        .open(path.with_extension("json.mux.lock"))?;
     lock.lock_exclusive()?;
     let mut document: Value = serde_json::from_slice(&fs::read(path)?)?;
     if document["env"].get("ANTHROPIC_BASE_URL").is_some()
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn detach_preserves_changes_and_distinguishes_absent_from_null() {
-        let mut value = json!({"model":"ccsw-model","modelPicker":{"options":[]},"env":{"ANTHROPIC_BASE_URL":"http://localhost","ANTHROPIC_AUTH_TOKEN":"secret","ANTHROPIC_MODEL":null,"KEEP":"yes"}});
+        let mut value = json!({"model":"mux-model","modelPicker":{"options":[]},"env":{"ANTHROPIC_BASE_URL":"http://localhost","ANTHROPIC_AUTH_TOKEN":"secret","ANTHROPIC_MODEL":null,"KEEP":"yes"}});
         let saved = managed_snapshot(&value);
         value["model"] = json!("custom");
         value["env"]

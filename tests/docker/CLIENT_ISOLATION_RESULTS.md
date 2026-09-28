@@ -12,11 +12,11 @@
 
 ## 自定义模型元数据
 
-CCSW 为应用的厂商生成 `model_catalog_json`，登记 `deepseek-v4-flash` 等实际模型 ID。CLI 接受该目录，三种 API 协议的真实 Codex 进程测试均不再出现 `Model metadata for ... not found`。测试包含固定临时文件读取、修改、验证和最终响应。订阅切换及断开操作恢复原目录设置。
+Mux 为应用的厂商生成 `model_catalog_json`，登记 `deepseek-v4-flash` 等实际模型 ID。CLI 接受该目录，三种 API 协议的真实 Codex 进程测试均不再出现 `Model metadata for ... not found`。测试包含固定临时文件读取、修改、验证和最终响应。订阅切换及断开操作恢复原目录设置。
 
 参考：[OpenAI 官方配置说明](https://learn.chatgpt.com/docs/config-file/config-reference)。未指定上下文时暂用 128K，显式上下文优先，`[1m]` 为 1M；模型目录默认只声明文本及基本工具能力。
 
-macOS 使用 `workspace-write` 沙箱。Debian 容器因不允许创建嵌套用户命名空间，内层 Codex 沙箱拒绝执行命令；隔离测试中设置 `CCSW_SMOKE_SANDBOX=danger-full-access` 后验证固定的临时文件操作。未修改宿主机或日常 Codex 沙箱设置。
+macOS 使用 `workspace-write` 沙箱。Debian 容器因不允许创建嵌套用户命名空间，内层 Codex 沙箱拒绝执行命令；隔离测试中设置 `MUX_SMOKE_SANDBOX=danger-full-access` 后验证固定的临时文件操作。未修改宿主机或日常 Codex 沙箱设置。
 
 ## 本地真实订阅副本
 
@@ -33,4 +33,4 @@ macOS 使用 `workspace-write` 沙箱。Debian 容器因不允许创建嵌套用
 
 macOS / Debian：138 项 Rust 测试通过；macOS 格式与 Clippy 全 targets/features 检查通过；Debian 33 项卸载安全测试通过。
 
-复用脚本：`tests/docker/client_tabs_isolation.py`、`tests/docker/codex_current_login.py`、`tests/fixtures/codex_cli_smoke.py`。账号脚本通过 `CCSW_TEST_INPUT` 指定私有副本目录，`CCSW_TEST_BINARY` 指定测试二进制，不打印令牌、邮箱、账号 ID 或额度详情。
+复用脚本：`tests/docker/client_tabs_isolation.py`、`tests/docker/codex_current_login.py`、`tests/fixtures/codex_cli_smoke.py`。账号脚本通过 `MUX_TEST_INPUT` 指定私有副本目录，`MUX_TEST_BINARY` 指定测试二进制，不打印令牌、邮箱、账号 ID 或额度详情。

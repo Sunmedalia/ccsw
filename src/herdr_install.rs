@@ -18,7 +18,7 @@ fn shortcut(text: &str, key: &str) -> Result<(String, String)> {
         // Preserve an existing user-selected shortcut for this plugin.
         if let Some(existing) = commands.iter().find(|t| {
             t.get("type").and_then(Item::as_str) == Some("plugin_action")
-                && t.get("command").and_then(Item::as_str) == Some("ccsw.open")
+                && t.get("command").and_then(Item::as_str) == Some("mux.open")
                 && t.get("key").and_then(Item::as_str).is_some()
         }) {
             return Ok((text.into(), existing["key"].as_str().unwrap().into()));
@@ -49,8 +49,8 @@ fn shortcut(text: &str, key: &str) -> Result<(String, String)> {
     let mut binding = Table::new();
     binding["key"] = value(key);
     binding["type"] = value("plugin_action");
-    binding["command"] = value("ccsw.open");
-    binding["description"] = value("Toggle CCSW Pulse usage monitor");
+    binding["command"] = value("mux.open");
+    binding["description"] = value("Toggle Mux Pulse usage monitor");
     keys["command"]
         .as_array_of_tables_mut()
         .unwrap()
@@ -75,7 +75,7 @@ fn backup(path: &Path) -> Result<()> {
         return Ok(());
     }
     let mut copy = tempfile::Builder::new()
-        .prefix("ccsw-install-backup-")
+        .prefix("mux-install-backup-")
         .tempfile_in(path.parent().unwrap())?;
     std::io::copy(&mut fs::File::open(path)?, &mut copy)?;
     copy.as_file()
@@ -128,12 +128,12 @@ pub fn bind_default() -> Result<()> {
     let (updated, key) = match shortcut(&original, "prefix+u") {
         Ok(binding) => binding,
         Err(error) => {
-            eprintln!("CCSW shortcut skipped: {error:#}");
+            eprintln!("Mux shortcut skipped: {error:#}");
             return Ok(());
         }
     };
     write_config(&config, &original, &updated)?;
-    println!("CCSW shortcut: {key}");
+    println!("Mux shortcut: {key}");
     if updated != original {
         // A server may not be running during plugin install. It will read the
         // config on startup; a live server can pick it up immediately.
@@ -142,7 +142,7 @@ pub fn bind_default() -> Result<()> {
             .status()
             .is_ok_and(|status| status.success())
         {
-            eprintln!("CCSW shortcut saved; restart Herdr to activate it");
+            eprintln!("Mux shortcut saved; restart Herdr to activate it");
         }
     }
     Ok(())
@@ -160,10 +160,10 @@ pub fn run(source: &Path, key: &str) -> Result<()> {
     let source = fs::canonicalize(source).context("Cannot find the source checkout")?;
     let manifest: toml::Value = fs::read_to_string(source.join("herdr-plugin.toml"))?.parse()?;
     ensure!(
-        manifest.get("id").and_then(toml::Value::as_str) == Some("ccsw"),
-        "Expected the ccsw plugin manifest"
+        manifest.get("id").and_then(toml::Value::as_str) == Some("mux"),
+        "Expected the mux plugin manifest"
     );
-    let binary = source.join("target/release/ccsw");
+    let binary = source.join("target/release/mux");
     ensure!(
         binary.is_file(),
         "Build first: bash scripts/install-herdr.sh"
@@ -176,10 +176,10 @@ pub fn run(source: &Path, key: &str) -> Result<()> {
         "plugin".as_ref(),
         "list".as_ref(),
         "--plugin".as_ref(),
-        "ccsw".as_ref(),
+        "mux".as_ref(),
         "--json".as_ref(),
     ])?;
-    let destination = crate::platform::home()?.join(".local/bin/ccsw");
+    let destination = crate::platform::home()?.join(".local/bin/mux");
     fs::create_dir_all(destination.parent().unwrap())?;
     if destination
         .symlink_metadata()
@@ -200,14 +200,14 @@ pub fn run(source: &Path, key: &str) -> Result<()> {
         temp.persist(&destination)?; // Atomic replacement; running binaries remain valid.
     }
     herdr(&["plugin".as_ref(), "link".as_ref(), source.as_os_str()])?;
-    herdr(&["plugin".as_ref(), "enable".as_ref(), "ccsw".as_ref()])?;
+    herdr(&["plugin".as_ref(), "enable".as_ref(), "mux".as_ref()])?;
     write_config(&config, &original, &updated)?;
     herdr(&["server".as_ref(), "reload-config".as_ref()])?;
-    println!("Installed CCSW from {}", source.display());
+    println!("Installed Mux from {}", source.display());
     println!("Binary: {}", destination.display());
     println!("Shortcut: {bound_key} (default prefix is Ctrl+B)");
     println!("Keep this checkout in place. Re-run the same script after updating the source.");
-    println!("Reopen existing CCSW panes to use the new version.");
+    println!("Reopen existing Mux panes to use the new version.");
     println!("For new usage metrics, when API requests are idle, run:");
     println!("  {} proxy stop", destination.display());
     println!("  {} proxy start", destination.display());
@@ -226,11 +226,11 @@ mod tests {
         assert!(merged.contains("files.open"));
         assert!(merged.contains("switch_workspace"));
         assert_eq!(shortcut(&merged, "prefix+u").unwrap().0, merged);
-        assert_eq!(merged.matches("ccsw.open").count(), 1);
+        assert_eq!(merged.matches("mux.open").count(), 1);
     }
     #[test]
     fn existing_shortcut_is_preserved_and_conflicts_do_not_overwrite() {
-        let text = "[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='ccsw.open'\n";
+        let text = "[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='mux.open'\n";
         assert_eq!(
             shortcut(text, "prefix+u").unwrap(),
             (text.into(), "prefix+x".into())

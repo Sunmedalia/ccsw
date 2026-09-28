@@ -14,16 +14,16 @@ fn emit(value: Value) {
 }
 fn main() {
     if env::args().nth(1).as_deref() == Some("--sleep") {
-        if let Some(path) = env::var_os("CCSW_HELPER_PID") {
+        if let Some(path) = env::var_os("MUX_HELPER_PID") {
             fs::write(path, std::process::id().to_string()).unwrap();
         }
         std::thread::sleep(Duration::from_secs(120));
         return;
     }
-    if let Some(path) = env::var_os("CCSW_HELPER_RECORD") {
-        fs::write(path, serde_json::to_vec(&json!({"args":env::args().skip(1).collect::<Vec<_>>(),"cwd":env::current_dir().unwrap(),"home":env::var_os("CODEX_HOME"),"literal":env::var("CCSW_HELPER_LITERAL").ok(),"has_api_key":env::var_os("OPENAI_API_KEY").is_some()})).unwrap()).unwrap();
+    if let Some(path) = env::var_os("MUX_HELPER_RECORD") {
+        fs::write(path, serde_json::to_vec(&json!({"args":env::args().skip(1).collect::<Vec<_>>(),"cwd":env::current_dir().unwrap(),"home":env::var_os("CODEX_HOME"),"literal":env::var("MUX_HELPER_LITERAL").ok(),"has_api_key":env::var_os("OPENAI_API_KEY").is_some()})).unwrap()).unwrap();
     }
-    if env::var_os("CCSW_HELPER_TREE").is_some() {
+    if env::var_os("MUX_HELPER_TREE").is_some() {
         let mut child = Command::new(env::current_exe().unwrap())
             .arg("--sleep")
             .stdin(Stdio::null())
@@ -45,7 +45,7 @@ fn main() {
         ["app-server", "--stdio"]
     );
     let home = PathBuf::from(env::var_os("CODEX_HOME").unwrap());
-    let fixture = PathBuf::from(env::var_os("CCSW_MOCK_AUTH").unwrap());
+    let fixture = PathBuf::from(env::var_os("MUX_MOCK_AUTH").unwrap());
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(home.join("config.toml")).unwrap()).unwrap();
     assert_eq!(config["cli_auth_credentials_store"].as_str(), Some("file"));

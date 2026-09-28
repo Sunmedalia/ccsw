@@ -23,7 +23,7 @@ impl Sandbox {
             .env("HOME", self.root.path())
             .env("USERPROFILE", self.root.path())
             .env("CODEX_HOME", self.home())
-            .env("CCSW_CONFIG", self.root.path().join("config.toml"))
+            .env("MUX_CONFIG", self.root.path().join("config.toml"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
             .env("APPDATA", self.root.path().join("roaming"))
@@ -89,9 +89,9 @@ fn account_switch_restarts_running_codex_daemon() {
         .args(["codex", "accounts", "use", &id])
         .env("HOME", s.root.path())
         .env("CODEX_HOME", s.home())
-        .env("CCSW_CONFIG", s.root.path().join("config.toml"))
+        .env("MUX_CONFIG", s.root.path().join("config.toml"))
         .env("XDG_STATE_HOME", s.root.path().join("state"))
-        .env("CCSW_CODEX_BIN", &fake)
+        .env("MUX_CODEX_BIN", &fake)
         .env_remove("CODEX_THREAD_ID")
         .output()
         .unwrap();
@@ -114,11 +114,11 @@ fn account_switch_saves_login_when_codex_cli_is_not_installed() {
         .args(["codex", "accounts", "use", &id])
         .env("HOME", s.root.path())
         .env("CODEX_HOME", s.home())
-        .env("CCSW_CONFIG", s.root.path().join("config.toml"))
+        .env("MUX_CONFIG", s.root.path().join("config.toml"))
         .env("XDG_STATE_HOME", s.root.path().join("state"))
         .env("PATH", &empty_path)
         .env_remove("CODEX_THREAD_ID")
-        .env_remove("CCSW_CODEX_BIN")
+        .env_remove("MUX_CODEX_BIN")
         .output()
         .unwrap();
     assert!(
@@ -238,7 +238,7 @@ fn account_switches_preserve_latest_tokens_and_external_configuration() {
     assert!(
         !s.root
             .path()
-            .join("state/ccsw/codex-accounts")
+            .join("state/mux/codex-accounts")
             .join(bid)
             .join("auth.json")
             .exists()
@@ -322,9 +322,9 @@ fn api_and_subscription_modes_restore_models_without_touching_claude() {
     let api: toml::Value =
         toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
     assert_eq!(api["model"].as_str(), Some("local::test-model"));
-    assert_eq!(api["model_provider"].as_str(), Some("ccsw"));
+    assert_eq!(api["model_provider"].as_str(), Some("mux"));
     assert!(
-        api["model_providers"]["ccsw"]["base_url"]
+        api["model_providers"]["mux"]["base_url"]
             .as_str()
             .unwrap()
             .contains(&address)
@@ -368,7 +368,7 @@ fn uninstall_detaches_codex_and_removes_only_registered_account_files() {
         fs::read_to_string(s.home().join("history.jsonl")).unwrap(),
         "precious history"
     );
-    assert!(!s.root.path().join("state/ccsw/codex-accounts").exists());
+    assert!(!s.root.path().join("state/mux/codex-accounts").exists());
     let restored: toml::Value =
         toml::from_str(&fs::read_to_string(s.home().join("config.toml")).unwrap()).unwrap();
     assert_eq!(restored["model"].as_str(), Some("original-model"));
@@ -402,7 +402,7 @@ fn rpc_scenario(batch: bool) {
         } else {
             "codex-mock"
         });
-        fs::copy(env!("CARGO_BIN_EXE_ccsw-test-helper"), &script).unwrap();
+        fs::copy(env!("CARGO_BIN_EXE_mux-test-helper"), &script).unwrap();
         script
     };
     #[cfg(all(unix, not(feature = "test-support")))]
@@ -426,11 +426,11 @@ fn rpc_scenario(batch: bool) {
             .env("HOME", s.root.path())
             .env("USERPROFILE", s.root.path())
             .env("CODEX_HOME", s.home())
-            .env("CCSW_CONFIG", s.root.path().join("config.toml"))
+            .env("MUX_CONFIG", s.root.path().join("config.toml"))
             .env("XDG_STATE_HOME", s.root.path().join("state"))
             .env("XDG_CACHE_HOME", s.root.path().join("cache"))
-            .env("CCSW_CODEX_BIN", &script)
-            .env("CCSW_MOCK_AUTH", &fixture)
+            .env("MUX_CODEX_BIN", &script)
+            .env("MUX_MOCK_AUTH", &fixture)
             .output()
             .unwrap()
     };
@@ -604,7 +604,7 @@ default_model='off'
     assert_eq!(initial["model_providers"], updated["model_providers"]);
     assert_eq!(initial["model_catalog_json"], updated["model_catalog_json"]);
 
-    let provider = &updated["model_providers"]["ccsw"];
+    let provider = &updated["model_providers"]["mux"];
     let url = provider["base_url"].as_str().unwrap();
     let token = provider["experimental_bearer_token"].as_str().unwrap();
     let client = reqwest::blocking::Client::builder()
@@ -676,7 +676,7 @@ fn freshly_imported_credentials_replace_revoked_live_copy_of_same_account() {
         &fs::read(
             s.root
                 .path()
-                .join("state/ccsw/codex-accounts")
+                .join("state/mux/codex-accounts")
                 .join(id)
                 .join("auth.json"),
         )

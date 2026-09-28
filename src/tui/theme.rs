@@ -275,7 +275,7 @@ impl Theme {
                 0x161f32, 0xb9cbed, 0xacaecd, 0x2e3b54, 0xd1b9e7, 0x1c2132, 0x8597b6, 0x94d1c7,
                 0xe4c58f, 0xf0abb7, 0xeac5ed,
             ],
-            // Match CCSW Pulse while keeping muted and error text readable on selection.
+            // Match Mux Pulse while keeping muted and error text readable on selection.
             Self::Pulse => [
                 0x141e2a, 0xdfe9f0, 0x8ba1b5, 0x253747, 0x7bbeda, 0x141e2a, 0x304354, 0x93ccb2,
                 0xeac17e, 0xec8b83, 0xf1f5f7,
@@ -390,10 +390,8 @@ impl PulseTheme {
                     let symbol = self.design().edge(cell.symbol()).to_owned();
                     cell.set_symbol(&symbol);
                 }
-                if cell.bg == quick::RAIL {
-                    if self == Self::Sand {
-                        cell.modifier |= Modifier::UNDERLINED;
-                    }
+                if cell.bg == quick::RAIL && self == Self::Sand {
+                    cell.modifier |= Modifier::UNDERLINED;
                 }
                 cell.fg = match cell.fg {
                     quick::INK if cell.modifier.contains(Modifier::BOLD) => p.heading,
@@ -743,7 +741,7 @@ mod tests {
                             .iter()
                             .all(|c| !matches!(c.fg, DEFAULT_MODEL | ENABLED | EDGE | ACTIVE_EDGE))
                     );
-                    if selected && let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+                    if selected && let Ok(directory) = std::env::var("MUX_UI_PREVIEW_DIR") {
                         std::fs::create_dir_all(&directory).unwrap();
                         let cells: Vec<_> = cells.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
                         std::fs::write(std::path::Path::new(&directory).join(format!("{theme:?}-{width}-home.json")), serde_json::to_vec(&serde_json::json!({"width": width, "height": height, "cells": cells})).unwrap()).unwrap();
@@ -818,7 +816,7 @@ mod tests {
                 "{theme:?}"
             );
             assert!(buffer.content.iter().all(|c| c.fg != quick::METRIC));
-            if let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+            if let Ok(directory) = std::env::var("MUX_UI_PREVIEW_DIR") {
                 std::fs::create_dir_all(&directory).unwrap();
                 let cells: Vec<_> = buffer.content.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
                 std::fs::write(
@@ -1082,7 +1080,7 @@ pub(super) fn draw(
             _ => form.refresh_selected,
         };
         frame.render_widget(
-            Paragraph::new(["CCSW UI", "Pulse pane", "Refresh"][index])
+            Paragraph::new(["Mux UI", "Pulse pane", "Refresh"][index])
                 .alignment(Alignment::Center)
                 .style(button_style(selected, false, false)),
             rect,
@@ -1177,7 +1175,7 @@ pub(super) fn draw(
 }
 
 // Render after the surrounding UI has been themed, so the Pulse preview is
-// independent of the selected CCSW theme and all previews use real components.
+// independent of the selected Mux theme and all previews use real components.
 pub(super) fn draw_preview(frame: &mut ratatui::Frame, area: Rect, form: &Appearance) {
     if !gallery(area) {
         return;

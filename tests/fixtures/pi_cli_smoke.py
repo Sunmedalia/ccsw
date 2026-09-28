@@ -1,5 +1,5 @@
 """Real Pi CLI + local mock upstream, with isolated configuration and fixed tools.
-CCSW_TEST_BINARY and CCSW_PI_BIN override executables; SMOKE_FORMAT selects protocol.
+MUX_TEST_BINARY and MUX_PI_BIN override executables; SMOKE_FORMAT selects protocol.
 """
 import http.server
 import json
@@ -9,10 +9,10 @@ import subprocess
 import tempfile
 import threading
 
-binary = os.environ.get('CCSW_TEST_BINARY', str(Path('target/debug/ccsw').resolve()))
-pi = os.environ.get('CCSW_PI_BIN', 'pi')
+binary = os.environ.get('MUX_TEST_BINARY', str(Path('target/debug/mux').resolve()))
+pi = os.environ.get('MUX_PI_BIN', 'pi')
 kind = os.environ.get('SMOKE_FORMAT', 'openai-chat')
-with tempfile.TemporaryDirectory(prefix='ccsw-pi-smoke-') as directory:
+with tempfile.TemporaryDirectory(prefix='mux-pi-smoke-') as directory:
     root = Path(directory)
     (root / 'pi').mkdir()
     (root / 'work').mkdir()
@@ -57,15 +57,15 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-smoke-') as directory:
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     (root / 'config.toml').write_text(f"version=3\n[profiles.local]\nname='Pi test'\nbase_url='http://127.0.0.1:{server.server_port}/v1'\napi_format='{kind}'\ndefault_model='test-model'\n")
-    env = dict(os.environ, HOME=directory, PI_CODING_AGENT_DIR=str(root/'pi'), CCSW_CONFIG=str(root/'config.toml'), XDG_STATE_HOME=str(root/'state'), XDG_CACHE_HOME=str(root/'cache'))
+    env = dict(os.environ, HOME=directory, PI_CODING_AGENT_DIR=str(root/'pi'), MUX_CONFIG=str(root/'config.toml'), XDG_STATE_HOME=str(root/'state'), XDG_CACHE_HOME=str(root/'cache'))
     for k in list(env):
         if k.endswith('_API_KEY') or k in ['ANTHROPIC_AUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'CODEX_AUTH']: env.pop(k)
     result = subprocess.run([binary, 'pi', 'apply', '--profile', 'local'], env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     flags = ['--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-session', '--no-approve']
     listed = subprocess.run([pi, *flags, '--list-models', 'test-model'], cwd=root/'work', env=env, capture_output=True, text=True, timeout=30)
-    assert listed.returncode == 0 and 'ccsw-local' in listed.stdout, listed.stderr
-    result = subprocess.run([pi, *flags, '--provider', 'ccsw-local', '--model', 'test-model', '--tools', 'bash', '-p', 'Create example.txt with verified and confirm.'], cwd=root/'work', env=env, capture_output=True, text=True, timeout=45)
+    assert listed.returncode == 0 and 'mux-local' in listed.stdout, listed.stderr
+    result = subprocess.run([pi, *flags, '--provider', 'mux-local', '--model', 'test-model', '--tools', 'bash', '-p', 'Create example.txt with verified and confirm.'], cwd=root/'work', env=env, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stderr[-1200:]
     assert len(seen) == 2, f'Expected tool + final requests, got {len(seen)}: {result.stdout[-1200:]}'
     assert (root/'work/example.txt').read_text() == 'verified\n'

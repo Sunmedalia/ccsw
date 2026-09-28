@@ -10,21 +10,21 @@ import socket
 import fcntl
 import unittest
 
-BINARY = os.environ.get("CCSW_TEST_BINARY", "/usr/local/bin/ccsw-test")
+BINARY = os.environ.get("MUX_TEST_BINARY", "/usr/local/bin/mux-test")
 
 class CleanupSafety(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="ccsw-safety-")
+        self.temp = tempfile.TemporaryDirectory(prefix="mux-safety-")
         self.root = Path(self.temp.name)
         self.home = self.root / "用户 home"
         self.home.mkdir(mode=0o700)
         self.env = dict(os.environ)
-        for key in ["HOME", "USERPROFILE", "CCSW_CONFIG", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]:
+        for key in ["HOME", "USERPROFILE", "MUX_CONFIG", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]:
             self.env.pop(key, None)
         self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), PATH=os.environ["PATH"])
-        self.config = self.home / ".config/ccsw/config.toml"
-        self.state = self.home / ".local/state/ccsw"
-        self.cache = self.home / ".cache/ccsw/models.json"
+        self.config = self.home / ".config/mux/config.toml"
+        self.state = self.home / ".local/state/mux"
+        self.cache = self.home / ".cache/mux/models.json"
         self.settings = self.home / ".claude/settings.json"
         self.write(self.config, 'version = 2\n[profiles.local]\nname="Local"\nbase_url="https://example.invalid"\ndefault_model="model"\n')
         self.write(self.settings, json.dumps({"theme": "dark", "env": {"KEEP": "safe"}, "permissions": {"allow": ["Read"]}}))
@@ -90,7 +90,7 @@ class CleanupSafety(unittest.TestCase):
         self.assertFalse(self.cache.exists())
         self.assertEqual([p.name for p in self.state.iterdir()], ["unrelated.txt"])
         self.assertEqual(json.loads(self.settings.read_text()), {"theme":"dark", "env":{"KEEP":"safe"}, "permissions":{"allow":["Read"]}})
-        self.assertFalse(self.settings.with_suffix(".json.ccsw-backup").exists())
+        self.assertFalse(self.settings.with_suffix(".json.mux-backup").exists())
         self.assertTrue((self.home / ".claude/projects/conversation.jsonl").exists())
         self.assertTrue((self.home / "other-app/config.toml").exists())
         with socket.socket() as listener:
@@ -101,8 +101,8 @@ class CleanupSafety(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
 
     def test_custom_paths_inside_home(self):
-        self.env.update(CCSW_CONFIG=str(self.home / "custom/my.toml"), XDG_STATE_HOME=str(self.home / "custom-state"), XDG_CACHE_HOME=str(self.home / "custom-cache"), CLAUDE_CONFIG_DIR=str(self.home / "custom-claude"))
-        custom = Path(self.env["CCSW_CONFIG"])
+        self.env.update(MUX_CONFIG=str(self.home / "custom/my.toml"), XDG_STATE_HOME=str(self.home / "custom-state"), XDG_CACHE_HOME=str(self.home / "custom-cache"), CLAUDE_CONFIG_DIR=str(self.home / "custom-claude"))
+        custom = Path(self.env["MUX_CONFIG"])
         self.write(custom, self.config.read_text())
         original = self.config.read_bytes()
         self.cmd("uninstall", "--yes")
@@ -115,10 +115,10 @@ class CleanupSafety(unittest.TestCase):
         value["env"]["ANTHROPIC_BASE_URL"] = "https://other.invalid"
         self.settings.write_text(json.dumps(value))
         original = self.settings.read_bytes()
-        backup = self.settings.with_suffix(".json.ccsw-backup").read_bytes()
+        backup = self.settings.with_suffix(".json.mux-backup").read_bytes()
         self.cmd("uninstall", "--yes")
         self.assertEqual(original, self.settings.read_bytes())
-        self.assertEqual(backup, self.settings.with_suffix(".json.ccsw-backup").read_bytes())
+        self.assertEqual(backup, self.settings.with_suffix(".json.mux-backup").read_bytes())
 
     def test_symlink_file_rejected_without_any_deletion(self):
         victim = self.root / "victim"
@@ -132,8 +132,8 @@ class CleanupSafety(unittest.TestCase):
     def test_symlink_parent_rejected(self):
         external = self.root / "external"
         external.mkdir()
-        shutil.rmtree(self.home / ".config/ccsw")
-        (self.home / ".config/ccsw").symlink_to(external, target_is_directory=True)
+        shutil.rmtree(self.home / ".config/mux")
+        (self.home / ".config/mux").symlink_to(external, target_is_directory=True)
         before = self.snapshot()
         self.cmd("uninstall", "--yes", ok=False)
         self.assertEqual(before, self.snapshot())
@@ -145,14 +145,14 @@ class CleanupSafety(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
 
     def test_outside_home_rejected_even_for_root(self):
-        self.env["CCSW_CONFIG"] = str(self.root / "other-user/config.toml")
-        self.write(Path(self.env["CCSW_CONFIG"]), self.config.read_text())
+        self.env["MUX_CONFIG"] = str(self.root / "other-user/config.toml")
+        self.write(Path(self.env["MUX_CONFIG"]), self.config.read_text())
         before = self.snapshot()
         self.cmd("uninstall", "--yes", ok=False)
         self.assertEqual(before, self.snapshot())
 
     def test_parent_traversal_rejected(self):
-        self.env["CCSW_CONFIG"] = str(self.home / "../other.toml")
+        self.env["MUX_CONFIG"] = str(self.home / "../other.toml")
         before = self.snapshot()
         self.cmd("uninstall", "--yes", ok=False)
         self.assertEqual(before, self.snapshot())
@@ -229,13 +229,13 @@ class CleanupSafety(unittest.TestCase):
             victim.wait()
 
     def test_unknown_startup_preserved(self):
-        self.write(self.home / ".config/systemd/user/ccsw-proxy.service", "unrelated user service")
+        self.write(self.home / ".config/systemd/user/mux-proxy.service", "unrelated user service")
         before = self.snapshot()
         self.cmd("uninstall", "--yes", ok=False)
         self.assertEqual(before, self.snapshot())
 
     def test_startup_disable_failure_retains_files(self):
-        self.write(self.home / ".config/systemd/user/ccsw-proxy.service", f"[Unit]\nDescription=CCSW protocol proxy\n\n[Service]\nExecStart={BINARY} internal proxy-serve --registry {self.state}/proxy.json\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
+        self.write(self.home / ".config/systemd/user/mux-proxy.service", f"[Unit]\nDescription=Mux protocol proxy\n\n[Service]\nExecStart={BINARY} internal proxy-serve --registry {self.state}/proxy.json\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
         before = self.snapshot()
         self.cmd("uninstall", "--yes", ok=False)
         self.assertEqual(before, self.snapshot())
@@ -250,7 +250,7 @@ class CleanupSafety(unittest.TestCase):
 
     def test_backup_symlink_aborts_before_settings_are_changed(self):
         self.start(sync=True)
-        backup = self.settings.with_suffix(".json.ccsw-backup")
+        backup = self.settings.with_suffix(".json.mux-backup")
         backup.unlink()
         backup.symlink_to(self.home / "other-app/config.toml")
         before = self.snapshot()
@@ -293,7 +293,7 @@ class CleanupSafety(unittest.TestCase):
         try:
             result = other("proxy", "start", "--listen", f"127.0.0.1:{port}")
             self.assertEqual(result.returncode, 0, result.stderr)
-            registry = other_home / ".local/state/ccsw/proxy.json"
+            registry = other_home / ".local/state/mux/proxy.json"
             before = registry.read_bytes()
             self.cmd("uninstall", "--yes")
             self.assertEqual(before, registry.read_bytes())
@@ -302,10 +302,10 @@ class CleanupSafety(unittest.TestCase):
             other("proxy", "stop")
 
     def test_startup_success_removes_only_verified_service(self):
-        service = self.home / ".config/systemd/user/ccsw-proxy.service"
-        self.write(service, f"[Unit]\nDescription=CCSW protocol proxy\n\n[Service]\nExecStart={BINARY} internal proxy-serve --registry {self.state}/proxy.json\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
+        service = self.home / ".config/systemd/user/mux-proxy.service"
+        self.write(service, f"[Unit]\nDescription=Mux protocol proxy\n\n[Service]\nExecStart={BINARY} internal proxy-serve --registry {self.state}/proxy.json\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
         stub = self.home / "bin/systemctl"
-        self.write(stub, '#!/bin/sh\n[ "$1 $2 $3 $4" = "--user disable --now ccsw-proxy.service" ]\n')
+        self.write(stub, '#!/bin/sh\n[ "$1 $2 $3 $4" = "--user disable --now mux-proxy.service" ]\n')
         stub.chmod(0o700)
         self.env["PATH"] = str(stub.parent) + ":" + self.env["PATH"]
         self.cmd("uninstall", "--yes")

@@ -1,7 +1,7 @@
 """Real Codex /model smoke test; local mock providers and isolated homes only.
 
 Run after cargo build: python3 tests/fixtures/codex_model_switch.py
-Requires a POSIX terminal and Codex CLI (or CCSW_CODEX_BIN). No API key needed.
+Requires a POSIX terminal and Codex CLI (or MUX_CODEX_BIN). No API key needed.
 """
 import errno
 import fcntl
@@ -77,9 +77,9 @@ class Terminal:
 
 
 def main():
-    ccsw = str(pathlib.Path(os.environ.get("CCSW_TEST_BINARY", "target/debug/ccsw")).resolve())
-    codex = shutil.which(os.environ.get("CCSW_CODEX_BIN", "codex"))
-    assert codex, "Install Codex CLI or set CCSW_CODEX_BIN"
+    mux = str(pathlib.Path(os.environ.get("MUX_TEST_BINARY", "target/debug/mux")).resolve())
+    codex = shutil.which(os.environ.get("MUX_CODEX_BIN", "codex"))
+    assert codex, "Install Codex CLI or set MUX_CODEX_BIN"
     seen = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -112,7 +112,7 @@ def main():
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    with tempfile.TemporaryDirectory(prefix="ccsw-model-switch-") as root:
+    with tempfile.TemporaryDirectory(prefix="mux-model-switch-") as root:
         root = pathlib.Path(root)
         work, home = root / "work", root / "codex"
         work.mkdir()
@@ -125,14 +125,14 @@ def main():
             f"[codex.profiles.{name}.credential]\nkind='bearer'\nvalue='{name}-mock-secret'\n"
             for name in ["alpha", "beta", "gamma"]))
         env = dict(os.environ, HOME=str(root), USERPROFILE=str(root), CODEX_HOME=str(home),
-                   CCSW_CONFIG=str(config), XDG_CONFIG_HOME=str(root / "config"),
+                   MUX_CONFIG=str(config), XDG_CONFIG_HOME=str(root / "config"),
                    XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                    TERM="xterm-256color", COLORTERM="truecolor")
         for key in ["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_AUTH", "ANTHROPIC_API_KEY"]:
             env.pop(key, None)
 
         def run(*args):
-            result = subprocess.run([ccsw, *args], env=env, capture_output=True, text=True, timeout=30)
+            result = subprocess.run([mux, *args], env=env, capture_output=True, text=True, timeout=30)
             assert result.returncode == 0, result.stderr
             return result.stdout
 

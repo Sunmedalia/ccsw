@@ -119,7 +119,7 @@ impl App {
             .default
             .as_deref()
             .filter(|model| {
-                !model.starts_with("ccsw::")
+                !model.starts_with("mux::")
                     && !self.config.grok.imports.values().any(|key| key == model)
             });
         let active = status.saved

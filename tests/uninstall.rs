@@ -42,7 +42,7 @@ impl Sandbox {
             .env("USERPROFILE", self.root.path())
             .env("APPDATA", self.root.path().join("roaming"))
             .env("LOCALAPPDATA", self.root.path().join("local"))
-            .env("CCSW_CONFIG", self.root.path().join("config.toml"))
+            .env("MUX_CONFIG", self.root.path().join("config.toml"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
             .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
@@ -99,12 +99,12 @@ fn uninstall_stops_authenticated_proxy_and_detaches_only_managed_settings() {
         value,
         serde_json::json!({"theme":"dark","env":{"KEEP":"yes"}})
     );
-    assert!(!sandbox.root.path().join("state/ccsw").exists());
+    assert!(!sandbox.root.path().join("state/mux").exists());
     assert!(
         !sandbox
             .root
             .path()
-            .join("claude/settings.json.ccsw-backup")
+            .join("claude/settings.json.mux-backup")
             .exists()
     );
     assert!(std::net::TcpListener::bind(address).is_ok());
@@ -113,7 +113,7 @@ fn uninstall_stops_authenticated_proxy_and_detaches_only_managed_settings() {
 #[test]
 fn uninstall_verifies_nonempty_lock_files_while_holding_their_locks() {
     let sandbox = Sandbox::new();
-    let state = sandbox.root.path().join("state/ccsw");
+    let state = sandbox.root.path().join("state/mux");
     fs::create_dir_all(&state).unwrap();
     for name in ["session.lock", "codex.lock", "pi.lock", "sync-state.lock"] {
         fs::write(state.join(name), b"lock fixture\n").unwrap();
@@ -130,7 +130,7 @@ fn uninstall_verifies_nonempty_lock_files_while_holding_their_locks() {
 
 #[cfg(unix)]
 #[test]
-fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
+fn uninstall_herdr_removes_only_the_mux_link_and_shortcut() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let root = sandbox.root.path();
@@ -140,16 +140,16 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
     fs::write(&fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_COMMAND_LOG\"\nif [ \"$1 $2\" = 'plugin list' ]; then cat \"$HERDR_LIST_FIXTURE\"; fi\nexit 0\n").unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
     let list = root.join("plugin-list.json");
-    fs::write(&list, serde_json::json!({"result":{"plugins":[{"plugin_id":"ccsw","plugin_root":env!("CARGO_MANIFEST_DIR"),"source":{"kind":"local"}}]}}).to_string()).unwrap();
+    fs::write(&list, serde_json::json!({"result":{"plugins":[{"plugin_id":"mux","plugin_root":env!("CARGO_MANIFEST_DIR"),"source":{"kind":"local"}}]}}).to_string()).unwrap();
     let herdr_config = root.join("herdr.toml");
     let herdr_log = root.join("herdr-commands.log");
-    fs::write(&herdr_config, "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n").unwrap();
+    fs::write(&herdr_config, "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='mux.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n").unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let run = |args: &[&str]| {
         support::command(root)
             .args(args)
             .env("HOME", root)
-            .env("CCSW_CONFIG", root.join("config.toml"))
+            .env("MUX_CONFIG", root.join("config.toml"))
             .env("XDG_STATE_HOME", root.join("state"))
             .env("XDG_CACHE_HOME", root.join("cache"))
             .env("CLAUDE_CONFIG_DIR", root.join("claude"))
@@ -167,11 +167,11 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
         "{}",
         String::from_utf8_lossy(&preview.stderr)
     );
-    assert!(String::from_utf8_lossy(&preview.stdout).contains("Unlink local CCSW Herdr plugin"));
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Unlink local Mux Herdr plugin"));
     assert!(
         fs::read_to_string(&herdr_config)
             .unwrap()
-            .contains("ccsw.open")
+            .contains("mux.open")
     );
     let result = run(&["uninstall", "--yes"]);
     assert!(
@@ -180,12 +180,12 @@ fn uninstall_herdr_removes_only_the_ccsw_link_and_shortcut() {
         String::from_utf8_lossy(&result.stderr)
     );
     let after = fs::read_to_string(&herdr_config).unwrap();
-    assert!(!after.contains("ccsw.open"));
+    assert!(!after.contains("mux.open"));
     assert!(after.contains("files.open"));
     assert!(
         fs::read_to_string(&herdr_log)
             .unwrap()
-            .contains("plugin unlink ccsw")
+            .contains("plugin unlink mux")
     );
 }
 
@@ -205,18 +205,18 @@ fn uninstall_preserves_github_managed_herdr_plugin() {
     let list = root.join("plugin-list.json");
     fs::write(
         &list,
-        serde_json::json!({"result":{"plugins":[{"plugin_id":"ccsw","source":{"kind":"github"}}]}})
+        serde_json::json!({"result":{"plugins":[{"plugin_id":"mux","source":{"kind":"github"}}]}})
             .to_string(),
     )
     .unwrap();
     let herdr_config = root.join("herdr.toml");
-    let original = "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n";
+    let original = "[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='mux.open'\n";
     fs::write(&herdr_config, original).unwrap();
     let herdr_log = root.join("herdr-commands.log");
     let result = support::command(root)
         .args(["uninstall", "--yes"])
         .env("HOME", root)
-        .env("CCSW_CONFIG", root.join("config.toml"))
+        .env("MUX_CONFIG", root.join("config.toml"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("CLAUDE_CONFIG_DIR", root.join("claude"))
@@ -250,19 +250,19 @@ fn uninstall_preserves_github_managed_herdr_plugin() {
 fn uninstall_restores_grok_owned_fields_and_preserves_external_settings_and_login() {
     let sandbox = Sandbox::new();
     let grok = sandbox.root.path().join("grok");
-    let state = sandbox.root.path().join("state/ccsw");
+    let state = sandbox.root.path().join("state/mux");
     fs::create_dir_all(&grok).unwrap();
     fs::create_dir_all(&state).unwrap();
     fs::write(
         grok.join("config.toml"),
-        "[models]\ndefault='ccsw::test::model'\n[ui]\ncompact_mode=false\ntheme='auto'\n",
+        "[models]\ndefault='mux::test::model'\n[ui]\ncompact_mode=false\ntheme='auto'\n",
     )
     .unwrap();
     fs::write(grok.join("auth.json"), "{\"keep\":true}").unwrap();
     let binding = serde_json::json!({
         "home": grok, "config": sandbox.root.path().join("config.toml"),
         "fields": [
-            { "path": ["models", "default"], "original": "grok-4.7", "expected": "ccsw::test::model" },
+            { "path": ["models", "default"], "original": "grok-4.7", "expected": "mux::test::model" },
             { "path": ["ui", "compact_mode"], "original": null, "expected": true }
         ]
     });

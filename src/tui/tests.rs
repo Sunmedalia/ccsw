@@ -3,7 +3,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn fullscreen_visual_capture() {
-    let directory = std::env::var("CCSW_SCREENSHOT_DIR").ok();
+    let directory = std::env::var("MUX_SCREENSHOT_DIR").ok();
     if let Some(directory) = &directory {
         std::fs::create_dir_all(directory).unwrap();
     }
@@ -710,9 +710,9 @@ fn renders_empty_state_in_narrow_terminal() {
         codex_ui: codex::CodexUi::default(),
         grok_auth: grok_auth::AuthUi::default(),
         grok_enabled: false,
-        grok_home: std::path::PathBuf::from("/nonexistent-ccsw-test-grok"),
+        grok_home: std::path::PathBuf::from("/nonexistent-mux-test-grok"),
         pi_enabled: false,
-        pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
+        pi_home: std::path::PathBuf::from("/nonexistent-mux-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
         usage: usage::UsageUi::default(),
@@ -1185,7 +1185,7 @@ fn proxy_manager_renders_and_supports_keyboard_and_mouse_navigation() {
         service: Some(proxy::ProxyServiceStatus {
             installed: true,
             manager: "launchd",
-            path: PathBuf::from("/tmp/com.ccsw.proxy.plist"),
+            path: PathBuf::from("/tmp/com.mux.proxy.plist"),
         }),
         selected: 0,
         message: "Ready".into(),
@@ -2009,9 +2009,9 @@ fn interactive_test_app() -> App {
     config.profiles.insert("two".into(), profile("Two"));
     App {
         paths: AppPaths {
-            config: PathBuf::from("/tmp/ccsw-test-config"),
-            state_dir: PathBuf::from("/tmp/ccsw-test-state"),
-            cache: PathBuf::from("/tmp/ccsw-test-cache"),
+            config: PathBuf::from("/tmp/mux-test-config"),
+            state_dir: PathBuf::from("/tmp/mux-test-state"),
+            cache: PathBuf::from("/tmp/mux-test-cache"),
         },
         config,
         cache: ModelCache::default(),
@@ -2034,9 +2034,9 @@ fn interactive_test_app() -> App {
         codex_ui: codex::CodexUi::default(),
         grok_auth: grok_auth::AuthUi::default(),
         grok_enabled: false,
-        grok_home: std::path::PathBuf::from("/nonexistent-ccsw-test-grok"),
+        grok_home: std::path::PathBuf::from("/nonexistent-mux-test-grok"),
         pi_enabled: false,
-        pi_home: std::path::PathBuf::from("/nonexistent-ccsw-test-pi"),
+        pi_home: std::path::PathBuf::from("/nonexistent-mux-test-pi"),
         background: Background::default(),
         screen: Rect::new(0, 0, 80, 24),
         usage: usage::UsageUi::default(),
@@ -2458,7 +2458,7 @@ fn render_matrix_covers_pages_forms_and_errors() {
                 terminal.draw(|frame| app.draw(frame)).unwrap();
                 let buffer = terminal.backend().buffer();
                 assert_eq!(buffer.area.width, width);
-                if let Ok(directory) = std::env::var("CCSW_RENDER_DIR") {
+                if let Ok(directory) = std::env::var("MUX_RENDER_DIR") {
                     std::fs::create_dir_all(&directory).unwrap();
                     let lines = (0..height)
                         .map(|row| {
@@ -3188,7 +3188,7 @@ fn pi_proxy_control_removes_local_provider_and_restores_direct_default() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(rendered.contains("Pi proxy API"));
-    assert!(rendered.contains("CCSW proxy"));
+    assert!(rendered.contains("Mux proxy"));
     app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
         .unwrap();
     assert!(!app.status_error, "{}", app.status);
@@ -3203,9 +3203,9 @@ fn pi_proxy_control_removes_local_provider_and_restores_direct_default() {
 }
 
 #[test]
-fn pi_native_model_form_saves_without_changing_ccsw_config() {
+fn pi_native_model_form_saves_without_changing_mux_config() {
     let (_temp, mut app) = persisted_app();
-    let ccsw_before = std::fs::read(&app.paths.config).unwrap();
+    let mux_before = std::fs::read(&app.paths.config).unwrap();
     app.select_client_tab(ClientTab::Pi);
     let profile = app.selected_profile_id().unwrap();
     app.enter_provider_view();
@@ -3234,7 +3234,7 @@ fn pi_native_model_form_saves_without_changing_ccsw_config() {
             .iter()
             .any(|m| m["id"] == "native-added")
     );
-    assert!(models["providers"].get(format!("ccsw-{profile}")).is_none());
+    assert!(models["providers"].get(format!("mux-{profile}")).is_none());
     let saved = models["providers"][&profile]["models"]
         .as_array()
         .unwrap()
@@ -3259,7 +3259,7 @@ fn pi_native_model_form_saves_without_changing_ccsw_config() {
             .iter()
             .any(|m| m.id == "native-added")
     );
-    assert_eq!(std::fs::read(&app.paths.config).unwrap(), ccsw_before);
+    assert_eq!(std::fs::read(&app.paths.config).unwrap(), mux_before);
 }
 
 #[test]
@@ -3991,7 +3991,7 @@ fn grok_tabs_import_settings_sync_and_client_isolation() {
                 Ok((mut stream, _)) => {
                     let mut request = [0u8; 2048];
                     let _ = stream.read(&mut request);
-                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
+                    let body = serde_json::json!({"name":"mux-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -4157,7 +4157,7 @@ fn grok_default_action_and_model_form_use_native_capabilities() {
     app.set_selected_as_default();
     assert_eq!(
         app.config.grok.preferences.default.as_deref(),
-        Some("ccsw::test::second")
+        Some("mux::test::second")
     );
     app.open_grok_preferences(None);
     if let Some(Modal::Grok(d)) = app.modal.as_mut()
@@ -4225,7 +4225,7 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
                 Ok((mut stream, _)) => {
                     let mut request = [0u8; 2048];
                     let _ = stream.read(&mut request);
-                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
+                    let body = serde_json::json!({"name":"mux-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -4298,7 +4298,7 @@ fn grok_oauth_rejects_api_overrides_and_missing_login() {
     )
     .unwrap();
     assert!(crate::grok::validate_oauth_model(home.path(), "grok-build").is_ok());
-    assert!(crate::grok::validate_oauth_model(home.path(), "ccsw::provider::model").is_err());
+    assert!(crate::grok::validate_oauth_model(home.path(), "mux::provider::model").is_err());
     std::fs::write(
         home.path().join("config.toml"),
         "[model.grok-build]\napi_key='api-key'\n",
@@ -4591,7 +4591,7 @@ fn theme_gallery_and_usage_render_with_resolved_styles_at_all_sizes() {
                 } else if width == 120 {
                     assert!(text.contains("Range overview"));
                 }
-                if let Ok(directory) = std::env::var("CCSW_UI_PREVIEW_DIR") {
+                if let Ok(directory) = std::env::var("MUX_UI_PREVIEW_DIR") {
                     std::fs::create_dir_all(&directory).unwrap();
                     let cells: Vec<_> = buffer.content.iter().map(|c| serde_json::json!({"text": c.symbol(), "fg": format!("{:?}", c.fg), "bg": format!("{:?}", c.bg), "bold": c.modifier.contains(Modifier::BOLD), "underline": c.modifier.contains(Modifier::UNDERLINED)})).collect();
                     let output =

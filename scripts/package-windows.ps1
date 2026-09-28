@@ -1,5 +1,5 @@
 param(
-    [string]$Binary = 'target/x86_64-pc-windows-msvc/release/ccsw.exe',
+    [string]$Binary = 'target/x86_64-pc-windows-msvc/release/mux.exe',
     [string]$OutputDirectory = 'target/dist'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,21 +23,21 @@ if (($imports -join "`n") -match '(?i)(vcruntime\d*|msvcp\d+|libgcc[^\s]*|libstd
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path $OutputDirectory).Path
-$stage = Join-Path ([IO.Path]::GetTempPath()) ('ccsw-package-' + [guid]::NewGuid())
-$extract = Join-Path ([IO.Path]::GetTempPath()) ('ccsw 解压 package ' + [guid]::NewGuid())
+$stage = Join-Path ([IO.Path]::GetTempPath()) ('mux-package-' + [guid]::NewGuid())
+$extract = Join-Path ([IO.Path]::GetTempPath()) ('mux 解压 package ' + [guid]::NewGuid())
 try {
     New-Item -ItemType Directory -Path $stage | Out-Null
-    Copy-Item -LiteralPath $Binary -Destination "$stage\ccsw.exe"
+    Copy-Item -LiteralPath $Binary -Destination "$stage\mux.exe"
     Copy-Item -LiteralPath 'LICENSE' -Destination "$stage\LICENSE"
     $readme = Get-Content -LiteralPath 'README-Windows.md' -Raw -Encoding utf8
     $readme += "`n`nBuild: $version`nCommit: $commit`nTarget: x86_64-pc-windows-msvc`nCompiler: $compiler`nVerification: native Windows packaging smoke; full regression results are reported separately.`n"
     Set-Content -LiteralPath "$stage\README-Windows.md" -Value $readme -Encoding utf8
-    $zip = Join-Path $OutputDirectory 'ccsw-windows-x86_64.zip'
-    Compress-Archive -LiteralPath "$stage\ccsw.exe", "$stage\README-Windows.md", "$stage\LICENSE" -DestinationPath $zip -Force
+    $zip = Join-Path $OutputDirectory 'mux-windows-x86_64.zip'
+    Compress-Archive -LiteralPath "$stage\mux.exe", "$stage\README-Windows.md", "$stage\LICENSE" -DestinationPath $zip -Force
     Expand-Archive -LiteralPath $zip -DestinationPath $extract
-    & "$PSScriptRoot/windows-smoke.ps1" -Binary "$extract\ccsw.exe"
+    & "$PSScriptRoot/windows-smoke.ps1" -Binary "$extract\mux.exe"
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-    Set-Content -LiteralPath "$zip.sha256" -Value "$hash  ccsw-windows-x86_64.zip" -Encoding ascii
+    Set-Content -LiteralPath "$zip.sha256" -Value "$hash  mux-windows-x86_64.zip" -Encoding ascii
     Write-Host "Packaged and verified: $zip"
 }
 finally {

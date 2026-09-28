@@ -1,14 +1,14 @@
 """Switch retained real logins locally; never query quota or print credentials."""
 import hashlib,json,os,pathlib,subprocess,tempfile,tomllib
-source=pathlib.Path(os.environ.get('CCSW_TEST_INPUT','/root/codex-test'))
-binary=os.environ['CCSW_TEST_BINARY']
+source=pathlib.Path(os.environ.get('MUX_TEST_INPUT','/root/codex-test'))
+binary=os.environ['MUX_TEST_BINARY']
 inputs=[source/'auth.json',source/'auth.previous.json']
 before={p:hashlib.sha256(p.read_bytes()).digest() for p in inputs}
-with tempfile.TemporaryDirectory(prefix='ccsw-account-switch-') as d:
+with tempfile.TemporaryDirectory(prefix='mux-account-switch-') as d:
  p=pathlib.Path(d);home=p/'codex';home.mkdir(mode=0o700)
  (home/'config.toml').write_text('cli_auth_credentials_store="file"\n')
  (p/'config.toml').write_text('version=4\n')
- env=dict(os.environ,HOME=d,CODEX_HOME=str(home),CCSW_CONFIG=str(p/'config.toml'),XDG_STATE_HOME=str(p/'state'),XDG_CACHE_HOME=str(p/'cache'))
+ env=dict(os.environ,HOME=d,CODEX_HOME=str(home),MUX_CONFIG=str(p/'config.toml'),XDG_STATE_HOME=str(p/'state'),XDG_CACHE_HOME=str(p/'cache'))
  for key in ['OPENAI_API_KEY','CODEX_ACCESS_TOKEN','CODEX_AUTH']:env.pop(key,None)
  def run(*args):
   r=subprocess.run([binary,*args],env=env,capture_output=True,text=True,timeout=30)

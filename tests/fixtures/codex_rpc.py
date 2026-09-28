@@ -6,7 +6,7 @@ import pathlib
 import sys
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
-fixture = pathlib.Path(os.environ["CCSW_MOCK_AUTH"])
+fixture = pathlib.Path(os.environ["MUX_MOCK_AUTH"])
 
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -21,7 +21,7 @@ for line in sys.stdin:
     if method == "account/login/start":
         auth = json.loads(fixture.read_text())
         (home / "auth.json").write_text(json.dumps(auth))
-        # Completion can precede the response; CCSW must retain it.
+        # Completion can precede the response; Mux must retain it.
         emit({"method": "account/login/completed", "params": {"loginId": "test-login", "success": True}})
         result = {"type": "chatgptDeviceCode", "loginId": "test-login", "verificationUrl": "https://auth.openai.com/codex/device", "userCode": "TEST-CODE"}
     elif method == "account/read":

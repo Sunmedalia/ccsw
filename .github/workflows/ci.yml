@@ -17,11 +17,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
-      - run: docker build -f tests/docker/Dockerfile -t ccsw-uninstall-safety .
+      - run: docker build -f tests/docker/Dockerfile -t mux-uninstall-safety .
       - name: Uninstall safety as root
-        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec ccsw-uninstall-safety
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec mux-uninstall-safety
       - name: Uninstall safety as ordinary user
-        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --user 10001:10001 ccsw-uninstall-safety
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --user 10001:10001 mux-uninstall-safety
 
   security-audit:
     runs-on: ubuntu-latest
@@ -97,14 +97,14 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Build standalone Windows executable
-        run: cargo build --locked --release --target x86_64-pc-windows-msvc --bin ccsw
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc --bin mux
       - name: Inspect, package and test the extracted executable
         shell: pwsh
         run: ./scripts/package-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: ccsw-windows-x86_64
-          path: target/dist/ccsw-windows-x86_64.zip*
+          name: mux-windows-x86_64
+          path: target/dist/mux-windows-x86_64.zip*
           if-no-files-found: error
 
   build:
@@ -114,11 +114,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: ccsw-linux-x86_64
+            artifact: mux-linux-x86_64
           - os: ubuntu-24.04-arm
-            artifact: ccsw-linux-arm64
+            artifact: mux-linux-arm64
           - os: macos-15
-            artifact: ccsw-macos-arm64
+            artifact: mux-macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -127,10 +127,10 @@ jobs:
       - run: cargo build --locked --release
       - name: Package binary
         run: |
-          target/release/ccsw --version
-          tar -C target/release -czf "${{ matrix.artifact }}.tar.gz" ccsw
+          target/release/mux --version
+          tar -C target/release -czf "${{ matrix.artifact }}.tar.gz" mux
           shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256"
-          tar -xOf "${{ matrix.artifact }}.tar.gz" ccsw | cmp - target/release/ccsw
+          tar -xOf "${{ matrix.artifact }}.tar.gz" mux | cmp - target/release/mux
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

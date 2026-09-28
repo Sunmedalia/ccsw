@@ -154,7 +154,7 @@ impl Ticket {
             }
             _ => {
                 eprintln!(
-                    "CCSW usage: could not record request; check usage database permissions or disk space"
+                    "Mux usage: could not record request; check usage database permissions or disk space"
                 );
                 None
             }
@@ -208,7 +208,7 @@ impl Drop for Ticket {
                         params![saved.1, saved.2, saved.3.input, saved.3.output, saved.3.cache_read, saved.3.cache_write, saved.4, saved.5])?;
                     Ok(())
                 }).is_err() {
-                    eprintln!("CCSW usage: could not finalize request statistics");
+                    eprintln!("Mux usage: could not finalize request statistics");
                 }
             });
         }

@@ -9,7 +9,7 @@ Verified on 2026-09-10 in the existing `debian` container (Debian 13, aarch64).
 - `tests/docker/client_tabs_isolation.py`: real PTY mouse switching passed with independent provider catalogs and no configuration mutation.
 - Clippy: all targets/features, warnings denied; formatting checked.
 
-Real retained login validation used `tests/docker/codex_current_login.py` with `CCSW_TEST_INPUT=/root/codex-test` and the Debian binary `/tmp/ccsw-pi-source/target/debug/ccsw`.
+Real retained login validation used `tests/docker/codex_current_login.py` with `MUX_TEST_INPUT=/root/codex-test` and the Debian binary `/tmp/mux-pi-source/target/debug/mux`.
 
 Import and activation passed; disconnect restored the original configuration. The input copies and credentials were unchanged. The retained `/root/codex-test` directory was not removed.
 
@@ -21,6 +21,6 @@ The subsequent account-provider change passed 143 Rust tests on macOS and Debian
 
 `codex_account_switch.py` imported the retained previous and newly copied local login. Their identities differed. Switching previous → current → previous → current matched each expected auth file and selected `model_provider = "openai"`. Installed Codex recognized the final ChatGPT login via `codex login status`. No quota calls or remote credential validation were performed. Both retained inputs were unchanged.
 
-Default Debian CCSW now has `Current ChatGPT` selected and its live auth matches the new copy. `Previous (revoked)` remains saved for the user's inspection. The old revoked token was not tested with remote requests and cannot be repaired by switching accounts.
+Default Debian Mux now has `Current ChatGPT` selected and its live auth matches the new copy. `Previous (revoked)` remains saved for the user's inspection. The old revoked token was not tested with remote requests and cannot be repaired by switching accounts.
 
 Regression tests also verify that reimported fresh credentials are not overwritten by a revoked live copy of the same identity, and that ChatGPT does not inherit third-party model settings from an unmanaged API configuration.

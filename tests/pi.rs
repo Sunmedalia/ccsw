@@ -27,7 +27,7 @@ impl Sandbox {
             .args(args)
             .env("HOME", self.root.path())
             .env("PI_CODING_AGENT_DIR", self.root.path().join("pi"))
-            .env("CCSW_CONFIG", self.root.path().join("config.toml"))
+            .env("MUX_CONFIG", self.root.path().join("config.toml"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
             .env("CODEX_HOME", self.root.path().join("codex"))
@@ -57,13 +57,13 @@ fn native_apply_restore_and_secret_literal() {
     ];
     s.ok(&["pi", "apply", "--profile", "local"]);
     let models = s.get("models.json");
-    let p = &models["providers"]["ccsw-local"];
+    let p = &models["providers"]["mux-local"];
     assert_eq!(p["api"], "openai-completions");
     assert_eq!(p["apiKey"], "$!secret$$KEY");
     assert_eq!(p["models"][0]["id"], "test");
     assert_eq!(p["models"][0]["contextWindow"], 1_000_000);
     assert_eq!(p["models"][0]["maxTokens"], 512);
-    assert_eq!(s.get("settings.json")["defaultProvider"], "ccsw-local");
+    assert_eq!(s.get("settings.json")["defaultProvider"], "mux-local");
     assert!(!s.ok(&["pi", "status"]).contains("secret"));
     s.ok(&["pi", "apply", "--profile", "local"]);
     s.ok(&["pi", "disconnect"]);
@@ -81,7 +81,7 @@ fn external_edits_conflict_and_survive_disconnect() {
     let s = Sandbox::new();
     s.ok(&["pi", "apply", "--profile", "local"]);
     let mut models = s.get("models.json");
-    models["providers"]["ccsw-local"]["apiKey"] = json!("external");
+    models["providers"]["mux-local"]["apiKey"] = json!("external");
     s.put("models.json", models.clone());
     assert!(
         !s.run(&["pi", "apply", "--profile", "local"])
@@ -113,7 +113,7 @@ fn import_preview_deduplicates_and_preserves_compatibility() {
     assert_eq!(cfg["pi"]["profiles"].as_table().unwrap().len(), 2);
     s.ok(&["pi", "apply", "--profile", "pi-custom"]);
     let models = s.get("models.json");
-    let p = &models["providers"]["ccsw-pi-custom"];
+    let p = &models["providers"]["mux-pi-custom"];
     assert_eq!(p["compat"]["supportsDeveloperRole"], false);
     assert_eq!(p["models"][0]["reasoning"], true);
 }
@@ -121,7 +121,7 @@ fn import_preview_deduplicates_and_preserves_compatibility() {
 fn collisions_and_uninstall_are_conservative() {
     let s = Sandbox::new();
     let mut models = s.get("models.json");
-    models["providers"]["ccsw-local"] = json!({"keep":true});
+    models["providers"]["mux-local"] = json!({"keep":true});
     s.put("models.json", models.clone());
     assert!(
         !s.run(&["pi", "apply", "--profile", "local"])
@@ -132,7 +132,7 @@ fn collisions_and_uninstall_are_conservative() {
     models["providers"]
         .as_object_mut()
         .unwrap()
-        .remove("ccsw-local");
+        .remove("mux-local");
     s.put("models.json", models.clone());
     let auth = s.get("auth.json");
     s.ok(&["pi", "apply", "--profile", "local"]);
@@ -157,18 +157,10 @@ fn import_resync_removes_disabled_models_and_reconnects_catalog() {
     fs::write(&path, toml::to_string(&cfg).unwrap()).unwrap();
     assert!(s.ok(&["pi", "status"]).contains("pending"));
     s.ok(&["pi", "import"]);
-    assert!(
-        s.get("models.json")["providers"]
-            .get("ccsw-local")
-            .is_none()
-    );
+    assert!(s.get("models.json")["providers"].get("mux-local").is_none());
     assert_eq!(s.get("settings.json")["defaultProvider"], "original");
     cfg["pi"]["profiles"]["local"]["disabled_models"] = toml::Value::Array(vec![]);
     fs::write(&path, toml::to_string(&cfg).unwrap()).unwrap();
     s.ok(&["pi", "import"]);
-    assert!(
-        s.get("models.json")["providers"]
-            .get("ccsw-local")
-            .is_some()
-    );
+    assert!(s.get("models.json")["providers"].get("mux-local").is_some());
 }

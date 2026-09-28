@@ -66,7 +66,7 @@ pub struct Settings {
     pub profiles: BTreeMap<String, Profile>,
     #[serde(default)]
     pub preferences: Preferences,
-    /// CCSW provider/model route to the original Grok catalog key.
+    /// Mux provider/model route to the original Grok catalog key.
     #[serde(default)]
     pub imports: BTreeMap<String, String>,
     #[serde(default)]
@@ -90,7 +90,7 @@ pub enum Mode {
 
 impl Settings {
     pub(crate) fn managed_key(&self, key: &str) -> bool {
-        key.starts_with("ccsw::") || self.imports.values().any(|name| name == key)
+        key.starts_with("mux::") || self.imports.values().any(|name| name == key)
     }
 
     /// Restore provider flags saved by older versions that treated Grok like Codex.
@@ -150,7 +150,7 @@ pub fn model_key(settings: &Settings, provider: &str, model: &str) -> String {
         .imports
         .get(&route(provider, model))
         .cloned()
-        .unwrap_or_else(|| format!("ccsw::{provider}::{model}"))
+        .unwrap_or_else(|| format!("mux::{provider}::{model}"))
 }
 fn read(path: &Path) -> Result<String> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -254,7 +254,7 @@ fn save_binding(paths: &AppPaths, next: Option<&Binding>) -> Result<()> {
 }
 fn lock(paths: &AppPaths, home: &Path) -> Result<Vec<fs::File>> {
     let mut locks = Vec::new();
-    for path in [paths.state_dir.join("grok.lock"), home.join(".ccsw.lock")] {
+    for path in [paths.state_dir.join("grok.lock"), home.join(".mux.lock")] {
         fs::create_dir_all(path.parent().context("Missing lock directory")?)?;
         if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
             bail!("Invalid Grok lock path");
@@ -276,7 +276,7 @@ fn check_binding(binding: &Binding, paths: &AppPaths, home: &Path) -> Result<()>
     if !crate::platform::same_path(&binding.home, home)?
         || !crate::platform::same_path(&binding.config, &paths.config)?
     {
-        bail!("Grok is connected to another home or CCSW configuration");
+        bail!("Grok is connected to another home or Mux configuration");
     }
     Ok(())
 }
@@ -536,7 +536,7 @@ pub fn apply(
         .clone()
         .or_else(|| config.grok.preferences.default.clone());
     let managed_default =
-        |key: &str| key.starts_with("ccsw::") || config.grok.imports.values().any(|v| v == key);
+        |key: &str| key.starts_with("mux::") || config.grok.imports.values().any(|v| v == key);
     let default = match requested_default {
         Some(key) if managed_default(&key) && !available.contains(&key) => {
             if preferred.is_some() {
@@ -639,7 +639,7 @@ pub fn validate_oauth_model(home: &Path, model: &str) -> Result<()> {
     if status.expired && !status.refreshable {
         bail!("Saved Grok OAuth session expired; sign in again");
     }
-    if model.trim().is_empty() || model.starts_with("ccsw::") {
+    if model.trim().is_empty() || model.starts_with("mux::") {
         bail!("Choose a native Grok model, e.g. grok-build");
     }
     let doc = document(&home.join("config.toml"))?;
@@ -672,7 +672,7 @@ pub fn prepare_import(home: &Path, current: &Settings) -> Result<Import> {
     let mut preview = Vec::new();
     if let Some(models) = raw.get("model").and_then(|v| v.as_table()) {
         for (key, entry) in models {
-            if key.starts_with("ccsw::") || current.imports.values().any(|name| name == key) {
+            if key.starts_with("mux::") || current.imports.values().any(|name| name == key) {
                 continue;
             }
             let get = |name: &str| entry.get(name).and_then(|v| v.as_str());
@@ -947,7 +947,7 @@ mod tests {
         let mut settings = Settings {
             active_mode: Some(Mode::Account),
             suspended_providers: Some(BTreeMap::from([("a".into(), true), ("b".into(), false)])),
-            last_api_web_search: Some("ccsw::a::test".into()),
+            last_api_web_search: Some("mux::a::test".into()),
             ..Settings::default()
         };
         let mut profiles = BTreeMap::from([
@@ -963,14 +963,14 @@ mod tests {
         assert!(settings.suspended_providers.is_none());
         assert_eq!(
             settings.preferences.web_search.as_deref(),
-            Some("ccsw::a::test")
+            Some("mux::a::test")
         );
     }
 
     fn fixture() -> (tempfile::TempDir, AppPaths, PathBuf, config::Config) {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths {
-            config: temp.path().join("ccsw.toml"),
+            config: temp.path().join("mux.toml"),
             state_dir: temp.path().join("state"),
             cache: temp.path().join("cache/models.json"),
         };
@@ -1027,30 +1027,30 @@ mod tests {
             value: "anthropic-secret".into(),
         };
         c.grok.preferences.compact_mode = Some(true);
-        apply(&paths, &home, &c, Some("ccsw::b::test".into()), false).unwrap();
+        apply(&paths, &home, &c, Some("mux::b::test".into()), false).unwrap();
         let v = raw(&home);
         assert_eq!(
-            v["model"]["ccsw::a::test"]["api_backend"].as_str(),
+            v["model"]["mux::a::test"]["api_backend"].as_str(),
             Some("messages")
         );
         assert_eq!(
-            v["model"]["ccsw::b::test"]["api_backend"].as_str(),
+            v["model"]["mux::b::test"]["api_backend"].as_str(),
             Some("chat_completions")
         );
         assert_eq!(
-            v["model"]["ccsw::c::test"]["api_backend"].as_str(),
+            v["model"]["mux::c::test"]["api_backend"].as_str(),
             Some("responses")
         );
         assert_eq!(
-            v["model"]["ccsw::a::test"]["extra_headers"]["x-api-key"].as_str(),
+            v["model"]["mux::a::test"]["extra_headers"]["x-api-key"].as_str(),
             Some("anthropic-secret")
         );
-        assert_eq!(v["model"]["ccsw::b::test"]["model"].as_str(), Some("test"));
+        assert_eq!(v["model"]["mux::b::test"]["model"].as_str(), Some("test"));
         assert_eq!(
-            v["model"]["ccsw::b::test"]["max_completion_tokens"].as_integer(),
+            v["model"]["mux::b::test"]["max_completion_tokens"].as_integer(),
             Some(1024)
         );
-        assert_eq!(v["models"]["default"].as_str(), Some("ccsw::b::test"));
+        assert_eq!(v["models"]["default"].as_str(), Some("mux::b::test"));
         assert!(conflicts(&paths, &home).unwrap().is_empty());
         disconnect(&paths, &home).unwrap();
         assert_eq!(raw(&home)["models"]["default"].as_str(), Some("grok-4.7"));
@@ -1106,7 +1106,7 @@ mod tests {
         apply(&paths, &home, &c, None, true).unwrap();
         disconnect(&paths, &home).unwrap();
         assert_eq!(
-            raw(&home)["model"]["ccsw::a::test"]["name"].as_str(),
+            raw(&home)["model"]["mux::a::test"]["name"].as_str(),
             Some("Test · External model")
         );
         apply(&paths, &home, &c, None, false).unwrap();
@@ -1117,7 +1117,7 @@ mod tests {
         .unwrap();
         assert!(!disconnect(&paths, &home).unwrap().is_empty());
         assert!(
-            raw(&home)["model"]["ccsw::a::test"]["name"]
+            raw(&home)["model"]["mux::a::test"]["name"]
                 .as_str()
                 .unwrap()
                 .contains("Changed again")
@@ -1129,7 +1129,7 @@ mod tests {
         fs::write(home.join("config.toml"), "[models]\ndefault='grok-4.7'\n").unwrap();
         c.profiles
             .insert("a".into(), profile(ApiFormat::OpenaiChat));
-        c.grok.preferences.default = Some("ccsw::a::test".into());
+        c.grok.preferences.default = Some("mux::a::test".into());
         apply(&paths, &home, &c, None, false).unwrap();
         c.profiles
             .get_mut("a")
@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires CCSW_GROK_BIN pointing to an installed Grok Build CLI"]
+    #[ignore = "requires MUX_GROK_BIN pointing to an installed Grok Build CLI"]
     fn installed_grok_accepts_generated_config_and_disabled_catalog_keys() {
         use std::{
             io::{Read, Write},
@@ -1222,7 +1222,7 @@ mod tests {
             },
             time::Duration,
         };
-        let bin = std::env::var("CCSW_GROK_BIN").expect("set CCSW_GROK_BIN");
+        let bin = std::env::var("MUX_GROK_BIN").expect("set MUX_GROK_BIN");
         let (_t, paths, home, mut c) = fixture();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -1270,7 +1270,7 @@ mod tests {
             show_thinking_blocks: Some(true),
             ..Default::default()
         };
-        apply(&paths, &home, &c, Some("ccsw::a::test".into()), false).unwrap();
+        apply(&paths, &home, &c, Some("mux::a::test".into()), false).unwrap();
         let run = |command: &str| {
             std::process::Command::new(&bin)
                 .arg(command)
@@ -1301,17 +1301,17 @@ mod tests {
         assert!(models.status.success());
         assert!(disabled.status.success());
         let list = String::from_utf8_lossy(&models.stdout);
-        assert!(list.contains("ccsw::a::test"));
-        assert!(list.contains("ccsw::b::test"));
-        assert!(list.contains("ccsw::c::test"));
+        assert!(list.contains("mux::a::test"));
+        assert!(list.contains("mux::b::test"));
+        assert!(list.contains("mux::c::test"));
         for provider in ["a", "b", "c"] {
-            assert!(list.contains(&format!("ccsw::{provider}::test-other")));
+            assert!(list.contains(&format!("mux::{provider}::test-other")));
         }
         let list = String::from_utf8_lossy(&disabled.stdout);
-        assert!(!list.contains("ccsw::a::test"));
-        assert!(!list.contains("ccsw::b::test-other"));
-        assert!(list.contains("ccsw::b::test"));
-        assert!(list.contains("ccsw::c::test-other"));
+        assert!(!list.contains("mux::a::test"));
+        assert!(!list.contains("mux::b::test-other"));
+        assert!(list.contains("mux::b::test"));
+        assert!(list.contains("mux::c::test-other"));
     }
     #[test]
     fn invalid_native_toml_does_not_expose_credentials_in_errors() {
@@ -1337,7 +1337,7 @@ mod picker_catalog_tests {
         let home = temp.path().join("grok");
         fs::create_dir_all(&home).unwrap();
         let paths = AppPaths {
-            config: temp.path().join("ccsw.toml"),
+            config: temp.path().join("mux.toml"),
             state_dir: temp.path().join("state"),
             cache: temp.path().join("cache.json"),
         };
@@ -1365,7 +1365,7 @@ mod picker_catalog_tests {
             &paths,
             &home,
             &config,
-            Some("ccsw::one::first".into()),
+            Some("mux::one::first".into()),
             false,
         )
         .unwrap();
@@ -1375,7 +1375,7 @@ mod picker_catalog_tests {
         assert_eq!(models.len(), 7); // Six managed models plus the existing native model.
         for provider in ["one", "two", "three"] {
             for model in ["first", "second"] {
-                let entry = &models[&format!("ccsw::{provider}::{model}")];
+                let entry = &models[&format!("mux::{provider}::{model}")];
                 assert_eq!(entry["model"].as_str(), Some(model));
                 assert_eq!(
                     entry["base_url"].as_str(),
@@ -1386,9 +1386,9 @@ mod picker_catalog_tests {
                     Some(format!("test-{provider}").as_str())
                 );
             }
-            assert!(!models.contains_key(&format!("ccsw::{provider}::unselected")));
+            assert!(!models.contains_key(&format!("mux::{provider}::unselected")));
         }
-        assert_eq!(doc["models"]["default"].as_str(), Some("ccsw::one::first"));
+        assert_eq!(doc["models"]["default"].as_str(), Some("mux::one::first"));
         disconnect(&paths, &home).unwrap();
         let restored: toml::Value =
             toml::from_str(&fs::read_to_string(home.join("config.toml")).unwrap()).unwrap();

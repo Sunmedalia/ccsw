@@ -54,9 +54,9 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
         lines.push(format!(
             "State: {}{}",
             if active == Some(id) {
-                "Applied by CCSW"
+                "Applied by Mux"
             } else if active.is_some() {
-                "Local login differs from CCSW selection"
+                "Local login differs from Mux selection"
             } else {
                 "Saved local login"
             },
@@ -87,7 +87,7 @@ fn codex_info(config: &config::Config, live: Option<&str>, local: &str) -> Info 
             lines.push("Last quota refresh failed · cached data".into());
         }
     } else if active.is_none() {
-        lines.push("CCSW mode: API providers".into());
+        lines.push("Mux mode: API providers".into());
     }
     for (id, account) in &config.codex.accounts {
         if chosen.is_some_and(|(chosen, _)| chosen == id) {
@@ -393,7 +393,7 @@ pub(super) fn spawn(
                 }
                 Err(_) => Accounts {
                     codex: Info {
-                        lines: vec!["Cannot read CCSW account configuration".into()],
+                        lines: vec!["Cannot read Mux account configuration".into()],
                         ..Default::default()
                     },
                     grok: Info {
@@ -453,7 +453,7 @@ mod tests {
         for text in [
             "Personal",
             "one@example.com",
-            "Local login differs from CCSW selection",
+            "Local login differs from Mux selection",
             "Configured: Personal",
             "two@example.com",
             "Local login",

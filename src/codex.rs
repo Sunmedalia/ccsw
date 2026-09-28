@@ -55,7 +55,7 @@ pub enum Command {
         #[arg(long)]
         reasoning: Option<String>,
     },
-    /// Restore the settings and credentials saved before CCSW took control
+    /// Restore the settings and credentials saved before Mux took control
     Disconnect,
     /// Roll back an interrupted Codex file transaction
     Recover,
@@ -148,7 +148,7 @@ pub fn run(paths: &AppPaths, command: Command) -> Result<()> {
                     &std::sync::atomic::AtomicBool::new(false),
                     |message| println!("{message}"),
                 )?;
-                println!("Saved account {id}; use `ccsw codex accounts use {id}` to switch.");
+                println!("Saved account {id}; use `mux codex accounts use {id}` to switch.");
             }
             AccountCommand::Import { name, file } => println!(
                 "Saved account {}",
@@ -215,7 +215,7 @@ pub(super) fn lock(paths: &AppPaths) -> Result<OperationLock> {
         .context("Another Codex operation is running; retry when it finishes")?;
     let codex_home = home()?;
     fs::create_dir_all(&codex_home)?;
-    let home_path = codex_home.join(".ccsw.lock");
+    let home_path = codex_home.join(".mux.lock");
     let home_lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -225,7 +225,7 @@ pub(super) fn lock(paths: &AppPaths) -> Result<OperationLock> {
     config::set_private(&home_path)?;
     home_lock
         .try_lock_exclusive()
-        .context("Another CCSW configuration is editing this CODEX_HOME")?;
+        .context("Another Mux configuration is editing this CODEX_HOME")?;
     Ok(OperationLock {
         _state: file,
         _home: home_lock,
@@ -249,14 +249,14 @@ const KEYS: &[&str] = &[
     "model_context_window",
     "model_auto_compact_token_limit",
     "cli_auth_credentials_store",
-    "model_providers.ccsw",
+    "model_providers.mux",
     "openai_base_url",
     "web_search",
 ];
 fn get(doc: &DocumentMut, key: &str) -> Option<String> {
     let root: toml::Value = doc.to_string().parse().ok()?;
-    let item = if key == "model_providers.ccsw" {
-        root.get("model_providers")?.get("ccsw")?
+    let item = if key == "model_providers.mux" {
+        root.get("model_providers")?.get("mux")?
     } else {
         root.get(key)?
     };
@@ -291,7 +291,7 @@ fn check_managed(binding: &Binding, home: &Path, doc: &DocumentMut) -> Result<()
         if !matches!(key.as_str(), "model" | "model_reasoning_effort") && get(doc, key) != *expected
         {
             bail!(
-                "Codex setting {key} changed outside CCSW; restore it or run ccsw codex disconnect (TUI: D) before applying"
+                "Codex setting {key} changed outside Mux; restore it or run mux codex disconnect (TUI: D) before applying"
             );
         }
     }
@@ -359,7 +359,7 @@ fn rollback(paths: &AppPaths, transaction: &Transaction) -> Result<()> {
             if config.codex.active != Some(transaction.new_selection.clone())
                 && config.codex.active != transaction.old_selection
             {
-                bail!("CCSW selection changed during recovery");
+                bail!("Mux selection changed during recovery");
             }
             for (id, profile) in &transaction.old_settings.profiles {
                 if let Some(current) = config.codex.profiles.get_mut(id) {
@@ -409,7 +409,7 @@ fn ensure_providers(doc: &mut DocumentMut) -> Result<()> {
     Ok(())
 }
 fn restore_key(current: &mut DocumentMut, original: &DocumentMut, key: &str) {
-    if key == "model_providers.ccsw" {
+    if key == "model_providers.mux" {
         if current.get("model_providers").is_none() && original.get("model_providers").is_none() {
             return;
         }
@@ -418,10 +418,10 @@ fn restore_key(current: &mut DocumentMut, original: &DocumentMut, key: &str) {
             .get_mut("model_providers")
             .and_then(Item::as_table_mut)
         {
-            table.remove("ccsw");
+            table.remove("mux");
         }
-        if let Some(item) = original.get("model_providers").and_then(|i| i.get("ccsw")) {
-            current["model_providers"]["ccsw"] = item.clone();
+        if let Some(item) = original.get("model_providers").and_then(|i| i.get("mux")) {
+            current["model_providers"]["mux"] = item.clone();
         }
         if original.get("model_providers").is_none()
             && current
@@ -458,7 +458,7 @@ fn commit_with_route(
     route: Option<proxy::CodexRoutePlan>,
 ) -> Result<()> {
     if journal_path(paths).exists() {
-        bail!("An interrupted transaction needs recovery: ccsw codex recover");
+        bail!("An interrupted transaction needs recovery: mux codex recover");
     }
     if document(home)?.to_string() != old.to_string() {
         bail!("Codex configuration changed during preparation; retry");
@@ -577,7 +577,7 @@ fn commit_with_route(
     })();
     if let Err(error) = result {
         rollback(paths, &transaction)
-            .context("Could not roll back; run ccsw codex recover before further changes")?;
+            .context("Could not roll back; run mux codex recover before further changes")?;
         return Err(error);
     }
     fs::remove_file(journal_path(paths))?;
@@ -622,21 +622,21 @@ pub fn apply(
     let (route, models, url, token) = proxy::prepare_codex_route(paths, &config)?;
     let mut new = old.clone();
     new["model"] = value(proxy::codex_model_id(profile_id, wanted));
-    new["model_provider"] = value("ccsw");
+    new["model_provider"] = value("mux");
     let catalog = write_model_catalog(paths, &models)?;
     new["model_catalog_json"] = value(catalog.to_string_lossy().as_ref());
     ensure_providers(&mut new)?;
-    new["model_providers"]["ccsw"] = Item::Table(toml_edit::Table::new());
+    new["model_providers"]["mux"] = Item::Table(toml_edit::Table::new());
     for (key, val) in [
-        ("name", "CCSW"),
+        ("name", "Mux"),
         ("base_url", url.as_str()),
         ("wire_api", "responses"),
         ("experimental_bearer_token", token.as_str()),
     ] {
-        new["model_providers"]["ccsw"][key] = value(val);
+        new["model_providers"]["mux"][key] = value(val);
     }
-    new["model_providers"]["ccsw"]["requires_openai_auth"] = value(false);
-    new["model_providers"]["ccsw"]["supports_websockets"] = value(false);
+    new["model_providers"]["mux"]["requires_openai_auth"] = value(false);
+    new["model_providers"]["mux"]["supports_websockets"] = value(false);
     if let Some(effort) = reasoning.or(config.codex.reasoning_effort.as_deref()) {
         new["model_reasoning_effort"] = value(effort);
     }
@@ -748,7 +748,7 @@ pub fn status(paths: &AppPaths) -> Result<String> {
         }
     }
     if paths.state_dir.join("codex-transaction.json").exists() {
-        message.push_str("\nInterrupted transaction: run ccsw codex recover.");
+        message.push_str("\nInterrupted transaction: run mux codex recover.");
     }
     if let Some(binding) = binding(paths)? {
         if let Err(error) = check_managed(&binding, &home, &doc) {
@@ -781,7 +781,7 @@ pub(crate) fn prepare_detach(paths: &AppPaths) -> Result<Option<DetachPlan>> {
         return Ok(None);
     };
     if journal_path(paths).exists() {
-        bail!("Run ccsw codex recover before disconnecting or uninstalling");
+        bail!("Run mux codex recover before disconnecting or uninstalling");
     }
     let mut current = document(&state.home)?;
     let before = current.to_string();
@@ -837,7 +837,7 @@ pub(crate) fn execute_detach(plan: &DetachPlan) -> Result<()> {
 }
 pub fn disconnect(paths: &AppPaths) -> Result<()> {
     let _guard = lock(paths)?;
-    let plan = prepare_detach(paths)?.context("Codex is not managed by CCSW")?;
+    let plan = prepare_detach(paths)?.context("Codex is not managed by Mux")?;
     if !crate::platform::same_path(&plan.home, &home()?)? {
         bail!("Use the original CODEX_HOME to disconnect");
     }
@@ -884,7 +884,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, AppPaths, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let paths = AppPaths {
-            config: root.path().join("ccsw.toml"),
+            config: root.path().join("mux.toml"),
             state_dir: root.path().join("state"),
             cache: root.path().join("cache"),
         };
@@ -906,14 +906,14 @@ mod tests {
     #[test]
     fn managed_comparison_ignores_toml_formatting_and_table_order() {
         let a: DocumentMut =
-            "model='m'\n[model_providers.ccsw]\nname='CCSW'\nbase_url='http://localhost'\n"
+            "model='m'\n[model_providers.mux]\nname='Mux'\nbase_url='http://localhost'\n"
                 .parse()
                 .unwrap();
-        let b:DocumentMut="model = \"m\" # comment\n[model_providers.ccsw]\nbase_url = \"http://localhost\"\nname = \"CCSW\"\n".parse().unwrap();
+        let b:DocumentMut="model = \"m\" # comment\n[model_providers.mux]\nbase_url = \"http://localhost\"\nname = \"Mux\"\n".parse().unwrap();
         assert_eq!(get(&a, "model"), get(&b, "model"));
         assert_eq!(
-            get(&a, "model_providers.ccsw"),
-            get(&b, "model_providers.ccsw")
+            get(&a, "model_providers.mux"),
+            get(&b, "model_providers.mux")
         );
     }
     #[test]
@@ -959,7 +959,7 @@ mod tests {
         let old = document(&home).unwrap();
         let mut new = old.clone();
         new["model"] = value("new");
-        // Make CCSW config locking fail after external settings and the binding were written.
+        // Make Mux config locking fail after external settings and the binding were written.
         fs::remove_file(paths.config.with_extension("toml.lock")).unwrap();
         fs::create_dir(paths.config.with_extension("toml.lock")).unwrap();
         let route: proxy::CodexRoutePlan = serde_json::from_value(json!({

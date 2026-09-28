@@ -1,13 +1,13 @@
 """Real PTY: each tab renders only its own v4 provider configuration."""
 import fcntl,os,pathlib,pty,select,struct,subprocess,tempfile,termios,time
-with tempfile.TemporaryDirectory(prefix='ccsw-tabs-isolation-') as d:
+with tempfile.TemporaryDirectory(prefix='mux-tabs-isolation-') as d:
  p=pathlib.Path(d);config='version=4\n'
  for section,label in [('profiles','CLAUDE_ONLY'),('codex.profiles','CODEX_ONLY'),('pi.profiles','PI_ONLY')]:
   config+=f'[{section}.local]\nname="{label}"\nbase_url="https://example.invalid"\ndefault_model="model-{label}"\n'
  (p/'config.toml').write_text(config)
- env=dict(os.environ,HOME=d,TERM='xterm-256color',CCSW_CONFIG=str(p/'config.toml'),XDG_STATE_HOME=str(p/'state'),XDG_CACHE_HOME=str(p/'cache'),CODEX_HOME=str(p/'codex'),PI_CODING_AGENT_DIR=str(p/'pi'),CLAUDE_CONFIG_DIR=str(p/'claude'))
+ env=dict(os.environ,HOME=d,TERM='xterm-256color',MUX_CONFIG=str(p/'config.toml'),XDG_STATE_HOME=str(p/'state'),XDG_CACHE_HOME=str(p/'cache'),CODEX_HOME=str(p/'codex'),PI_CODING_AGENT_DIR=str(p/'pi'),CLAUDE_CONFIG_DIR=str(p/'claude'))
  master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',36,120,0,0))
- child=subprocess.Popen([os.environ['CCSW_TEST_BINARY']],env=env,stdin=slave,stdout=slave,stderr=slave);os.close(slave)
+ child=subprocess.Popen([os.environ['MUX_TEST_BINARY']],env=env,stdin=slave,stdout=slave,stderr=slave);os.close(slave)
  def read():
   out=b'';end=time.monotonic()+0.5
   while time.monotonic()<end:

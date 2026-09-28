@@ -1,21 +1,21 @@
 param(
-    [string]$Binary = 'target/x86_64-pc-windows-msvc/debug/ccsw.exe',
-    [string]$Helper = 'target/x86_64-pc-windows-msvc/debug/ccsw-test-helper.exe'
+    [string]$Binary = 'target/x86_64-pc-windows-msvc/debug/mux.exe',
+    [string]$Helper = 'target/x86_64-pc-windows-msvc/debug/mux-test-helper.exe'
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 $Helper = (Resolve-Path -LiteralPath $Helper).Path
-$root = Join-Path ([IO.Path]::GetTempPath()) ('ccsw npm 用户 ' + [guid]::NewGuid())
+$root = Join-Path ([IO.Path]::GetTempPath()) ('mux npm 用户 ' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $root | Out-Null
 $original = @{}
 $values = @{
     HOME = $root; USERPROFILE = $root; APPDATA = "$root\roaming"; LOCALAPPDATA = "$root\local"
-    CCSW_CONFIG = "$root\config.toml"; XDG_CONFIG_HOME = "$root\config-root"
+    MUX_CONFIG = "$root\config.toml"; XDG_CONFIG_HOME = "$root\config-root"
     XDG_STATE_HOME = "$root\state"; XDG_CACHE_HOME = "$root\cache"
     CLAUDE_CONFIG_DIR = "$root\claude"; CODEX_HOME = "$root\codex"; PI_CODING_AGENT_DIR = "$root\pi"
-    CCSW_TEST_HELPER = $Helper; CCSW_HELPER_RECORD = "$root\args.json"
-    CCSW_CLAUDE_BIN = 'ccsw-fixture-claude'; PATH = "$root\node_modules\.bin;$env:PATH"
+    MUX_TEST_HELPER = $Helper; MUX_HELPER_RECORD = "$root\args.json"
+    MUX_CLAUDE_BIN = 'mux-fixture-claude'; PATH = "$root\node_modules\.bin;$env:PATH"
 }
 try {
     & npm.cmd install --prefix $root --offline --ignore-scripts --no-audit --no-fund --package-lock=false ./tests/fixtures/npm-client

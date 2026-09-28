@@ -1,5 +1,5 @@
 """Use copied current config in Debian. Never prints credentials or model output.
-Input directory: CCSW_TEST_INPUT; use --live for real Pi short requests.
+Input directory: MUX_TEST_INPUT; use --live for real Pi short requests.
 """
 import hashlib
 import json
@@ -12,20 +12,20 @@ import tempfile
 import time
 import tomllib
 
-source = Path(os.environ['CCSW_TEST_INPUT'])
-binary = os.environ['CCSW_TEST_BINARY']
-pi = os.environ['CCSW_PI_BIN']
+source = Path(os.environ['MUX_TEST_INPUT'])
+binary = os.environ['MUX_TEST_BINARY']
+pi = os.environ['MUX_PI_BIN']
 before = {p: hashlib.sha256(p.read_bytes()).digest() for p in source.iterdir() if p.is_file()}
-with tempfile.TemporaryDirectory(prefix='ccsw-pi-current-') as directory:
+with tempfile.TemporaryDirectory(prefix='mux-pi-current-') as directory:
     root=Path(directory); (root/'pi').mkdir(); (root/'work').mkdir()
-    config=(source/'ccsw.toml').read_text().replace('127.0.0.1:20128','host.docker.internal:20128')
+    config=(source/'mux.toml').read_text().replace('127.0.0.1:20128','host.docker.internal:20128')
     (root/'config.toml').write_text(config)
-    env=dict(os.environ,HOME=directory,PI_CODING_AGENT_DIR=str(root/'pi'),CCSW_CONFIG=str(root/'config.toml'),XDG_STATE_HOME=str(root/'state'),XDG_CACHE_HOME=str(root/'cache'))
+    env=dict(os.environ,HOME=directory,PI_CODING_AGENT_DIR=str(root/'pi'),MUX_CONFIG=str(root/'config.toml'),XDG_STATE_HOME=str(root/'state'),XDG_CACHE_HOME=str(root/'cache'))
     for key in list(env):
         if key.endswith('_API_KEY') or key in ['ANTHROPIC_AUTH_TOKEN','CODEX_AUTH','CODEX_ACCESS_TOKEN']: env.pop(key)
     def run(*args):
         result=subprocess.run([binary,*args],env=env,capture_output=True,text=True,timeout=30)
-        assert result.returncode==0, 'CCSW operation failed: '+ ' '.join(args[:2])
+        assert result.returncode==0, 'Mux operation failed: '+ ' '.join(args[:2])
         return result.stdout
     if '--live' not in sys.argv:
         for name in ['models.json','settings.json','auth.json']:
@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-current-') as directory:
         for name,p in profiles.items():
             if not p.get('enabled',True):continue
             run('pi','apply','--profile',name)
-            assert json.loads((root/'pi/settings.json').read_text())['defaultProvider']=='ccsw-'+name
+            assert json.loads((root/'pi/settings.json').read_text())['defaultProvider']=='mux-'+name
             run('pi','disconnect')
             assert all(json.loads((root/'pi'/name).read_text())==value for name,value in originals.items())
         print(f'PASS current Pi import: {imported} imported, {skipped} explicitly skipped; deduplication; {len(profiles)} providers applied/restored; auth unchanged')
@@ -63,8 +63,8 @@ with tempfile.TemporaryDirectory(prefix='ccsw-pi-current-') as directory:
                 print(f'{"PASS" if ok else "FAIL"} {name}: Pi exit={result.returncode}, output_chars={len(result.stdout.strip())}, {time.monotonic()-start:.1f}s',flush=True)
             except subprocess.TimeoutExpired:
                 failures+=1; print(f'FAIL {name}: Pi timeout 45s',flush=True)
-            # Undo test-only token cap changes before checking CCSW restoration.
-            state=json.loads((root/'state/ccsw/pi-binding.json').read_text())
+            # Undo test-only token cap changes before checking Mux restoration.
+            state=json.loads((root/'state/mux/pi-binding.json').read_text())
             (root/'pi/models.json').write_text(json.dumps(state['expected'][0]))
             run('pi','disconnect')
         print(f'Live result: {len(profiles)-failures}/{len(profiles)} providers passed',flush=True)

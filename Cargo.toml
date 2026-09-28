@@ -1,9 +1,9 @@
 [package]
-name = "ccsw"
+name = "mux"
 version = "0.1.18"
 edition = "2024"
 rust-version = "1.88"
-description = "A Claude Code provider, model, and proxy configuration manager"
+description = "A terminal configuration manager for coding agents, model providers, accounts, and local proxies"
 license = "MIT"
 
 [dependencies]
@@ -51,11 +51,11 @@ windows = { version = "0.61", features = ["Win32_System_Com", "Win32_System_Cons
 test-support = []
 
 [[bin]]
-name = "ccsw"
+name = "mux"
 path = "src/main.rs"
 
 [[bin]]
-name = "ccsw-test-helper"
+name = "mux-test-helper"
 path = "tests/support/helper.rs"
 required-features = ["test-support"]
 test = false

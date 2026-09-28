@@ -1,6 +1,6 @@
 # 当前配置 Docker 测试记录
 
-日期：2026-09-09。镜像：`ccsw-codex-test:local`（Linux arm64，Rust 1.95.0 / Debian Bookworm）。
+日期：2026-09-09。镜像：`mux-codex-test:local`（Linux arm64，Rust 1.95.0 / Debian Bookworm）。
 
 ## 自动化检查
 
@@ -10,9 +10,9 @@
 
 ## 当前配置副本
 
-使用宿主机 CCSW v2 配置、Codex 配置和现有文件型 ChatGPT 登录凭据。输入文件只读挂载，工作副本位于容器 tmpfs；容器退出后销毁。源文件内容校验未变化，未打印密钥或令牌。
+使用宿主机 Mux v2 配置、Codex 配置和现有文件型 ChatGPT 登录凭据。输入文件只读挂载，工作副本位于容器 tmpfs；容器退出后销毁。源文件内容校验未变化，未打印密钥或令牌。
 
-断网容器验证通过：真实账号离线导入、重复导入去重、账号激活、6 个厂商 API 配置与订阅模式切换、断开管理后恢复原始 Codex 配置及登录数据、CCSW v2 → v3 迁移。
+断网容器验证通过：真实账号离线导入、重复导入去重、账号激活、6 个厂商 API 配置与订阅模式切换、断开管理后恢复原始 Codex 配置及登录数据、Mux v2 → v3 迁移。
 
 联网测试未挂载订阅凭据。每个厂商通过生成的本地 Codex Responses 路由发送 `Reply only OK.`，流式输出，输出上限 128 tokens。
 
@@ -30,21 +30,21 @@
 先构建镜像：
 
 ```sh
-docker build -f tests/docker/Dockerfile -t ccsw-codex-test:local .
+docker build -f tests/docker/Dockerfile -t mux-codex-test:local .
 ```
 
 离线配置及账号测试（按实际位置调整源文件路径）：
 
 ```sh
 docker run --rm -i --read-only --network none --tmpfs /tmp:rw,nosuid,nodev \
-  -v "$HOME/.config/ccsw/config.toml:/input/ccsw.toml:ro" \
+  -v "$HOME/.config/mux/config.toml:/input/mux.toml:ro" \
   -v "$HOME/.codex/config.toml:/input/codex.toml:ro" \
   -v "$HOME/.codex/auth.json:/input/auth.json:ro" \
-  ccsw-codex-test:local python3 - --offline < tests/docker/current_config.py
+  mux-codex-test:local python3 - --offline < tests/docker/current_config.py
 ```
 
 在线 API 测试：去掉 `--network none`、auth.json 挂载和 `--offline`。可加 `-e TEST_PROFILE=orcarouter` 仅测试一个厂商，`-e TEST_MAX_TOKENS=128` 设置输出上限。真实请求使用配置中的 API 凭据，可能产生正常 API 用量。任何厂商请求失败，脚本以非零状态退出。
 
 ## 验证范围
 
-本次未刷新真实订阅令牌，未测试两个真实账号的在线切换（本机只有一份当前登录）。双账号逻辑由隔离的模拟账号集成测试覆盖。Linux Docker 不验证 macOS Codex App UI 或系统 Keychain；真实 API 测试验证 CCSW Responses 路由，不等同于完整 Codex CLI/App 交互测试。
+本次未刷新真实订阅令牌，未测试两个真实账号的在线切换（本机只有一份当前登录）。双账号逻辑由隔离的模拟账号集成测试覆盖。Linux Docker 不验证 macOS Codex App UI 或系统 Keychain；真实 API 测试验证 Mux Responses 路由，不等同于完整 Codex CLI/App 交互测试。

@@ -126,7 +126,7 @@ mod tests {
             .unwrap()
             .parent()
             .unwrap()
-            .join("ccsw-test-helper.exe");
+            .join("mux-test-helper.exe");
         let copied = root.path().join("用户 & %literal% !^() helper.exe");
         std::fs::copy(helper, &copied).unwrap();
         let record = root.path().join("argv.json");
@@ -144,7 +144,7 @@ mod tests {
             "\\\\server\\share\\",
         ];
         let mut command = Command::new(copied);
-        command.args(expected).env("CCSW_HELPER_RECORD", &record);
+        command.args(expected).env("MUX_HELPER_RECORD", &record);
         let mut child = crate::managed_process::ManagedChild::spawn(&mut command).unwrap();
         assert!(child.wait().unwrap().success());
         let value: serde_json::Value =

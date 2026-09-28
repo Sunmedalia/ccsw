@@ -376,7 +376,7 @@ impl AppPaths {
     pub fn discover() -> Result<Self> {
         let (config_dir, state_dir, cache_dir) = crate::platform::directories()?;
         let config =
-            crate::platform::override_path("CCSW_CONFIG", || Ok(config_dir.join("config.toml")))?;
+            crate::platform::override_path("MUX_CONFIG", || Ok(config_dir.join("config.toml")))?;
         let cache = cache_dir.join("models.json");
         Ok(Self {
             config,
@@ -562,7 +562,7 @@ fn update_locked(
         lock.lock_exclusive()?;
     } else {
         lock.try_lock_exclusive()
-            .context("configuration is busy in another CCSW instance; retry saving")?;
+            .context("configuration is busy in another Mux instance; retry saving")?;
     }
     let mut latest = load(path)?;
     edit(&mut latest)?;
@@ -630,7 +630,7 @@ pub fn merge_profile(original: &Profile, edited: &Profile, latest: &Profile) -> 
             }
             return Ok(result.into());
         }
-        bail!("{field} changed in another CCSW instance; reopen the editor and retry");
+        bail!("{field} changed in another Mux instance; reopen the editor and retry");
     }
     let merged = merge(
         &serde_json::to_value(original)?,
@@ -731,7 +731,7 @@ pub fn update_client_profile(
         let current = config
             .profiles
             .get(id)
-            .context("provider was removed in another CCSW instance")?;
+            .context("provider was removed in another Mux instance")?;
         let merged = merge_profile(original, edited, current)?;
         config.profiles.insert(id.into(), merged);
         Ok(())

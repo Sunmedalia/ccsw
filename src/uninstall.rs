@@ -36,6 +36,7 @@ const STATE_FILES: &[&str] = &[
     "pi.lock",
     "pi-binding.json",
     "pi-transaction.json",
+    "mux-migration-pending.json",
 ];
 
 /// Reject links/reparse points and anything outside the chosen user's home.
@@ -130,7 +131,7 @@ pub fn session(paths: &AppPaths) -> Result<File> {
         .read(true)
         .write(true)
         .open(path)?;
-    FileExt::try_lock_shared(&file).context("CCSW uninstall is in progress")?;
+    FileExt::try_lock_shared(&file).context("Mux uninstall is in progress")?;
     Ok(file)
 }
 
@@ -236,7 +237,7 @@ fn herdr_command(args: &[&str]) -> Result<std::process::Output> {
 }
 
 fn plan_herdr(explicit: bool) -> Result<Option<HerdrPlan>> {
-    let list = match herdr_command(&["plugin", "list", "--plugin", "ccsw", "--json"]) {
+    let list = match herdr_command(&["plugin", "list", "--plugin", "mux", "--json"]) {
         Ok(output) => output,
         Err(error)
             if !explicit
@@ -254,15 +255,15 @@ fn plan_herdr(explicit: bool) -> Result<Option<HerdrPlan>> {
         .and_then(Value::as_array)
         .context("Cannot read Herdr plugin list")?;
     if plugins.len() > 1 {
-        bail!("Herdr returned multiple CCSW plugin entries; refusing to unlink");
+        bail!("Herdr returned multiple Mux plugin entries; refusing to unlink");
     }
     let linked = if let Some(plugin) = plugins.first() {
-        if plugin["plugin_id"].as_str() != Some("ccsw") {
+        if plugin["plugin_id"].as_str() != Some("mux") {
             bail!("Herdr returned an unrelated plugin; refusing to unlink");
         }
         if plugin["source"]["kind"].as_str() != Some("local") {
             if explicit {
-                bail!("CCSW Herdr plugin is managed by GitHub; use herdr plugin uninstall ccsw");
+                bail!("Mux Herdr plugin is managed by GitHub; use herdr plugin uninstall mux");
             }
             return Ok(None);
         }
@@ -271,8 +272,8 @@ fn plan_herdr(explicit: bool) -> Result<Option<HerdrPlan>> {
             .context("Missing Herdr plugin root")?;
         let manifest: toml::Value =
             fs::read_to_string(Path::new(root).join("herdr-plugin.toml"))?.parse()?;
-        if manifest.get("id").and_then(toml::Value::as_str) != Some("ccsw") {
-            bail!("Herdr plugin root is not a CCSW checkout");
+        if manifest.get("id").and_then(toml::Value::as_str) != Some("mux") {
+            bail!("Herdr plugin root is not a Mux checkout");
         }
         true
     } else {
@@ -304,7 +305,7 @@ fn strip_herdr_shortcut(original: &str) -> Result<Option<String>> {
         for index in (0..commands.len()).rev() {
             let entry = commands.get(index).unwrap();
             if entry.get("type").and_then(Item::as_str) == Some("plugin_action")
-                && entry.get("command").and_then(Item::as_str) == Some("ccsw.open")
+                && entry.get("command").and_then(Item::as_str) == Some("mux.open")
             {
                 commands.remove(index);
             }
@@ -319,7 +320,7 @@ fn execute_herdr(plan: &HerdrPlan) -> Result<()> {
         config.verify()?;
     }
     if plan.linked {
-        herdr_command(&["plugin", "unlink", "ccsw"])?;
+        herdr_command(&["plugin", "unlink", "mux"])?;
     }
     if let (Some(config), Some(replacement)) = (&plan.config, &plan.replacement) {
         config.verify()?;
@@ -407,7 +408,7 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
     if let Some(config) = files.iter().find(|f| f.path == paths.config) {
         let value: toml::Value = toml::from_str(std::str::from_utf8(&config.bytes)?)?;
         if value.get("version").is_none() || value.get("profiles").is_none() {
-            bail!("not a CCSW configuration; refusing removal");
+            bail!("not a Mux configuration; refusing removal");
         }
     }
     let registry = files
@@ -533,9 +534,9 @@ fn plan(paths: &AppPaths) -> Result<Plan> {
         // established. Externally switched settings and their backup remain intact.
         if owned {
             for extra in [
-                path.with_extension("json.ccsw-backup"),
-                path.with_extension("json.ccsw.lock"),
-                path.with_extension("json.ccsw-preferences-journal"),
+                path.with_extension("json.mux-backup"),
+                path.with_extension("json.mux.lock"),
+                path.with_extension("json.mux-preferences-journal"),
             ] {
                 if let Some(file) = Snapshot::read(&extra)? {
                     files.push(file);
@@ -590,13 +591,13 @@ fn validate_service(service: &Snapshot, paths: &AppPaths) -> Result<()> {
     {
         let text = std::str::from_utf8(&service.bytes)?;
         #[cfg(target_os = "linux")]
-        let owned = text.starts_with("[Unit]\nDescription=CCSW protocol proxy\n")
+        let owned = text.starts_with("[Unit]\nDescription=Mux protocol proxy\n")
             && text.contains(&format!(
                 " internal proxy-serve --registry {}\n",
                 registry.display()
             ));
         #[cfg(target_os = "macos")]
-        let owned = text.contains("<string>com.ccsw.proxy</string>")
+        let owned = text.contains("<string>com.mux.proxy</string>")
             && text.contains(&format!(
                 "<string>--registry</string><string>{}</string>",
                 crate::proxy::xml_escape(&registry.to_string_lossy())
@@ -650,20 +651,20 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     }
     if let Some(herdr) = &herdr_plan {
         if herdr.linked {
-            println!("Unlink local CCSW Herdr plugin");
+            println!("Unlink local Mux Herdr plugin");
         }
         if let Some(config) = &herdr.config
             && herdr.replacement.is_some()
         {
             println!(
-                "Remove CCSW shortcut from Herdr config: {}",
+                "Remove Mux shortcut from Herdr config: {}",
                 config.path.display()
             );
         }
     }
     if !execute {
         println!(
-            "Preview only. Run ccsw uninstall --yes to execute. The program binary is retained."
+            "Preview only. Run mux uninstall --yes to execute. The program binary is retained."
         );
         return Ok(());
     }
@@ -681,23 +682,23 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
         plan.paths.state_dir.join("proxy.json.lock"),
     ];
     if let Some(pi) = &plan.pi {
-        lock_paths.push(pi.home.join(".ccsw-pi.lock"));
+        lock_paths.push(pi.home.join(".mux-pi.lock"));
     }
     if let Some(codex) = &plan.codex {
-        lock_paths.push(codex.home.join(".ccsw.lock"));
+        lock_paths.push(codex.home.join(".mux.lock"));
     }
     lock_paths.extend(
         plan.settings
             .iter()
             .filter(|s| s.replacement.is_some())
-            .map(|s| s.original.path.with_extension("json.ccsw.lock")),
+            .map(|s| s.original.path.with_extension("json.mux.lock")),
     );
     for path in lock_paths {
         if path.exists() {
             let path = checked(&path)?;
             let file = OpenOptions::new().read(true).write(true).open(&path)?;
             FileExt::try_lock_exclusive(&file).with_context(|| {
-                format!("CCSW is busy; close other instances: {}", path.display())
+                format!("Mux is busy; close other instances: {}", path.display())
             })?;
             locks.push((path, file));
         }
@@ -717,9 +718,8 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     }
     // Never signal a PID from disk: it might be stale or forged.
     if plan.paths.state_dir.join("proxy.json").exists() && proxy::status(&plan.paths)?.running {
-        proxy::shutdown_authenticated(&plan.paths).context(
-            "could not stop proxy; stop older CCSW proxies manually before uninstalling",
-        )?;
+        proxy::shutdown_authenticated(&plan.paths)
+            .context("could not stop proxy; stop older Mux proxies manually before uninstalling")?;
     }
     let daemon_path = plan.paths.state_dir.join("proxy.daemon.lock");
     if daemon_path.exists() {
@@ -826,7 +826,7 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
     ] {
         if dir
             .file_name()
-            .is_some_and(|n| n == "ccsw" || n == "state" || n == "cache")
+            .is_some_and(|n| n == "mux" || n == "state" || n == "cache")
             && dir.exists()
         {
             checked(dir)?;
@@ -841,14 +841,14 @@ pub fn run(paths: &AppPaths, execute: bool, herdr: bool) -> Result<()> {
             }
         }
     }
-    println!("CCSW configuration removed. Unrelated files and the program binary were preserved.");
+    println!("Mux configuration removed. Unrelated files and the program binary were preserved.");
     Ok(())
 }
 
 fn disable_service(service: &Snapshot) -> Result<()> {
     #[cfg(target_os = "linux")]
     let output = std::process::Command::new("systemctl")
-        .args(["--user", "disable", "--now", "ccsw-proxy.service"])
+        .args(["--user", "disable", "--now", "mux-proxy.service"])
         .output()?;
     #[cfg(target_os = "macos")]
     let output = {
@@ -876,13 +876,13 @@ mod tests {
     use super::strip_herdr_shortcut;
 
     #[test]
-    fn herdr_cleanup_removes_only_ccsw_action() {
-        let original = "# keep this comment\n[keys]\nfoo = 'prefix+f'\n[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='ccsw.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n";
+    fn herdr_cleanup_removes_only_mux_action() {
+        let original = "# keep this comment\n[keys]\nfoo = 'prefix+f'\n[[keys.command]]\nkey='prefix+u'\ntype='plugin_action'\ncommand='mux.open'\n[[keys.command]]\nkey='prefix+x'\ntype='plugin_action'\ncommand='files.open'\n";
         let changed = strip_herdr_shortcut(original).unwrap().unwrap();
         assert!(changed.contains("# keep this comment"));
         assert!(changed.contains("foo = 'prefix+f'"));
         assert!(changed.contains("files.open"));
-        assert!(!changed.contains("ccsw.open"));
+        assert!(!changed.contains("mux.open"));
         assert!(strip_herdr_shortcut(&changed).unwrap().is_none());
     }
 }

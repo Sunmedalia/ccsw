@@ -1,8 +1,8 @@
-//! Direct editing of Pi's custom model files, without a CCSW provider mirror.
+//! Direct editing of Pi's custom model files, without a Mux provider mirror.
 use super::*;
 
 pub fn load(home: &Path) -> Result<config::Config> {
-    if home.join(".ccsw-native-transaction.json").exists() {
+    if home.join(".mux-native-transaction.json").exists() {
         let _lock = lock(home)?;
         recover_native(home)?;
     }
@@ -20,7 +20,7 @@ fn project(models: &Value, settings: &Value, auth: &Value) -> Result<config::Con
             .as_object()
             .context("Pi providers must be an object")?;
         for (id, value) in providers {
-            if value.get("ccswProxyOf").is_some() {
+            if value.get("muxProxyOf").is_some() {
                 continue;
             }
             match parse_provider(id, value, auth) {
@@ -35,7 +35,7 @@ fn project(models: &Value, settings: &Value, auth: &Value) -> Result<config::Con
                     let selected = settings["defaultProvider"].as_str();
                     let proxy_source = selected
                         .and_then(|selected| models["providers"].get(selected))
-                        .and_then(|selected| selected["ccswProxyOf"].as_str());
+                        .and_then(|selected| selected["muxProxyOf"].as_str());
                     if (selected == Some(id.as_str()) || proxy_source == Some(id.as_str()))
                         && let Some(model) = settings["defaultModel"].as_str()
                         && profile.models.iter().any(|m| m.id == model)
@@ -148,9 +148,9 @@ pub fn update(
         let old_models = provider["models"].as_array().cloned().unwrap_or_default();
         provider["baseUrl"] = json!(profile.base_url);
         if let Some(models_url) = &profile.models_url {
-            provider["ccswModelsUrl"] = json!(models_url);
+            provider["muxModelsUrl"] = json!(models_url);
         } else {
-            provider.as_object_mut().unwrap().remove("ccswModelsUrl");
+            provider.as_object_mut().unwrap().remove("muxModelsUrl");
         }
         provider["name"] = json!(profile.name);
         provider["api"] = json!(match profile.api_format {
@@ -313,7 +313,7 @@ pub fn set_default(home: &Path, provider: &str, model: &str) -> Result<()> {
 }
 
 fn proxy_id(provider: &str) -> String {
-    format!("ccsw-proxy-{provider}")
+    format!("mux-proxy-{provider}")
 }
 
 fn proxy_models(provider: &Value) -> Vec<Value> {
@@ -340,7 +340,7 @@ fn sync_proxy_mirrors(models: &mut Value, settings: &mut Value) {
     let mirrors = providers
         .iter()
         .filter_map(|(id, value)| {
-            value["ccswProxyOf"]
+            value["muxProxyOf"]
                 .as_str()
                 .map(|source| (id.clone(), source.to_owned()))
         })
@@ -374,7 +374,7 @@ fn sync_proxy_mirrors(models: &mut Value, settings: &mut Value) {
 pub fn proxy_endpoint(home: &Path, provider: &str) -> Result<Option<String>> {
     let models = read(&home.join("models.json"))?;
     let mirror = &models["providers"][proxy_id(provider)];
-    Ok((mirror["ccswProxyOf"] == provider)
+    Ok((mirror["muxProxyOf"] == provider)
         .then(|| mirror["baseUrl"].as_str().map(str::to_owned))
         .flatten())
 }
@@ -406,14 +406,14 @@ pub fn set_proxy(
             bail!("Pi model '{model}' no longer exists");
         }
         if let Some(existing) = models["providers"].get(&id)
-            && existing["ccswProxyOf"] != provider
+            && existing["muxProxyOf"] != provider
         {
             bail!("Pi provider '{id}' already exists");
         }
         let original = models["providers"][provider].clone();
         models["providers"][&id] = json!({
-            "ccswProxyOf": provider,
-            "name": format!("{} · CCSW Proxy", profile.name),
+            "muxProxyOf": provider,
+            "name": format!("{} · Mux Proxy", profile.name),
             "baseUrl": url,
             "api": "anthropic-messages",
             "apiKey": token,
@@ -423,7 +423,7 @@ pub fn set_proxy(
         settings["defaultProvider"] = json!(id);
         settings["defaultModel"] = json!(strip_1m(model));
     } else {
-        if models["providers"][&id]["ccswProxyOf"] == provider {
+        if models["providers"][&id]["muxProxyOf"] == provider {
             models["providers"].as_object_mut().unwrap().remove(&id);
         }
         if settings["defaultProvider"] == id {
@@ -456,7 +456,7 @@ fn bytes(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 fn recover_native(home: &Path) -> Result<()> {
-    let journal = home.join(".ccsw-native-transaction.json");
+    let journal = home.join(".mux-native-transaction.json");
     let Some(raw) = bytes(&journal)? else {
         return Ok(());
     };
@@ -494,7 +494,7 @@ fn commit_native(home: &Path, docs: [Value; 2]) -> Result<()> {
             after[i] = Some(serde_json::to_vec_pretty(&docs[i])?);
         }
     }
-    let journal = home.join(".ccsw-native-transaction.json");
+    let journal = home.join(".mux-native-transaction.json");
     save(
         &journal,
         &NativeTransaction {
@@ -617,17 +617,17 @@ mod tests {
         );
         assert_eq!(projected.profiles["native"].default_model, "two");
         let models = read(&home.join("models.json")).unwrap();
-        let mirror = &models["providers"]["ccsw-proxy-native"];
+        let mirror = &models["providers"]["mux-proxy-native"];
         assert_eq!(mirror["api"], "anthropic-messages");
         assert_eq!(mirror["apiKey"], "local-token");
         assert_eq!(mirror["models"][0]["id"], "one");
         assert_eq!(
             read(&home.join("settings.json")).unwrap()["defaultProvider"],
-            "ccsw-proxy-native"
+            "mux-proxy-native"
         );
         set_default(home, "native", "one").unwrap();
         let settings = read(&home.join("settings.json")).unwrap();
-        assert_eq!(settings["defaultProvider"], "ccsw-proxy-native");
+        assert_eq!(settings["defaultProvider"], "mux-proxy-native");
         assert_eq!(settings["defaultModel"], "one");
 
         update(home, |config| {
@@ -637,7 +637,7 @@ mod tests {
         .unwrap();
         let models = read(&home.join("models.json")).unwrap();
         assert_eq!(
-            models["providers"]["ccsw-proxy-native"]["models"][0]["name"],
+            models["providers"]["mux-proxy-native"]["models"][0]["name"],
             "Changed"
         );
 
@@ -653,7 +653,7 @@ mod tests {
         );
         assert!(
             read(&home.join("models.json")).unwrap()["providers"]
-                .get("ccsw-proxy-native")
+                .get("mux-proxy-native")
                 .is_none()
         );
     }
@@ -704,7 +704,7 @@ mod tests {
         let mut after = before.clone();
         after[0] = Some(serde_json::to_vec(&json!({"providers": {}})).unwrap());
         save(
-            &home.join(".ccsw-native-transaction.json"),
+            &home.join(".mux-native-transaction.json"),
             &NativeTransaction {
                 before: before.clone(),
                 after: after.clone(),
@@ -714,6 +714,6 @@ mod tests {
         write(&home.join("models.json"), after[0].as_ref().unwrap()).unwrap();
         assert!(load(home).unwrap().profiles.contains_key("added"));
         assert_eq!(bytes(&home.join("models.json")).unwrap(), before[0]);
-        assert!(!home.join(".ccsw-native-transaction.json").exists());
+        assert!(!home.join(".mux-native-transaction.json").exists());
     }
 }
