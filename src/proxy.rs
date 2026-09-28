@@ -2790,9 +2790,12 @@ mod tests {
         let (headers, forwarded) = received.await.unwrap();
         assert_eq!(forwarded["model"], "upstream-model");
         assert_eq!(headers[header::AUTHORIZATION], "Bearer upstream-secret");
-        let usage =
-            crate::usage::snapshot(&paths.state_dir.join(crate::usage::FILE), &paths.config)
-                .unwrap();
+        let usage = crate::usage::tests::settled_for(
+            &paths.state_dir.join(crate::usage::FILE),
+            &paths.config,
+            1,
+        )
+        .await;
         let totals = usage.total(Some("Grok"), Some("provider"), None, "generation");
         assert_eq!((totals.calls, totals.input, totals.output), (1, 13, 7));
         config::update_client(&paths.config, config::Client::Grok, |config| {
