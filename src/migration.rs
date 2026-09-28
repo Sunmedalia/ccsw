@@ -60,6 +60,9 @@ fn translate(value: &str, old: &AppPaths, new: &AppPaths) -> String {
         "CCSW" => "Mux".into(),
         "ccsw.open" => "mux.open".into(),
         "model_providers.ccsw" => "model_providers.mux".into(),
+        "User-configured model managed by CCSW" => "User-configured model managed by Mux".into(),
+        "Open CCSW Pulse usage monitor" => "Open Mux Pulse usage monitor".into(),
+        "Toggle CCSW Pulse usage monitor" => "Toggle Mux Pulse usage monitor".into(),
         _ => value.into(),
     }
 }
@@ -245,6 +248,15 @@ fn copy_tree(source: &Path, target: &Path, old: &AppPaths, new: &AppPaths) -> Re
 }
 
 fn replace_external_json(path: &Path, old: &AppPaths, new: &AppPaths) -> Result<()> {
+    replace_external_json_with_backup(path, old, new, "mux-migration-backup")
+}
+
+fn replace_external_json_with_backup(
+    path: &Path,
+    old: &AppPaths,
+    new: &AppPaths,
+    suffix: &str,
+) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -260,7 +272,7 @@ fn replace_external_json(path: &Path, old: &AppPaths, new: &AppPaths) -> Result<
     }
     let after = serde_json::to_vec_pretty(&value)?;
     let backup = path.with_extension(format!(
-        "{}.mux-migration-backup",
+        "{}.{suffix}",
         path.extension().and_then(|s| s.to_str()).unwrap_or("file")
     ));
     write_new(&backup, &before)?;
@@ -281,6 +293,15 @@ fn replace_external_json(path: &Path, old: &AppPaths, new: &AppPaths) -> Result<
 }
 
 fn replace_external_toml(path: &Path, old: &AppPaths, new: &AppPaths) -> Result<()> {
+    replace_external_toml_with_backup(path, old, new, "mux-migration-backup")
+}
+
+fn replace_external_toml_with_backup(
+    path: &Path,
+    old: &AppPaths,
+    new: &AppPaths,
+    suffix: &str,
+) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -345,7 +366,7 @@ fn replace_external_toml(path: &Path, old: &AppPaths, new: &AppPaths) -> Result<
     if after == before {
         return Ok(());
     }
-    let backup = path.with_extension("toml.mux-migration-backup");
+    let backup = path.with_extension(format!("toml.{suffix}"));
     write_new(&backup, before.as_bytes())?;
     let mut temp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
     use std::io::Write;
@@ -652,9 +673,102 @@ pub fn run(new: &AppPaths) -> Result<()> {
         cache,
     };
     if new.config.exists() && !new.state_dir.join("mux-migration-pending.json").exists() {
-        return Ok(());
+        return repair_legacy_artifacts(new, &old);
     }
     from_paths(new, &old)
+}
+
+fn archive_stale_pi_binding(new: &AppPaths) -> Result<()> {
+    let path = new.state_dir.join("pi-binding.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        bail!("refusing symbolic link in Pi migration cleanup");
+    }
+    let before = fs::read(&path)?;
+    let binding: Value = serde_json::from_slice(&before)?;
+    let home = Path::new(binding["home"].as_str().context("Pi binding has no home")?);
+    let models_path = home.join("models.json");
+    let settings_path = home.join("settings.json");
+    if !models_path.exists() || !settings_path.exists() {
+        return Ok(());
+    }
+    let models_before = fs::read(&models_path)?;
+    let settings_before = fs::read(&settings_path)?;
+    let models: Value = serde_json::from_slice(&models_before)?;
+    let settings: Value = serde_json::from_slice(&settings_before)?;
+    let Some(keys) = binding["keys"].as_array() else {
+        return Ok(());
+    };
+    let Some(expected_provider) = binding["expected"][1]["defaultProvider"].as_str() else {
+        return Ok(());
+    };
+    let Some(current_provider) = settings["defaultProvider"].as_str() else {
+        return Ok(());
+    };
+    // Native Pi editing replaced the old mirror workflow. A binding with none
+    // of its providers present and no managed default is no longer an owner.
+    if keys.is_empty()
+        || keys.iter().any(|key| {
+            key.as_str().is_none_or(|key| {
+                !key.starts_with("mux-") || models["providers"].get(key).is_some()
+            })
+        })
+        || current_provider == expected_provider
+        || current_provider.starts_with("mux-")
+    {
+        return Ok(());
+    }
+    let backup = new.state_dir.join("migration-backups/pi-binding.json");
+    write_new(&backup, &before)?;
+    if fs::read(&path)? != before {
+        bail!("Pi binding changed during migration cleanup");
+    }
+    if fs::read(&models_path)? != models_before || fs::read(&settings_path)? != settings_before {
+        bail!("Pi native configuration changed during migration cleanup");
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+fn repair_legacy_artifacts(new: &AppPaths, old: &AppPaths) -> Result<()> {
+    let marker = new.state_dir.join("mux-migration-branding-v2.json");
+    if marker.exists() {
+        return Ok(());
+    }
+    let lock_path = new.state_dir.join("pi.lock");
+    crate::codex::private_dir(&new.state_dir)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock.try_lock_exclusive()
+        .context("Pi operation is active; retry the migration cleanup")?;
+    archive_stale_pi_binding(new)?;
+    let catalogs = new.state_dir.join("codex-model-catalogs");
+    if catalogs.exists() {
+        for entry in fs::read_dir(catalogs)? {
+            let path = entry?.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                replace_external_json_with_backup(&path, old, new, "mux-branding-v2-backup")?;
+            }
+        }
+    }
+    let herdr_config = crate::platform::override_path("HERDR_CONFIG_PATH", || {
+        Ok(crate::platform::home()?.join(".config/herdr/config.toml"))
+    })?;
+    replace_external_toml_with_backup(&herdr_config, old, new, "mux-branding-v2-backup")?;
+    let _ = std::process::Command::new("herdr")
+        .args(["server", "reload-config"])
+        .output();
+    write_new(&marker, b"{\"version\":2}")?;
+    Ok(())
 }
 
 pub fn from_paths(new: &AppPaths, old: &AppPaths) -> Result<()> {
@@ -774,9 +888,300 @@ pub fn from_paths(new: &AppPaths, old: &AppPaths) -> Result<()> {
     } else if was_running {
         crate::proxy::start(new, None)?;
     }
+    repair_legacy_artifacts(new, old)?;
     fs::remove_file(&pending)?;
     eprintln!(
         "Migrated CCSW data to Mux; the original directories and client file backups were retained."
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn paths(root: &Path, name: &str) -> AppPaths {
+        AppPaths {
+            config: root.join("config").join(name).join("config.toml"),
+            state_dir: root.join("state").join(name),
+            cache: root.join("cache").join(name).join("models.json"),
+        }
+    }
+
+    #[test]
+    fn owned_identifiers_and_paths_are_translated_without_substring_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        for (before, after) in [
+            ("ccsw::provider::model", "mux::provider::model"),
+            ("ccsw-role::sonnet", "mux-role::sonnet"),
+            ("CCSW · provider", "Mux · provider"),
+            ("Provider · CCSW Proxy", "Provider · Mux Proxy"),
+            ("model_providers.ccsw", "model_providers.mux"),
+            (
+                "User-configured model managed by CCSW",
+                "User-configured model managed by Mux",
+            ),
+            (
+                "Open CCSW Pulse usage monitor",
+                "Open Mux Pulse usage monitor",
+            ),
+            ("my-ccsw-provider", "my-ccsw-provider"),
+        ] {
+            assert_eq!(translate(before, &old, &new), after);
+        }
+        assert_eq!(
+            translate(old.config.to_str().unwrap(), &old, &new),
+            new.config.to_str().unwrap()
+        );
+        assert_eq!(
+            translate(
+                old.state_dir.join("accounts/auth.json").to_str().unwrap(),
+                &old,
+                &new
+            ),
+            new.state_dir.join("accounts/auth.json").to_str().unwrap()
+        );
+        let sibling = format!("{}-unrelated/file", old.state_dir.display());
+        assert_eq!(translate(&sibling, &old, &new), sibling);
+        assert_eq!(legacy_sibling(&new.config), Some(old.config));
+    }
+
+    #[test]
+    fn json_migration_preserves_credentials_and_restore_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        let mut document = json!({
+            "provider": "ccsw", "model": "ccsw::one::model",
+            "local_token": "ccsw-secret", "api_key": "ccsw-secret",
+            "credential": {"value": "ccsw-secret"},
+            "headers": {"Authorization": "ccsw-secret"},
+            "before": {"provider": "ccsw"}, "original": {"provider": "ccsw"},
+            "env": {"ANTHROPIC_AUTH_TOKEN": "ccsw-secret", "CUSTOM": "ccsw-secret", "ANTHROPIC_MODEL": "ccsw::one::model"},
+            "encoded": "{\"model\":\"ccsw::one::model\",\"api_key\":\"ccsw-secret\"}",
+            "ccswNativeBaseUrl": "https://example.test"
+        });
+        let before = document.clone();
+        translate_json(&mut document, &old, &new).unwrap();
+        for key in [
+            "local_token",
+            "api_key",
+            "credential",
+            "headers",
+            "before",
+            "original",
+        ] {
+            assert_eq!(document[key], before[key]);
+        }
+        assert_eq!(document["env"]["ANTHROPIC_AUTH_TOKEN"], "ccsw-secret");
+        assert_eq!(document["env"]["CUSTOM"], "ccsw-secret");
+        assert_eq!(document["env"]["ANTHROPIC_MODEL"], "mux::one::model");
+        let encoded: Value = serde_json::from_str(document["encoded"].as_str().unwrap()).unwrap();
+        assert_eq!(encoded["model"], "mux::one::model");
+        assert_eq!(encoded["api_key"], "ccsw-secret");
+        assert!(document.get("muxNativeBaseUrl").is_some());
+        let once = document.clone();
+        translate_json(&mut document, &old, &new).unwrap();
+        assert_eq!(document, once);
+    }
+
+    #[test]
+    fn mixed_old_and_new_keys_are_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        let mut json = json!({"ccsw": 1, "mux": 2});
+        assert!(translate_json(&mut json, &old, &new).is_err());
+        let mut toml: toml::Value = "ccsw = 1\nmux = 2".parse().unwrap();
+        assert!(translate_toml(&mut toml, &old, &new).is_err());
+    }
+
+    #[test]
+    fn copy_preserves_auth_bytes_and_skips_runtime_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        fs::create_dir_all(old.state_dir.join("accounts/demo")).unwrap();
+        let auth = b"{ \"token\": \"ccsw-secret\" }\n";
+        fs::write(old.state_dir.join("accounts/demo/auth.json"), auth).unwrap();
+        fs::write(
+            old.state_dir.join("binding.json"),
+            b"{\"model\":\"ccsw::one::model\"}",
+        )
+        .unwrap();
+        for name in [
+            "session.lock",
+            "proxy.pid",
+            "proxy.log",
+            "usage.sqlite3",
+            "usage.sqlite3-wal",
+            "pi-transaction.json",
+        ] {
+            fs::write(old.state_dir.join(name), b"runtime").unwrap();
+        }
+        copy_tree(&old.state_dir, &new.state_dir, &old, &new).unwrap();
+        assert_eq!(
+            fs::read(new.state_dir.join("accounts/demo/auth.json")).unwrap(),
+            auth
+        );
+        for name in [
+            "session.lock",
+            "proxy.pid",
+            "proxy.log",
+            "usage.sqlite3",
+            "usage.sqlite3-wal",
+            "pi-transaction.json",
+        ] {
+            assert!(!new.state_dir.join(name).exists());
+        }
+        let binding: Value =
+            serde_json::from_slice(&fs::read(new.state_dir.join("binding.json")).unwrap()).unwrap();
+        assert_eq!(binding["model"], "mux::one::model");
+        assert!(old.state_dir.join("binding.json").exists());
+    }
+
+    #[test]
+    fn usage_migration_preserves_rows_and_original_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        fs::create_dir_all(&old.state_dir).unwrap();
+        fs::create_dir_all(&new.state_dir).unwrap();
+        let source = rusqlite::Connection::open(old.state_dir.join(crate::usage::FILE)).unwrap();
+        source.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE requests (config TEXT, model TEXT, tokens INTEGER);").unwrap();
+        for (model, tokens) in [
+            ("ccsw::one::model", 42),
+            ("ccsw-role::sonnet", 21),
+            ("native", 8),
+        ] {
+            source
+                .execute(
+                    "INSERT INTO requests VALUES (?1, ?2, ?3)",
+                    rusqlite::params![old.config.to_string_lossy(), model, tokens],
+                )
+                .unwrap();
+        }
+        migrate_usage(&old, &new).unwrap();
+        let target = rusqlite::Connection::open(new.state_dir.join(crate::usage::FILE)).unwrap();
+        let count: i64 = target
+            .query_row("SELECT count(*) FROM requests", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+        let migrated: i64 = target.query_row("SELECT count(*) FROM requests WHERE config=?1 AND model IN ('mux::one::model', 'mux-role::sonnet')", [new.config.to_string_lossy().as_ref()], |r| r.get(0)).unwrap();
+        assert_eq!(migrated, 2);
+        let total: i64 = target
+            .query_row("SELECT sum(tokens) FROM requests", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 71);
+        let original: i64 = source
+            .query_row(
+                "SELECT count(*) FROM requests WHERE config=?1",
+                [old.config.to_string_lossy().as_ref()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(original, 3);
+        migrate_usage(&old, &new).unwrap();
+        assert_eq!(
+            target
+                .query_row("SELECT count(*) FROM requests", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn branding_cleanup_has_separate_backups_and_preserves_comments() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = paths(temp.path(), "ccsw");
+        let new = paths(temp.path(), "mux");
+        let path = temp.path().join("herdr.toml");
+        let initial = "# keep this comment\n[[keys.command]]\ncommand = 'ccsw.open'\ndescription = 'Open CCSW Pulse usage monitor'\n";
+        fs::write(&path, initial).unwrap();
+        // Simulate the previous migration's preserved backup.
+        fs::write(
+            path.with_extension("toml.mux-migration-backup"),
+            b"old untouched backup",
+        )
+        .unwrap();
+        replace_external_toml_with_backup(&path, &old, &new, "mux-branding-v2-backup").unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("# keep this comment"));
+        assert!(after.contains("mux.open"));
+        assert!(after.contains("Open Mux Pulse usage monitor"));
+        assert_eq!(
+            fs::read_to_string(path.with_extension("toml.mux-branding-v2-backup")).unwrap(),
+            initial
+        );
+        assert_eq!(
+            fs::read(path.with_extension("toml.mux-migration-backup")).unwrap(),
+            b"old untouched backup"
+        );
+        replace_external_toml_with_backup(&path, &old, &new, "mux-branding-v2-backup").unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), after);
+    }
+
+    fn pi_fixture(root: &Path) -> (AppPaths, PathBuf, Vec<u8>, Vec<u8>) {
+        let new = paths(root, "mux");
+        let home = root.join("pi");
+        fs::create_dir_all(&new.state_dir).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let models = b"{\"providers\": {\"native\": {}}}\n".to_vec();
+        let settings = b"{\"defaultProvider\":\"native\",\"defaultModel\":\"model\"}\n".to_vec();
+        fs::write(home.join("models.json"), &models).unwrap();
+        fs::write(home.join("settings.json"), &settings).unwrap();
+        let binding = json!({"home": home, "keys": ["mux-old"], "expected": [{"providers": {}}, {"defaultProvider": "mux-old"}]});
+        fs::write(new.state_dir.join("pi-binding.json"), binding.to_string()).unwrap();
+        (new, home, models, settings)
+    }
+
+    #[test]
+    fn stale_pi_binding_is_archived_without_changing_native_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let (new, home, models, settings) = pi_fixture(temp.path());
+        let binding_path = new.state_dir.join("pi-binding.json");
+        let before = fs::read(&binding_path).unwrap();
+        archive_stale_pi_binding(&new).unwrap();
+        assert!(!binding_path.exists());
+        assert_eq!(
+            fs::read(new.state_dir.join("migration-backups/pi-binding.json")).unwrap(),
+            before
+        );
+        assert_eq!(fs::read(home.join("models.json")).unwrap(), models);
+        assert_eq!(fs::read(home.join("settings.json")).unwrap(), settings);
+        archive_stale_pi_binding(&new).unwrap();
+    }
+
+    #[test]
+    fn pi_binding_is_retained_when_it_still_owns_a_provider_or_default() {
+        for retain_default in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (new, home, _, _) = pi_fixture(temp.path());
+            if retain_default {
+                fs::write(
+                    home.join("settings.json"),
+                    b"{\"defaultProvider\":\"mux-old\"}",
+                )
+                .unwrap();
+            } else {
+                fs::write(
+                    home.join("models.json"),
+                    b"{\"providers\":{\"mux-old\":{}}}",
+                )
+                .unwrap();
+            }
+            let binding_path = new.state_dir.join("pi-binding.json");
+            let before = fs::read(&binding_path).unwrap();
+            archive_stale_pi_binding(&new).unwrap();
+            assert_eq!(fs::read(&binding_path).unwrap(), before);
+            assert!(
+                !new.state_dir
+                    .join("migration-backups/pi-binding.json")
+                    .exists()
+            );
+        }
+    }
 }

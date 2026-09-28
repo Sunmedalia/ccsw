@@ -26,17 +26,19 @@ mux migrate --config /path/to/old/config.toml --state-dir /path/to/old/state --c
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.18。Pi 可使用 Mux 本地 Proxy API；Claude、Codex、Pi 和 Grok 的 Provider 都支持单独配置模型目录地址。本版发布 macOS ARM64、Linux x64/ARM64；Windows 发布包暂缓。
+> 当前源码已更名为 Mux。Pi 可使用本地 Proxy API；Claude、Codex、Pi 和 Grok 的 Provider 都支持单独配置模型目录地址。历史 Release 属于更名前的版本，尚无 Mux 预编译发布包。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok 配置](#grok-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
 ## 安装
 
+**目前请使用[源码安装](#从源码安装)**。GitHub 仓库已更名，但历史 Release 的文件名、内置命令和环境变量仍属于旧版本。下面的在线安装与下载示例需等待首个 Mux Release 发布后使用。
+
 如果你要安装的是 **Herdr 侧栏插件**，直接看 [Herdr 插件安装](#通过-herdr-安装发布版插件)，不需要先手工安装 Mux；支持自动绑定的版本会配置默认快捷键。
 
 ### 一键安装（macOS / Linux）
 
-安装 Mux（默认安装最新发布版，自动校验 SHA-256，无需 sudo 或 Rust）：
+首个 Mux Release 发布后，可用以下命令安装最新发布版，自动校验 SHA-256：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Sunmedalia/mux/main/install.sh | bash
@@ -53,17 +55,13 @@ curl -fsSL https://raw.githubusercontent.com/Sunmedalia/mux/main/install.sh | ba
 Mux 安装到 `~/.local/bin/mux`，覆盖前备份旧程序；若目录不在 PATH，脚本会提示添加方式。支持 macOS ARM64、Linux x86_64 / ARM64。
 Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并退出；不会下载或安装 Herdr 本体。检测通过后下载并校验预编译 Mux，生成不含构建步骤的插件清单，安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/mux/herdr/plugin.*`，链接插件并合并快捷键；请保留该目录。重复运行可更新，旧插件目录保留以便恢复。该模式也会安装 Mux 命令，需要发布版支持 `herdr-install`。
 
-指定 Mux 发布版本：
-
-```sh
-  curl -fsSL https://raw.githubusercontent.com/Sunmedalia/mux/main/install.sh | MUX_VERSION=v0.1.18 bash -s -- mux
-```
+指定已发布的 Mux 版本时，设置 `MUX_VERSION` 为对应标签；历史标签尚不提供 Mux 安装包。
 
 以上在线命令需要本脚本已合并到 GitHub 的 main 分支。本地源码安装方式见下文。
 
 ### 下载 Release
 
-v0.1.18 提供 macOS Apple Silicon 与 Linux x86_64/ARM64 二进制。Windows 发布包暂缓；现有 [v0.1.17 Windows x64 ZIP](https://github.com/Sunmedalia/mux/releases/download/v0.1.17/mux-windows-x86_64.zip) 仍可下载，安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+尚无 Mux 预编译发布包。首个 Mux Release 发布后，macOS Apple Silicon 与 Linux x86_64/ARM64 可使用下列文件名下载；Windows 安装说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -79,22 +77,9 @@ chmod +x mux
 sudo install mux /usr/local/bin/mux
 ```
 
-### Windows（上一个发布版）
+### Windows
 
-Windows 暂无 v0.1.18 安装包。可从 [v0.1.17 Release 下载 Windows x64 ZIP](https://github.com/Sunmedalia/mux/releases/download/v0.1.17/mux-windows-x86_64.zip)，并下载旁边的 [SHA-256 文件](https://github.com/Sunmedalia/mux/releases/download/v0.1.17/mux-windows-x86_64.zip.sha256) 校验：
-
-```powershell
-$release = 'https://github.com/Sunmedalia/mux/releases/download/v0.1.17/mux-windows-x86_64.zip'
-Invoke-WebRequest "$release" -OutFile '.\mux-windows-x86_64.zip'
-Invoke-WebRequest "${release}.sha256" -OutFile '.\mux-windows-x86_64.zip.sha256'
-$expected = ((Get-Content '.\mux-windows-x86_64.zip.sha256' -Raw) -split '\s+')[0]
-$actual = (Get-FileHash '.\mux-windows-x86_64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw 'SHA-256 校验失败' }
-Expand-Archive '.\mux-windows-x86_64.zip' "$env:LOCALAPPDATA\Programs\mux" -Force
-& "$env:LOCALAPPDATA\Programs\mux\mux.exe" --version
-```
-
-无需管理员权限，Mux 自身无需 Node、Git Bash 或 Visual C++ 运行库。完整的 PowerShell/CMD 示例、目录覆盖优先级、字符转义、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
+尚无 Mux Windows 发布包，请从源码构建。完整的构建步骤、PowerShell/CMD 示例、目录覆盖优先级、npm 启动器、自启和更新方法见 [Windows 使用说明](README-Windows.md)。
 
 配置默认位于 `%APPDATA%\mux\config.toml`，状态与缓存位于 `%LOCALAPPDATA%\mux\state`、`cache`。关闭 TUI 不会停止后台代理；更新前先执行 `mux proxy stop`，移动程序前先卸载旧位置的自启项。
 
@@ -857,7 +842,7 @@ command = "mux.open"
 description = "Toggle Mux Pulse usage monitor"
 ```
 
-也可以安装固定版本：`herdr plugin install Sunmedalia/mux --ref v0.1.18`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 Mux 快捷键会保留，冲突会提示并跳过。
+固定版本安装应选择更名后的 Mux 标签；历史标签仍是旧插件。当前源码安装会自动绑定默认 `prefix+u` 快捷键；已有 Mux 快捷键会保留，冲突会提示并跳过。
 
 点击 Provider 面板或 Model 面板即可切换添加对象：`a` 在 Provider 导航中创建 Provider，在模型列表或配置详情中创建 Model。两个列表标题右侧各有 `[+]`，直接添加对应对象；顶部仅显示当前面板对应的 Add 操作。All Models 中以选中的模型所属 Provider 为目标。
 

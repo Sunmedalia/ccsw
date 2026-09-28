@@ -37,6 +37,7 @@ const STATE_FILES: &[&str] = &[
     "pi-binding.json",
     "pi-transaction.json",
     "mux-migration-pending.json",
+    "mux-migration-branding-v2.json",
 ];
 
 /// Reject links/reparse points and anything outside the chosen user's home.
