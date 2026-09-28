@@ -30,7 +30,7 @@ pub(super) struct CodexUi {
     pub enabled: bool,
     pub accounts: bool,
     pub home_models: bool,
-    selected: usize,
+    pub(super) selected: usize,
     pending_selection: Option<String>,
     chosen_account: Option<String>,
     live_id: Option<String>,
@@ -45,7 +45,7 @@ pub(super) struct CodexUi {
     status_view: bool,
     help_scroll: u16,
     scroll_max: std::cell::Cell<u16>,
-    message: String,
+    pub(super) message: String,
 }
 impl Default for CodexUi {
     fn default() -> Self {
@@ -306,7 +306,7 @@ impl App {
             .filter(|id| self.config.codex.accounts.contains_key(id))
     }
 
-    fn selected_codex_account(&self) -> Option<String> {
+    pub(super) fn selected_codex_account(&self) -> Option<String> {
         if !self.codex_ui.accounts
             && let Some(service::Selection::Account { id }) = &self.config.codex.active
             && self.config.codex.accounts.contains_key(id)
@@ -321,6 +321,9 @@ impl App {
             .cloned()
     }
     pub(super) fn apply_codex(&mut self) {
+        if self.reject_empty_global_filter() {
+            return;
+        }
         if self.home_account_selected() {
             self.apply_codex_account();
             return;
@@ -335,7 +338,11 @@ impl App {
             }
             return;
         }
-        let global = self.all_managed_models();
+        let global = if self.view_mode == ViewMode::AllEnabled {
+            self.filtered_global_models()
+        } else {
+            self.all_managed_models()
+        };
         let global_selection = if self.view_mode == ViewMode::AllEnabled {
             global.get(self.model_idx)
         } else {
@@ -370,7 +377,23 @@ impl App {
     pub(super) fn codex_navigation_blocked(&self) -> bool {
         self.codex_ui.busy || self.codex_ui.status_view || self.codex_ui.input.is_some()
     }
-    pub(super) fn handle_codex_key(&mut self, key: KeyEvent) -> Result<Option<bool>> {
+    pub(super) fn codex_input_active(&self) -> bool {
+        self.codex_ui.input.is_some()
+    }
+
+    pub(super) fn handle_codex_key(&mut self, mut key: KeyEvent) -> Result<Option<bool>> {
+        if self.codex_ui.input.is_none()
+            && key.modifiers.is_empty()
+            && (self.codex_ui.accounts || self.codex_ui.status_view)
+        {
+            key.code = match key.code {
+                KeyCode::Char('h') => KeyCode::Esc,
+                KeyCode::Char('l') if self.codex_ui.accounts && !self.codex_ui.status_view => {
+                    KeyCode::Char(' ')
+                }
+                other => other,
+            };
+        }
         if self.codex_ui.status_view {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
@@ -532,6 +555,11 @@ impl App {
             KeyCode::F(3) => {
                 self.codex_ui.accounts = !self.codex_ui.accounts;
                 if self.codex_ui.accounts {
+                    if provider_workspace(self.screen) {
+                        self.return_home();
+                        self.select_home_index(1);
+                        self.focus = Focus::Details;
+                    }
                     let target = self.codex_ui.chosen_account.as_ref().or({
                         match &self.config.codex.active {
                             Some(service::Selection::Account { id }) => Some(id),
@@ -595,10 +623,12 @@ impl App {
             KeyCode::Esc => self.codex_ui.accounts = false,
             KeyCode::Down | KeyCode::Char('j') => {
                 self.codex_ui.selected = (self.codex_ui.selected + 1)
-                    .min(self.config.codex.accounts.len().saturating_sub(1))
+                    .min(self.config.codex.accounts.len().saturating_sub(1));
+                self.codex_ui.help_scroll = 0;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1)
+                self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1);
+                self.codex_ui.help_scroll = 0;
             }
             KeyCode::PageDown => {
                 self.codex_ui.help_scroll = self
@@ -664,6 +694,12 @@ impl App {
         if !self.codex_ui.enabled || self.modal.is_some() {
             return Ok(false);
         }
+        if provider_workspace(area) && self.codex_ui.accounts && !self.home_account_selected() {
+            self.screen = area;
+            self.return_home();
+            self.select_home_index(1);
+            self.focus = Focus::Details;
+        }
         if self.codex_ui.status_view {
             if matches!(mouse.kind, MouseEventKind::ScrollDown) {
                 self.codex_ui.help_scroll =
@@ -693,15 +729,78 @@ impl App {
             }
             return Ok(true);
         }
+        if provider_workspace(area) {
+            let Some(panel) = self.provider_ui_areas(area).details else {
+                return Ok(false);
+            };
+            if !self.home_account_selected() || !contains(panel, mouse.column, mouse.row) {
+                return Ok(false);
+            }
+            if !self.codex_ui.accounts && mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.open_codex_accounts();
+            }
+            let content = panel_inner(panel);
+            let rows =
+                embedded_account_rows(content, self.codex_ui.busy && !self.codex_ui.refreshing);
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    if contains(rows[1], mouse.column, mouse.row) {
+                        self.codex_ui.selected = (self.codex_ui.selected + 1)
+                            .min(self.config.codex.accounts.len().saturating_sub(1));
+                    } else if contains(rows[2], mouse.column, mouse.row) {
+                        self.codex_ui.help_scroll =
+                            (self.codex_ui.help_scroll + 1).min(self.codex_ui.scroll_max.get());
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if contains(rows[1], mouse.column, mouse.row) {
+                        self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1);
+                    } else if contains(rows[2], mouse.column, mouse.row) {
+                        self.codex_ui.help_scroll = self.codex_ui.help_scroll.saturating_sub(1);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    for (key, _, rect) in account_buttons(content) {
+                        if key == '\u{1b}' {
+                            continue;
+                        }
+                        if contains(rect, mouse.column, mouse.row) {
+                            self.handle_codex_key(KeyEvent::new(
+                                if key == '\u{1b}' {
+                                    KeyCode::Esc
+                                } else {
+                                    KeyCode::Char(key)
+                                },
+                                KeyModifiers::NONE,
+                            ))?;
+                            return Ok(true);
+                        }
+                    }
+                    let visible = rows[1].height.saturating_sub(2) as usize;
+                    let offset = self
+                        .codex_ui
+                        .selected
+                        .saturating_sub(visible.saturating_sub(1));
+                    if contains(rows[1], mouse.column, mouse.row)
+                        && mouse.row > rows[1].y
+                        && mouse.row < rows[1].bottom().saturating_sub(1)
+                    {
+                        let index = (mouse.row - rows[1].y - 1) as usize + offset;
+                        if index < self.config.codex.accounts.len() {
+                            self.codex_ui.selected = index;
+                            self.codex_ui.help_scroll = 0;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
         if !self.codex_ui.accounts {
             return Ok(false);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            if mouse.row == area.y + 1 && mouse.column < area.x + 14 {
-                self.handle_codex_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
-                return Ok(true);
-            }
-            for (key, _, rect) in account_buttons(area) {
+            for (key, _, rect) in account_buttons(workspace_content_area(area)) {
                 if mouse.column >= rect.x && mouse.column < rect.right() && mouse.row == rect.y {
                     self.handle_codex_key(KeyEvent::new(
                         if key == '\u{1b}' {
@@ -724,7 +823,7 @@ impl App {
                 self.codex_ui.selected = self.codex_ui.selected.saturating_sub(1)
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let rows = account_page_rows(area, false);
+                let rows = account_page_rows(workspace_content_area(area), false);
                 let visible = rows[1].height.saturating_sub(2) as usize;
                 let offset = self
                     .codex_ui
@@ -739,6 +838,7 @@ impl App {
                 let index = (mouse.row - rows[1].y - 1) as usize + offset;
                 if index < self.config.codex.accounts.len() {
                     self.codex_ui.selected = index;
+                    self.codex_ui.help_scroll = 0;
                 }
             }
             _ => {}
@@ -746,30 +846,61 @@ impl App {
         Ok(true)
     }
     pub(super) fn draw_codex_accounts(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let login_busy = self.codex_ui.busy && !self.codex_ui.refreshing;
-        let rows = account_page_rows(area, login_busy);
+        self.draw_codex_accounts_content(frame, workspace_content_area(area), false);
+        self.draw_client_tabs(frame, area);
+        self.draw_codex_overlay(frame, area);
+    }
+
+    pub(super) fn draw_codex_accounts_embedded(&self, frame: &mut ratatui::Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    self.footer_control_style(FooterControl::Back, false, false)
-                        .1,
-                ),
-                Span::styled(
-                    "  ChatGPT Account",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
+            panel(" ChatGPT account ", self.focus == Focus::Details),
+            area,
         );
-        self.draw_client_tabs(frame, rows[0]);
+        self.draw_codex_accounts_content(frame, panel_inner(area), true);
+    }
+
+    fn draw_codex_accounts_content(
+        &self,
+        frame: &mut ratatui::Frame,
+        content: Rect,
+        embedded: bool,
+    ) {
+        let login_busy = self.codex_ui.busy && !self.codex_ui.refreshing;
+        let rows = if embedded {
+            embedded_account_rows(content, login_busy)
+        } else {
+            account_page_rows(content, login_busy)
+        };
         frame.render_widget(
-            Paragraph::new(self.codex_ui.live_message.as_str()).wrap(Wrap { trim: false }),
+            Paragraph::new(Line::from(vec![Span::styled(
+                if embedded {
+                    "Saved ChatGPT logins"
+                } else {
+                    "ChatGPT Account"
+                },
+                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+            )])),
             Rect::new(
                 rows[0].x,
-                rows[0].y + 2,
+                rows[0].y + u16::from(!embedded),
                 rows[0].width,
-                rows[0].height.saturating_sub(2),
+                1,
+            ),
+        );
+        frame.render_widget(
+            Paragraph::new(
+                if embedded && self.codex_ui.live_message == "s inspect local login" {
+                    "Select an account to inspect plan and usage"
+                } else {
+                    self.codex_ui.live_message.as_str()
+                },
+            )
+            .wrap(Wrap { trim: false }),
+            Rect::new(
+                rows[0].x,
+                rows[0].y + 1 + u16::from(!embedded),
+                rows[0].width,
+                rows[0].height.saturating_sub(1 + u16::from(!embedded)),
             ),
         );
         let items = self
@@ -807,7 +938,14 @@ impl App {
                 ]))
             })
             .collect::<Vec<_>>();
-        let mut state = ListState::default().with_selected(Some(self.codex_ui.selected));
+        let selected = if self.codex_ui.accounts {
+            self.codex_ui.selected
+        } else {
+            self.selected_codex_account()
+                .and_then(|id| self.config.codex.accounts.keys().position(|key| *key == id))
+                .unwrap_or(0)
+        };
+        let mut state = ListState::default().with_selected(Some(selected));
         frame.render_stateful_widget(
             List::new(items)
                 .block(panel(" ChatGPT accounts ", true))
@@ -825,7 +963,7 @@ impl App {
                     && !self.codex_ui.live_message.is_empty()
                     && self.codex_ui.live_id.as_ref() != Some(&id);
                 let state = if account.error.is_some() { "Refresh failed · cached data" } else if account.refreshed_at.is_some() { "Last check succeeded" } else { "Saved · not checked" };
-                format!("Status: {state}{}{}{}\n{}", if applied { " · Configured" } else { "" }, if local { " · Local login" } else { "" }, if conflict { " · Login differs; apply again after closing Codex" } else { "" }, service::accounts::cached_summary(account))
+                format!("Account  {}\nEmail    {}\nWorkspace  {}\nPlan  {}\n\nStatus  {state}{}{}{}\n\n{}", account.name, account.email, if account.workspace.is_empty() { "—" } else { &account.workspace }, account.plan.as_deref().unwrap_or("—"), if applied { " · Configured" } else { "" }, if local { " · Local login" } else { "" }, if conflict { " · Login differs; apply again after closing Codex" } else { "" }, service::accounts::cached_summary(account))
             })
             .unwrap_or("Add an account: Browser / Device to sign in, or Import / File to reuse a saved login.".into());
         let details = if login_busy {
@@ -879,7 +1017,10 @@ impl App {
                 .wrap(Wrap { trim: false }),
             rows[2],
         );
-        for (key, label, rect) in account_buttons(area) {
+        for (key, label, rect) in account_buttons(content) {
+            if embedded && key == '\u{1b}' {
+                continue;
+            }
             frame.render_widget(
                 Paragraph::new(label)
                     .alignment(Alignment::Center)
@@ -893,7 +1034,6 @@ impl App {
                 rect,
             );
         }
-        self.draw_codex_overlay(frame, area);
     }
     pub(super) fn draw_codex_overlay(&self, frame: &mut ratatui::Frame, area: Rect) {
         if !self.codex_ui.enabled {
@@ -1108,7 +1248,7 @@ fn account_input_area(area: Rect) -> Rect {
 }
 
 // Shared hit regions and rendering keep mouse actions aligned at every width.
-fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
+pub(super) fn account_buttons(area: Rect) -> Vec<(char, &'static str, Rect)> {
     let labels = [
         ('i', "Import (i)"),
         ('I', "File (I)"),
@@ -1156,7 +1296,18 @@ mod login_ui_tests {
         app.codex_ui.accounts = true;
         for width in [40, 80, 120] {
             let area = Rect::new(0, 0, width, 24);
-            let buttons = account_buttons(area);
+            app.screen = area;
+            if provider_workspace(area) {
+                app.return_home();
+                app.select_home_index(1);
+                app.focus = Focus::Details;
+            }
+            let content = if provider_workspace(area) {
+                panel_inner(app.provider_ui_areas(area).details.unwrap())
+            } else {
+                workspace_content_area(area)
+            };
+            let buttons = account_buttons(content);
             assert_eq!(buttons.len(), 10);
             for (key, label, rect) in &buttons {
                 assert!(rect.right() <= area.right());

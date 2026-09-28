@@ -105,7 +105,7 @@ ccsw          # 打开 TUI
 
 首次使用时：
 
-1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；需要单独的模型目录地址时填写 `Fetch models URL`，留空则从 Base URL 推导 `/models`。点击底部 `Fetch models` 或按 `Alt+F` 获取模型。之后可反复打开缓存列表，搜索后单击模型或按 `Enter` 回填当前字段，无需重复请求。`Ctrl+R` 或 `Refresh` 会重新获取；修改 Base URL、Fetch models URL、协议或凭据后也会重新获取。无需先保存厂商，也可手填模型 ID。
+1. 按 `a` 新建厂商，填写 API Endpoint、认证方式和凭据；需要单独的模型目录地址时填写 `Fetch models URL`，留空则从 Base URL 推导 `/models`。点击底部 `Fetch models` 或按 `Alt+F` 获取模型。之后可反复打开缓存列表，搜索后单击模型或按 `Enter` 回填当前字段，无需重复请求。`Ctrl+R` 或 `Refresh` 会重新获取；修改 Base URL、Fetch models URL、协议或凭据后也会重新获取。无需先保存厂商，也可手填模型 ID。
 2. 进入厂商详情，按 `a` 打开添加模型；在添加模型表单中按 `Alt+F` 获取 API 模型目录，也可以手动填写模型 ID。厂商详情页不再提供整站模型刷新。
 3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
 4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
@@ -140,7 +140,7 @@ ccsw import --yes
 | `↑/↓`、`j/k` | 选择 All Models 或厂商 |
 | `Enter`、鼠标单击 | 打开选中项 |
 | `Space` | 启用/禁用当前厂商；接入后自动同步 Claude `/model` |
-| `n` / `e` / `x` | 新建 / 编辑 / 删除厂商 |
+| `a` / `e` / `x` | 新建 / 编辑 / 删除厂商（Provider 导航获得焦点时） |
 | `r`、`t` | 测试连接并刷新模型目录 |
 | `A` | 启用选中厂商中的全部已配置模型；All Models 行不执行此操作 |
 | `p` / `P` | 同步全部模型 / 打开代理管理器 |
@@ -183,7 +183,7 @@ ccsw import --yes
 
 模板和厂商的获取模型页面支持 `j/k` 下/上、`l` 使用、`h` 返回。获取模型页面按 `/` 或点击搜索栏进入搜索，`Esc` 返回导航；搜索和表单文本输入中 `hjkl` 按普通字母输入。帮助面板支持 `h/l` 切换分区、`j/k` 滚动；代理面板支持 `h/k` 上一项、`j/l` 下一项。
 
-按 `n` 新建厂商时先选择模板：CommandCode、Volcengine、DeepSeek，或选择 `Custom` 手动填写。方向键或鼠标选择，按 `Enter` 或点击 `Use template` 使用。模板预填名称、URL、协议和 Bearer 认证方式，自动生成不冲突的 ID；仅需填写 Key 和默认模型（也可从 API 获取），按 `Ctrl+S` 保存。模板不包含密钥、已有模型或角色映射，预填字段仍可编辑。
+按 `a` 新建厂商时先选择模板：CommandCode、Volcengine、DeepSeek，或选择 `Custom` 手动填写。方向键或鼠标选择，按 `Enter` 或点击 `Use template` 使用。模板预填名称、URL、协议和 Bearer 认证方式，自动生成不冲突的 ID；仅需填写 Key 和默认模型（也可从 API 获取），按 `Ctrl+S` 保存。模板不包含密钥、已有模型或角色映射，预填字段仍可编辑。
 
 | 模板 | URL | 协议 |
 | --- | --- | --- |
@@ -230,7 +230,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 点击顶部 **Grok**，或按 `F2` 切换。页面沿用 Claude 的厂商和模型管理操作，支持三种 API 协议。Grok 的 **API Provider** 与 **OAuth Account** 可以共存：选择 OAuth 只改变默认模型，已启用的 API 模型仍可通过 Grok 的 `/model` 选择，并经 CCSW 本地代理转发、记录 Gateway token。按 `p` 可将 API 模型设为默认模型。
 
-1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `n` 新增厂商。
+1. 按 `i` 查看脱敏导入预览，按 `Enter` 导入已有自定义模型和常用设置；也可通过 `a` 新增厂商。
 2. 编辑厂商、模型、启用状态及 token 参数。新增模型在 Grok 中使用 `ccsw::厂商ID::模型ID`，请求发送实际上游模型 ID；导入模型保留原有配置键。
 3. 选择厂商或模型，按 `p` 接入所有厂商的全部启用模型并设置启动默认值（不是只同步当前选择的模型）。接入后，保存的修改自动同步。禁用当前默认模型时，改用其他启用模型；全部禁用时恢复可用的原生默认设置。
 4. 重启 Grok 加载配置，再使用 `/model` 查看并切换全部已同步模型；也可运行 `grok models` 检查加载结果。不同厂商的同名模型使用独立配置键，分别保留端点和凭据。`s` 查看接入状态，`D` 断开并恢复管理字段。
@@ -241,7 +241,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 
 外部修改了 CCSW 管理字段时，自动同步暂停。按 `p` 查看冲突字段，确认后重新接入。断开和卸载仅恢复未被外部修改的管理字段；无关配置、MCP、插件、Hooks 和登录凭据保留。不管理 Grok 多账号切换或任意高级 TOML 字段。仅包含继承端点的模型条目会在导入预览中标记并保留，需手动添加完整端点后管理。
 
-Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`（或再次点击）进入独立的 OAuth Accounts 管理页面；也可按 `o` 直接进入。页面沿用 Codex Accounts 的上下布局：上方账号列表、下方详情与原生模型配置、底部登录、Wake 与退出操作，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
+Provider 列表包含独立的 **Grok OAuth Account** 行。全屏选中时，右侧直接显示 OAuth 账号状态；按 `Enter` 或 `o` 可在右侧管理登录、原生模型、Wake 与退出。窄屏则进入独立账号页，按 `Esc` 返回 Provider 列表：`b` 启动浏览器登录，`d` 使用设备码（适合远程终端），页面显示授权链接和设备码；`Esc` 取消正在进行的授权。凭据写入、刷新和退出登录由原生 Grok 处理，登录状态来自本地凭据；账号用量通过官方只读账单接口获取。可用 `CCSW_GROK_BIN` 指定 Grok 可执行文件。
 
 登录后，填写原生模型（默认 `grok-build`），按 `u` **Use OAuth** 将其设为启动默认模型，然后重启 Grok。Use OAuth 会保存 API Provider 的启用状态、暂停这些 Provider 并移除 Grok 代理路由；再次选中 API Provider 按 `p` 会恢复原来的启用状态和 API 默认模型。登录本身不切换模式；已有厂商、模型和登录凭据都会保留。显式模型 API 配置优先于 OAuth，因此 Use OAuth 要求没有本地覆盖的原生模型及原生模型目录端点。`r` 异步刷新本地登录状态和账号用量，`w` 对当前 OAuth 账号执行 Wake，`x` 确认退出登录；退出只清除原生登录凭据，保留 API 厂商配置。授权方式见 [Grok 官方认证说明](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)。
 
@@ -262,7 +262,7 @@ Pi 默认直连厂商。选中厂商或模型后按 `P`（或点击 **Proxy API*
 | 按键 | 操作 |
 | --- | --- |
 | `i` | 重新读取 Pi 原生配置文件 |
-| `n` / `a` | 新增厂商 / 模型，保存到 `models.json` |
+| `a` | 导航焦点新增厂商；模型或详情焦点新增模型，保存到 `models.json` |
 | `e` | 厂商页面编辑厂商；模型页面编辑模型 |
 | `E` | 编辑所属厂商 |
 | `x` | 删除选中的厂商或模型，确认后写回文件 |
@@ -646,7 +646,11 @@ docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,exec --u
 
 点击 **Settings** 或按 **F4** 打开 TUI 设置。在 Claude 标签页选择 **Claude settings**（或按 `c`）进入客户端设置。这些设置对当前 CCSW 配置的所有 Claude Provider 共用，切换模型仍使用各自的地址、认证和协议，同时保留客户端设置。它们不会修改系统或 shell 环境变量，也不影响 Codex / Pi。
 
-Provider 页面根据终端尺寸自动切换：至少 **120 列 × 24 行**时，左侧常驻紧凑 Provider 导航，右侧显示模型搜索、模型操作和连接详情；选择 Provider 即时更新右侧。点击左侧或在左侧用方向键切换，`Tab` 循环切换导航、模型和详情，`Esc` 返回导航，`n` 新增 Provider。小于此尺寸时保留原来的 Provider 首页和点击进入第二层的操作。窗口缩放保留当前 Provider，模型仍可在原详情页中管理。
+Claude / Codex / Pi / Grok 的 Provider 页面使用与 Usage 一致的整体边框，Provider 导航、模型、连接详情和状态信息都位于框内。操作栏统一位于右上角，使用 `Apply [p]`、`Help [?]` 等文字和弱化的快捷键；页面操作栏的 Help 与 Back/Quit 位于同一行；窄窗口自动换行，底部保留状态信息。选中的模型和详情面板使用当前主题的选中样式；`h/l` 逐层返回 / 进入，`q` 返回一层，模型搜索输入时保留文字输入行为。
+
+All Models 支持 `/` 或点击 **Filter** 输入模型名称、ID、Provider 名称或 ID；不区分大小写，多个关键词同时匹配，并显示筛选结果 / 全部模型数量。`Enter` 结束输入，`Esc` 或 **Clear** 清空筛选。全屏下单击模型在右侧显示模型配置（所属 Provider、API、地址、默认/启用状态、1M、上下文、输出上限和模型说明），重复点击不跳页；`Enter` 进入所属 Provider。`Tab` 切换导航、列表和配置面板，配置面板支持滚轮/方向键滚动；半屏仍使用原来的进入 Provider 操作。筛选后的启用、应用和设置默认操作均对应当前可见的选中模型。
+
+Provider 页面根据终端尺寸自动切换：至少 **120 列 × 24 行**时，左侧常驻紧凑 Provider 导航，右侧显示模型搜索、模型操作和连接详情；选择 Provider 即时更新右侧。点击左侧或在左侧用方向键切换，`Tab` 循环切换导航、模型和详情，`Esc` 返回导航，`a` 新增 Provider。小于此尺寸时保留原来的 Provider 首页和点击进入第二层的操作。窗口缩放保留当前 Provider，模型仍可在原详情页中管理。
 
 TUI 主题统一控制整个界面的画布、面板、边框与文字层级，覆盖所有客户端、模型表单、账号页、弹窗、Usage 和独立 Pulse 侧栏。标题与关键模型值加粗，字段标签、厂商 ID 与辅助信息使用次级文字色；选中行保留每段文字的颜色和字重。彩色主题的默认模型、启用数量、连接成功、警告和错误分别配色；Classic 保留 0.1.18 的默认模型警告色和启用状态成功色。终端字体家族由终端设置决定。
 
@@ -840,3 +844,13 @@ description = "Toggle CCSW Pulse usage monitor"
 ```
 
 也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.18`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。
+
+点击 Provider 面板或 Model 面板即可切换添加对象：`a` 在 Provider 导航中创建 Provider，在模型列表或配置详情中创建 Model。两个列表标题右侧各有 `[+]`，直接添加对应对象；顶部仅显示当前面板对应的 Add 操作。All Models 中以选中的模型所属 Provider 为目标。
+
+按 `?` 打开 Help（Usage 也支持），查看 Home、All Models、Provider、Forms、Usage、Accounts、Settings、Proxy、Pulse 全部 9 类快捷键。`1–9` 或点击分类直接跳转，`Tab` / `Shift+Tab` 切换，方向键、`PgUp` / `PgDn`、`Home` / `End` 滚动；窄窗口分类和说明自动换行。
+
+Help 分类、顶部快捷操作和底部 Previous / Next / Back 均支持点击，弹窗会优先接收鼠标操作。`l` / `Enter` 打开当前分类对应页面，`h` / `Esc` 返回；Provider 导航中的 `l` 逐层进入模型和详情，`h` 逐层返回。Usage 的 `l` 等同 Enter，`h` 返回 Provider。输入框和搜索中仍可正常输入 h/j/k/l。
+
+Provider 顶部与 Help 提供 **Disconnect [D]**：Claude 恢复接管前的设置，Codex 保留断开确认，Grok 恢复管理字段。Claude Preferences 原有 `Alt+X` 仍可使用；Pi 直接编辑本地文件，不提供 Disconnect。
+
+Claude、Codex、Pi、Grok、Usage、Settings 位于同一行。Proxy 是 Settings 内的功能，点击页内 `Proxy [P]` 进入，再按 `Esc` / `q` 返回外观设置。全屏时 Settings 与 Provider 的内容区域铺满终端宽度，外观预览随窗口扩展。Help 与 Back/Quit 在同一条页面操作栏，Back/Quit 位于最右侧：除根层外逐层返回，在 Provider 根层退出。Provider 工具栏不再显示 Models / Details；点击面板或按 `Tab` / `h` / `l` 切换。全屏选中 Codex / Grok 的 Account 时，左侧保留 Provider 列表，右侧复用账号页的账号列表、详情和完整操作按钮。窄窗口继续使用账号二级页。

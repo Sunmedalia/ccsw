@@ -1,71 +1,251 @@
 use super::*;
 
+pub(super) fn workspace_content_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(1),
+    )
+}
+
+pub(super) fn settings_page_area(screen: Rect) -> Rect {
+    workspace_content_area(screen)
+}
+
+pub(super) fn page_header_actions(area: Rect) -> [(Rect, Rect); 1] {
+    let back_width = if area.width >= 56 { 17 } else { 11 };
+    let help_width = 10;
+    let back = Rect::new(
+        area.right().saturating_sub(back_width + 2),
+        area.y,
+        back_width,
+        1,
+    );
+    let help = Rect::new(back.x.saturating_sub(help_width + 1), area.y, help_width, 1);
+    [(help, back)]
+}
+
+pub(super) fn settings_proxy_button(area: Rect) -> Rect {
+    if area.width < 90 {
+        return Rect::new(area.x.saturating_add(8), area.y, 7, 1);
+    }
+    Rect::new(
+        area.right().saturating_sub(60),
+        area.y,
+        14.min(area.width),
+        1,
+    )
+}
+
+pub(super) fn settings_appearance_button(area: Rect) -> Rect {
+    if area.width < 90 {
+        return Rect::new(area.x.saturating_add(1), area.y, 6, 1);
+    }
+    Rect::new(
+        area.right().saturating_sub(76),
+        area.y,
+        15.min(area.width),
+        1,
+    )
+}
+
 pub(super) fn provider_workspace(area: Rect) -> bool {
     area.width >= 120 && area.height >= 24
 }
 
+#[cfg(test)]
 pub(super) fn ui_areas(area: Rect, focus: Focus, view_mode: ViewMode) -> UiAreas {
     let rows = app_rows(area);
+    ui_content_areas(area, rows[1], rows[2], focus, view_mode)
+}
+
+pub(super) fn ui_content_areas(
+    area: Rect,
+    content: Rect,
+    status: Rect,
+    focus: Focus,
+    view_mode: ViewMode,
+) -> UiAreas {
     if provider_workspace(area) {
         let columns = Layout::horizontal([
             Constraint::Length((area.width / 4).clamp(30, 42)),
-            Constraint::Min(80),
+            Constraint::Length(1),
+            Constraint::Min(50),
         ])
-        .split(rows[1]);
-        let right = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(columns[1]);
+        .split(content);
+        let right = Layout::horizontal([
+            Constraint::Ratio(55, 100),
+            Constraint::Length(1),
+            Constraint::Ratio(45, 100),
+        ])
+        .split(columns[2]);
         return UiAreas {
             profiles: Some(columns[0]),
             models: match view_mode {
                 ViewMode::Home => None,
                 ViewMode::Provider => Some(right[0]),
-                ViewMode::AllEnabled => Some(columns[1]),
+                ViewMode::AllEnabled => Some(right[0]),
             },
             details: match view_mode {
-                ViewMode::Home => Some(columns[1]),
-                ViewMode::Provider => Some(right[1]),
-                ViewMode::AllEnabled => None,
+                ViewMode::Home => Some(columns[2]),
+                ViewMode::Provider => Some(right[2]),
+                ViewMode::AllEnabled => Some(right[2]),
             },
-            footer: rows[2],
+            footer: status,
         };
     }
     match view_mode {
         ViewMode::Home => UiAreas {
-            profiles: Some(rows[1]),
+            profiles: Some(content),
             models: None,
             details: None,
-            footer: rows[2],
+            footer: status,
         },
         ViewMode::Provider => {
             if area.width >= 100 {
                 let cols = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-                    .split(rows[1]);
+                    .constraints([
+                        Constraint::Ratio(58, 100),
+                        Constraint::Length(1),
+                        Constraint::Ratio(42, 100),
+                    ])
+                    .split(content);
                 UiAreas {
                     profiles: None,
                     models: Some(cols[0]),
-                    details: Some(cols[1]),
-                    footer: rows[2],
+                    details: Some(cols[2]),
+                    footer: status,
                 }
             } else {
                 UiAreas {
                     profiles: None,
-                    models: (focus != Focus::Details).then_some(rows[1]),
-                    details: (focus == Focus::Details).then_some(rows[1]),
-                    footer: rows[2],
+                    models: (focus != Focus::Details).then_some(content),
+                    details: (focus == Focus::Details).then_some(content),
+                    footer: status,
                 }
             }
         }
         ViewMode::AllEnabled => UiAreas {
             profiles: None,
-            models: Some(rows[1]),
+            models: Some(content),
             details: None,
-            footer: rows[2],
+            footer: status,
         },
     }
 }
 
+pub(super) struct ProviderPageLayout {
+    pub(super) shell: Rect,
+    pub(super) controls: Vec<(FooterControl, Rect)>,
+    pub(super) content: Rect,
+    pub(super) status: Rect,
+}
+
+impl App {
+    pub(super) fn provider_page_layout(&self, area: Rect) -> ProviderPageLayout {
+        let shell = Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        );
+        let mut inner = panel_inner(shell);
+        if inner.width >= 60 {
+            inner.x += 1;
+            inner.width = inner.width.saturating_sub(2);
+        }
+        let actions = [
+            if self.focus == Focus::Profiles || self.view_mode == ViewMode::Home {
+                FooterControl::AddProfile
+            } else {
+                FooterControl::AddModel
+            },
+            FooterControl::Sync,
+            FooterControl::Proxy,
+            FooterControl::Disconnect,
+        ]
+        .into_iter()
+        .filter(|control| {
+            (*control != FooterControl::Disconnect || !self.pi_enabled)
+                && (*control != FooterControl::Proxy || self.pi_enabled)
+        });
+        let mut rows: Vec<Vec<(FooterControl, u16)>> = vec![vec![]];
+        let mut used = 0;
+        let reserve = (UnicodeWidthStr::width("Help [?]")
+            + UnicodeWidthStr::width("Back [Esc/q]")
+            + 7) as u16;
+        for control in actions {
+            let width =
+                (UnicodeWidthStr::width(self.provider_action_text(control).as_str()) as u16 + 2)
+                    .min(inner.width);
+            if used > 0 && used + width + 1 + reserve > inner.width {
+                rows.push(vec![]);
+                used = 0;
+            }
+            if used > 0 {
+                used += 1;
+            }
+            rows.last_mut().unwrap().push((control, width));
+            used += width;
+        }
+        if used > 0 && used + reserve > inner.width {
+            rows.push(vec![]);
+            used = 0;
+        }
+        for control in [FooterControl::Help, FooterControl::Back] {
+            let width =
+                (UnicodeWidthStr::width(self.provider_action_text(control).as_str()) as u16 + 2)
+                    .min(inner.width);
+            if used > 0 && used + width + 1 > inner.width {
+                rows.push(vec![]);
+                used = 0;
+            }
+            if used > 0 {
+                used += 1;
+            }
+            rows.last_mut().unwrap().push((control, width));
+            used += width;
+        }
+        let header_height = rows.len() as u16;
+        let mut controls = vec![];
+        for (index, row) in rows.into_iter().enumerate() {
+            let width = row.iter().map(|(_, width)| *width).sum::<u16>()
+                + row.len().saturating_sub(1) as u16;
+            let mut x = inner.right().saturating_sub(width);
+            for (control, width) in row {
+                controls.push((control, Rect::new(x, inner.y + index as u16, width, 1)));
+                x += width + 1;
+            }
+        }
+        let content = Rect::new(
+            inner.x,
+            inner.y + header_height,
+            inner.width,
+            inner.height.saturating_sub(header_height + 1),
+        );
+        let status = Rect::new(
+            inner.x,
+            inner.bottom().saturating_sub(1),
+            inner.width,
+            u16::from(inner.height > 0),
+        );
+        ProviderPageLayout {
+            shell,
+            controls,
+            content,
+            status,
+        }
+    }
+
+    pub(super) fn provider_ui_areas(&self, area: Rect) -> UiAreas {
+        let page = self.provider_page_layout(area);
+        ui_content_areas(area, page.content, page.status, self.focus, self.view_mode)
+    }
+}
+
+#[cfg(test)]
 pub(super) fn app_rows(area: Rect) -> [Rect; 3] {
     let edge_height = if area.height >= 14 {
         3
@@ -95,6 +275,7 @@ pub(super) fn app_rows(area: Rect) -> [Rect; 3] {
     ]
 }
 
+#[cfg(test)]
 pub(super) fn footer_controls(
     area: Rect,
     compact: bool,
@@ -278,6 +459,41 @@ pub(super) fn showcase_controls(area: Rect, pi: bool) -> Vec<(ShowcaseControl, R
     }
 }
 
+pub(super) fn header_add_button_rect(area: Rect) -> Option<Rect> {
+    (area.width >= 10 && area.height > 0).then(|| Rect::new(area.x + area.width - 6, area.y, 5, 1))
+}
+
+pub(super) fn model_add_button_rect(area: Rect, view: ViewMode) -> Option<Rect> {
+    let list = if view == ViewMode::AllEnabled {
+        all_models::areas(area).1
+    } else if view == ViewMode::Provider {
+        Rect::new(
+            area.x,
+            area.y + 3,
+            area.width,
+            area.height.saturating_sub(3),
+        )
+    } else {
+        area
+    };
+    header_add_button_rect(list)
+}
+
+pub(super) fn draw_header_add_button(frame: &mut ratatui::Frame, area: Rect) {
+    if let Some(rect) = header_add_button_rect(area) {
+        frame.render_widget(
+            Paragraph::new(" [+] ").style(
+                Style::default()
+                    .fg(ROUTE)
+                    .bg(theme::SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            rect,
+        );
+    }
+}
+
+#[cfg(test)]
 pub(super) fn catalog_add_button_rect(search_area: Rect) -> Option<Rect> {
     let inner = panel_inner(search_area);
     if inner.width >= 10 {
@@ -294,44 +510,40 @@ pub(super) fn detail_controls(area: Rect) -> Vec<(DetailControl, Rect)> {
     if inner.height == 0 || inner.width < 8 {
         return vec![];
     }
-    let y = inner.bottom().saturating_sub(1);
-    let controls = [DetailControl::Edit, DetailControl::Delete];
-    let width = inner.width / 2;
-    controls
-        .into_iter()
-        .enumerate()
-        .map(|(index, control)| {
-            let x = inner.x + index as u16 * width;
-            (
-                control,
-                Rect::new(x, y, if index == 1 { inner.right() - x } else { width }, 1),
-            )
-        })
-        .collect()
+    let (edit_width, delete_width, gap) = if inner.width >= 23 {
+        (10, 12, 1)
+    } else {
+        (inner.width / 2, inner.width - inner.width / 2, 0)
+    };
+    let x = inner.right() - edit_width - delete_width - gap;
+    vec![
+        (DetailControl::Edit, Rect::new(x, inner.y, edit_width, 1)),
+        (
+            DetailControl::Delete,
+            Rect::new(x + edit_width + gap, inner.y, delete_width, 1),
+        ),
+    ]
 }
 
-pub(super) fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect) {
+pub(super) fn draw_detail_controls(frame: &mut ratatui::Frame, area: Rect, theme: theme::Theme) {
     for (control, rect) in detail_controls(area) {
-        let label = match control {
-            DetailControl::Edit => {
-                if rect.width >= 19 {
-                    "[Edit provider (E)]"
+        let (text, color) = match control {
+            DetailControl::Edit => (
+                if rect.width >= 8 { "Edit [E]" } else { "[E]" },
+                DATA_SECONDARY,
+            ),
+            DetailControl::Delete => (
+                if rect.width >= 10 {
+                    "Delete [x]"
                 } else {
-                    "[E Edit]"
-                }
-            }
-            DetailControl::Delete => {
-                if rect.width >= 21 {
-                    "[Delete provider (x)]"
-                } else {
-                    "[x Delete]"
-                }
-            }
+                    "[x]"
+                },
+                ERROR,
+            ),
         };
         frame.render_widget(
-            Paragraph::new(label)
-                .alignment(Alignment::Center)
-                .style(button_style(false, false, control == DetailControl::Delete)),
+            Paragraph::new(toolbar::action_line(text, color, false, theme))
+                .alignment(Alignment::Center),
             rect,
         );
     }
@@ -404,21 +616,13 @@ pub(super) fn modal_area(screen: Rect) -> Rect {
 
 pub(super) fn modal_area_for(modal: &Modal, screen: Rect) -> Rect {
     match modal {
-        Modal::Appearance(_) => centered_rect(
-            100.min(screen.width.saturating_sub(4)),
-            26.min(screen.height.saturating_sub(2)),
-            screen,
-        ),
+        Modal::Appearance(_) => settings_page_area(screen),
         Modal::Help(_) => centered_rect(
-            82.min(screen.width.saturating_sub(2)),
-            22.min(screen.height.saturating_sub(2)),
+            104.min(screen.width.saturating_sub(2)),
+            32.min(screen.height.saturating_sub(2)),
             screen,
         ),
-        Modal::Proxy(_) => centered_rect(
-            82.min(screen.width.saturating_sub(2)),
-            22.min(screen.height.saturating_sub(2)),
-            screen,
-        ),
+        Modal::Proxy(_) => settings_page_area(screen),
         Modal::Model(_) => centered_rect(
             86.min(screen.width.saturating_sub(2)),
             20.min(screen.height.saturating_sub(2)),
@@ -761,20 +965,82 @@ pub(super) fn unique_profile_id(base: &str, profiles: &BTreeMap<String, Profile>
         .unwrap()
 }
 
-/// Account pages share the same header, account list, details and action footer.
+/// Full-width account pages place the list beside the selected account details.
 pub(super) fn account_page_rows(area: Rect, login_busy: bool) -> [Rect; 4] {
-    let rows = Layout::vertical([
-        Constraint::Length(if login_busy || area.height < 16 { 3 } else { 4 }),
-        if login_busy {
-            Constraint::Length(0)
+    let header_height = if area.height < 16 {
+        2
+    } else if login_busy {
+        3
+    } else {
+        4
+    };
+    let footer_height = 3;
+    let content_y = area.y + header_height;
+    let content_height = area.height.saturating_sub(header_height + footer_height);
+    let header = Rect::new(area.x, area.y, area.width, header_height);
+    let footer = Rect::new(
+        area.x,
+        area.bottom().saturating_sub(footer_height),
+        area.width,
+        footer_height,
+    );
+    if area.width >= 120 && area.height >= 24 && !login_busy {
+        let left_width = (area.width / 3).clamp(34, 46);
+        let list = Rect::new(area.x, content_y, left_width, content_height);
+        let detail = Rect::new(
+            area.x + left_width + 1,
+            content_y,
+            area.width.saturating_sub(left_width + 1),
+            content_height,
+        );
+        [header, list, detail, footer]
+    } else {
+        let list_height = if login_busy {
+            0
         } else if area.height < 16 {
-            Constraint::Length(3)
+            3
         } else {
-            Constraint::Percentage(40)
-        },
-        Constraint::Min(3),
-        Constraint::Length(3),
-    ])
-    .split(area);
-    [rows[0], rows[1], rows[2], rows[3]]
+            content_height * 2 / 5
+        };
+        let list = Rect::new(area.x, content_y, area.width, list_height);
+        let detail = Rect::new(
+            area.x,
+            content_y + list_height,
+            area.width,
+            content_height.saturating_sub(list_height),
+        );
+        [header, list, detail, footer]
+    }
+}
+
+pub(super) fn embedded_account_rows(area: Rect, login_busy: bool) -> [Rect; 4] {
+    let header_height = 3.min(area.height);
+    let footer_height = 3.min(area.height.saturating_sub(header_height));
+    let content_y = area.y.saturating_add(header_height);
+    let content_height = area.height.saturating_sub(header_height + footer_height);
+    let list_width = if login_busy {
+        0
+    } else {
+        (area.width / 3)
+            .clamp(26, 42)
+            .min(area.width.saturating_sub(28))
+    };
+    [
+        Rect::new(area.x, area.y, area.width, header_height),
+        Rect::new(area.x, content_y, list_width, content_height),
+        Rect::new(
+            area.x
+                .saturating_add(list_width + u16::from(list_width > 0)),
+            content_y,
+            area.width
+                .saturating_sub(list_width + u16::from(list_width > 0)),
+            content_height,
+        ),
+        Rect::new(
+            area.x,
+            area.bottom().saturating_sub(footer_height),
+            area.width,
+            footer_height,
+        ),
+    ]
 }

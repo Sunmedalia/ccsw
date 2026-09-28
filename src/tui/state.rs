@@ -29,15 +29,18 @@ pub(super) struct UiAreas {
     pub(super) footer: Rect,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FooterControl {
     Back,
     Models,
     Details,
     AddProfile,
+    AddModel,
     DeleteProfile,
     Settings,
     Sync,
+    Disconnect,
     Proxy,
     Help,
     Quit,
@@ -89,10 +92,25 @@ pub(super) enum HelpSection {
     AllEnabled,
     Provider,
     Forms,
+    Usage,
+    Accounts,
+    Settings,
+    Proxy,
+    Pulse,
 }
 
 impl HelpSection {
-    pub(super) const ALL: [Self; 4] = [Self::Home, Self::AllEnabled, Self::Provider, Self::Forms];
+    pub(super) const ALL: [Self; 9] = [
+        Self::Home,
+        Self::AllEnabled,
+        Self::Provider,
+        Self::Forms,
+        Self::Usage,
+        Self::Accounts,
+        Self::Settings,
+        Self::Proxy,
+        Self::Pulse,
+    ];
 
     pub(super) fn index(self) -> usize {
         Self::ALL
@@ -107,6 +125,11 @@ impl HelpSection {
             Self::AllEnabled => "All Models",
             Self::Provider => "Provider",
             Self::Forms => "Forms",
+            Self::Usage => "Usage",
+            Self::Accounts => "Accounts",
+            Self::Settings => "Settings",
+            Self::Proxy => "Proxy",
+            Self::Pulse => "Pulse",
         }
     }
 }
@@ -159,7 +182,7 @@ impl HelpModal {
 
     pub(super) fn scroll(&mut self, down: bool) {
         if down {
-            self.scroll = self.scroll.saturating_add(1).min(32);
+            self.scroll = self.scroll.saturating_add(1);
         } else {
             self.scroll = self.scroll.saturating_sub(1);
         }

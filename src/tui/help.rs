@@ -1,458 +1,877 @@
 use super::*;
 
+/// Shortcuts are grouped by the page that owns the key. Search and text fields
+/// consume typed characters before page commands.
 pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'static str)] {
     match section {
         HelpSection::Home => &[
-            ("F6", "Provider usage: daily / total calls and tokens"),
-            ("↑↓ / j k", "Select All Models or a provider"),
-            ("Enter / Click", "Open selection"),
-            ("Space", "Toggle provider; auto-sync after connection"),
-            ("n / x", "New / delete provider"),
-            ("e", "Edit selected provider"),
-            ("A", "Enable all models in the selected provider"),
-            ("p / P", "Connect or sync all models / manage proxy"),
-            ("F4", "TUI theme; Claude presets and custom environment"),
             (
-                "Click top tabs / F2",
-                "Switch independent Claude / Codex / Pi / Grok configurations",
+                "?",
+                "Open Help; available on provider, account and Usage pages",
             ),
-            ("q", "Quit CCSW"),
-        ],
-        HelpSection::AllEnabled => &[
-            ("F6", "Provider usage: daily / total calls and tokens"),
-            ("↑↓ / j k", "Select a model across providers"),
+            ("F2 / top tabs", "Cycle Claude / Codex / Pi / Grok"),
             (
-                "PgUp / PgDn",
-                "Page through models; Home / End jump to edges",
+                "F4 / F6",
+                "Open Settings / Usage at the same navigation level",
             ),
-            ("Space", "Toggle model; auto-sync after connection"),
-            ("Enter / click again", "Open the selected model’s provider"),
-            ("p / P", "Connect or sync all models / manage proxy"),
-            ("F4", "TUI theme; Claude presets and custom environment"),
-            ("Esc", "Return to providers"),
-        ],
-        HelpSection::Provider => &[
-            ("F6", "Selected provider usage and daily history"),
+            ("F5", "Test the selected model with a minimal request"),
+            (
+                "Esc / q",
+                "Return one level; quit only from the Providers root",
+            ),
+            (
+                "Ctrl+C",
+                "Quit from Home / full-screen provider sidebar; cancel active login",
+            ),
             (
                 "↑↓ / j k",
-                "Browse focused list; Tab switches provider/model/details panels",
+                "Select All Models, a provider or an account entry",
             ),
-            ("/ / Esc", "Search / clear search or return home"),
-            ("Space / d / 1", "Toggle / set default / toggle 1M"),
+            ("Home / End", "Full screen: first / last sidebar entry"),
+            ("PgUp / PgDn", "Full screen: move five sidebar entries"),
+            ("Enter / l", "Open selection; full screen: focus model list"),
+            (
+                "Tab / Shift+Tab",
+                "Full screen: cycle provider / model / details panels",
+            ),
+            (
+                "a",
+                "Add Provider when Home or the provider sidebar is focused",
+            ),
+            ("e / E / x", "Edit / edit / delete selected provider"),
+            (
+                "Space",
+                "Toggle selected provider; Codex account toggle requires confirmation",
+            ),
+            ("A", "Home: enable every model in selected provider"),
+            (
+                "p / P",
+                "Sync / open Proxy page; see client-specific commands below",
+            ),
+            (
+                "Click",
+                "Top actions are clickable; Add Provider is always available",
+            ),
+        ],
+        HelpSection::AllEnabled => &[
+            (
+                "/",
+                "Filter model label, ID, provider name or ID; words combine with AND",
+            ),
+            (
+                "Text / Backspace",
+                "While filtering: type / remove a character",
+            ),
+            ("Ctrl+U / Clear", "While filtering: clear the query"),
+            (
+                "Esc",
+                "Clear query first; leave input if empty; otherwise return to providers",
+            ),
+            (
+                "Enter / Tab / ↑↓",
+                "While filtering: leave input; arrows also select a model",
+            ),
+            (
+                "↑↓ / j k",
+                "Model list: select; configuration panel: scroll details",
+            ),
+            (
+                "PgUp / PgDn",
+                "Page through models or configuration details",
+            ),
+            (
+                "Home / End",
+                "First / last model or start / end of configuration",
+            ),
+            (
+                "Tab / Shift+Tab",
+                "Full screen: cycle provider / model / configuration panels",
+            ),
+            (
+                "h / l",
+                "h: return one panel; l: enter configuration, then provider; narrow: back / open",
+            ),
+            ("Enter", "Open the selected model's provider"),
+            (
+                "Click model",
+                "Full screen: show configuration in place; narrow: click again to open",
+            ),
+            (
+                "a",
+                "Add Model for the selected result; sidebar focus adds Provider instead",
+            ),
+            (
+                "Space / status dot",
+                "Toggle the selected model (Pi entries are configured directly)",
+            ),
+            (
+                "p / P",
+                "Sync / open Proxy page; see client-specific commands below",
+            ),
+            (
+                "? / F4 / F5 / F6",
+                "Help / settings / model request test / Usage",
+            ),
+            ("q", "Return one level; quit from the Providers root"),
+        ],
+        HelpSection::Provider => &[
+            (
+                "Tab / Shift+Tab",
+                "Cycle panels; full screen includes the provider sidebar",
+            ),
+            (
+                "h / l / ←→",
+                "h: details → models → providers; l: providers → models → details",
+            ),
+            (
+                "↑↓ / j k",
+                "Select model; provider sidebar focus selects provider",
+            ),
+            (
+                "PgUp / PgDn",
+                "Move ten models; sidebar moves five providers",
+            ),
+            (
+                "Home / End",
+                "First / last model; sidebar selects first / last provider",
+            ),
+            (
+                "a",
+                "Add Model from models/details; Add Provider from sidebar",
+            ),
+            ("e / E", "Edit selected model / edit provider"),
+            (
+                "x",
+                "Models: delete model; Details or sidebar: delete provider",
+            ),
+            (
+                "Space / d / 1",
+                "Toggle model / set default / toggle 1M context",
+            ),
             (
                 "A / C",
                 "Enable filtered models / clear non-essential enabled models",
             ),
-            ("a", "Add model"),
-            ("x", "Models: delete model; Details: delete provider"),
-            ("e", "Edit selected model from either panel"),
-            ("E (Shift+e)", "Edit provider configuration"),
-            ("p / P", "Sync / proxy"),
-            ("F4", "TUI theme / Claude client settings"),
-            ("F5", "Send a minimal request to the selected model"),
+            ("/", "Start model search"),
+            ("Text / Backspace", "In search: type / remove a character"),
+            ("Esc (search)", "Clear query; when empty, leave search"),
+            ("Tab / Down", "Leave search input"),
+            (
+                "Up / Enter (search)",
+                "Previous result / toggle result; Pi Enter leaves search",
+            ),
+            (
+                "p / P",
+                "Sync / open Proxy page; see client-specific commands below",
+            ),
+            ("Esc", "Return to providers outside search"),
+            (
+                "? / F4 / F5 / F6",
+                "Help / settings / model request test / Usage",
+            ),
+            ("Esc / q", "Return one level outside search input"),
         ],
         HelpSection::Forms => &[
             (
-                "h j k l",
-                "Template/model picker: back, down, up, use; / searches models",
+                "Tab / ↓",
+                "Next field; Shift+Tab / Up selects previous field",
             ),
+            ("Enter", "Next field; submit at the last field"),
+            ("Ctrl+S", "Save provider / model / preferences form"),
+            ("←→", "Move text cursor; change an option or toggle"),
+            ("Home / Ctrl+A", "Move cursor to start of field"),
+            ("End / Ctrl+E", "Move cursor to end of field"),
+            ("Backspace / Delete", "Delete previous / next character"),
+            ("Ctrl+U", "Clear text field"),
+            ("Space", "Change toggle or option; otherwise type a space"),
+            ("Esc", "Cancel; active model search clears before closing"),
             (
-                "↑↓ / Tab",
-                "Next field; Shift+Tab returns to previous field",
+                "Template ↑↓ / k j",
+                "Select template; Tab / Shift+Tab also select",
             ),
-            ("Enter", "Next field; save at the last field"),
-            ("←→ / Home End", "Move text cursor"),
-            (
-                "Backspace / Del",
-                "Delete characters; Ctrl+U clears the field",
-            ),
-            ("Space / ←→", "Change toggle or option"),
+            ("Template Enter / l", "Use template; Esc / h cancels"),
             (
                 "Alt+F / Ctrl+R",
-                "Provider form: choose cached models / refresh from API",
+                "Provider: cached model picker / fetch API models; Model: fetch API models",
             ),
             (
-                "Alt+1",
-                "Model form: toggle 1M context from any field or search",
+                "Picker /",
+                "Start model search; type to filter; Backspace removes text",
             ),
-            ("Ctrl+S", "Save changes"),
-            ("Esc", "Cancel; clear active model search first"),
+            ("Picker ↑↓ / j k", "Select API model; PgUp / PgDn scroll"),
+            (
+                "Picker Enter / l",
+                "Use model; Esc / h goes back (outside search input)",
+            ),
+            (
+                "Model Tab / Shift+Tab",
+                "Switch API picker / configuration fields",
+            ),
+            (
+                "Provider F5",
+                "Test connection from Base URL field; other fields test model",
+            ),
+            ("Alt+1", "Toggle 1M context in provider / model forms"),
+            (
+                "y / Enter",
+                "Confirm provider/model deletion or account confirmation",
+            ),
+            (
+                "n / q / Esc",
+                "Cancel provider/model deletion; account confirmation uses n / Esc",
+            ),
+            (
+                "Import i / Enter",
+                "Accept discovered configuration; Esc skips",
+            ),
+            (
+                "Grok import ↑↓ / Pg",
+                "Scroll import/reconnect preview; Enter accepts; Esc cancels",
+            ),
+            (
+                "Codex input",
+                "Enter submit; Esc cancel; Backspace delete; Ctrl+U clear",
+            ),
+        ],
+        HelpSection::Usage => &[
+            (
+                "r / x",
+                "Refresh logs and sessions / reset all dashboard filters",
+            ),
+            ("h / Esc / F6", "Back to providers"),
+            ("q / Esc", "Return to Providers; search consumes q as text"),
+            (
+                "? / F4 / F2",
+                "Help / settings / return to Claude provider page",
+            ),
+            (
+                "[ / ]",
+                "Previous / next agent filter; clears provider filter",
+            ),
+            ("← / → / t", "Previous / next day (window end) / Today"),
+            ("d / w / m / y", "1 day / 7 days / 30 days / all time"),
+            ("a", "Clear provider filter"),
+            ("Tab / Shift+Tab", "Next / previous dashboard section"),
+            (
+                "1–6",
+                "Providers / History / Metrics / Models / Charts / Sessions",
+            ),
+            ("↑↓ / j k / wheel", "Scroll the page"),
+            ("PgUp / PgDn", "Scroll one page"),
+            ("Home / End", "Start / end of page"),
+            ("n / p / Alt+↓↑", "Next / previous row in the active table"),
+            (
+                "Click row",
+                "Expand details in place without moving the page",
+            ),
+            (
+                "Enter / l",
+                "Provider: filter & models; History: date & chart; Session: inspect",
+            ),
+            ("c / v", "Calls / tokens chart"),
+            (
+                "/",
+                "Focus Sessions and search project, session ID or model",
+            ),
+            (
+                "f",
+                "Sessions: toggle following dashboard dates (default: all dates)",
+            ),
+            ("s", "Sessions: toggle recent / token sort"),
+            ("Search ↑↓", "Select session while typing"),
+            ("Search Enter / Esc", "Leave search; query remains active"),
+            (
+                "Search Backspace / Ctrl+U",
+                "Delete character / clear session query",
+            ),
+        ],
+        HelpSection::Accounts => &[
+            ("Codex F3", "Open / close ChatGPT Accounts"),
+            ("Codex ↑↓ / j k", "Select account"),
+            ("Codex PgUp / PgDn", "Scroll cached account details"),
+            ("Codex b / d", "Browser login / device code login"),
+            (
+                "Codex i / I",
+                "Import current login / import auth.json file",
+            ),
+            ("Codex e / x", "Rename / delete account (confirmation)"),
+            (
+                "Codex Space / p",
+                "Select without applying / apply selected account",
+            ),
+            (
+                "Codex r / w",
+                "Refresh usage / wake account and refresh (uses some quota)",
+            ),
+            ("Codex s / D", "Local status / disconnect (confirmation)"),
+            (
+                "Codex Esc",
+                "Cancel active login; otherwise back to providers",
+            ),
+            (
+                "Codex status ↑↓ / j k",
+                "Scroll status; PgUp/PgDn page; Esc/q/?/Enter closes",
+            ),
+            ("Grok o", "Open OAuth account page from providers"),
+            (
+                "Grok Tab / ↓",
+                "Next control; Shift+Tab / Up previous control",
+            ),
+            (
+                "Grok Enter",
+                "Run focused action; model field advances to actions",
+            ),
+            (
+                "Grok b / d / u",
+                "Browser login / device login / use configured OAuth model",
+            ),
+            (
+                "Grok r / s / w",
+                "Refresh cached usage / refresh / wake and refresh",
+            ),
+            ("Grok x", "Log out (Enter/y confirms; n/Esc cancels)"),
+            ("Grok PgUp / PgDn", "Scroll account details or login output"),
+            ("Grok Esc / q", "Back; Esc / Ctrl+C cancels an active login"),
+            ("? / F2", "Help / switch agent when navigation is available"),
+        ],
+        HelpSection::Settings => &[
+            ("F4", "Open settings from provider, model or Usage pages"),
+            (
+                "Tab / p / Shift+Tab",
+                "Next / previous TUI theme, Pulse theme, refresh interval",
+            ),
+            ("↑← / k h", "Previous theme or decrease refresh interval"),
+            ("↓→ / j l", "Next theme or increase refresh interval"),
+            ("Enter / s / Esc", "Save / save / cancel settings"),
+            ("c", "Claude / Grok: open client preferences"),
+            (
+                "Preferences Ctrl+S",
+                "Save client preferences; other form keys in Forms",
+            ),
+            ("Claude Alt+P", "Fill preset environment variables"),
+            (
+                "Claude Alt+N / Alt+D",
+                "Add / delete custom environment entry",
+            ),
+            ("Claude Alt+V", "Show / mask custom environment value"),
+            (
+                "Claude Alt+X",
+                "Disconnect when no unsaved draft or pending operation",
+            ),
+            (
+                "Claude Esc / y",
+                "Ask to discard dirty preferences / confirm discard",
+            ),
+            ("Claude discard other key", "Keep editing"),
+            ("Grok Alt+M", "Cycle configured model keys in model fields"),
+            (
+                "Grok Alt+E",
+                "Type a custom reasoning value in reasoning field",
+            ),
+            (
+                "Grok discard y / Enter",
+                "Discard changes; n / Esc keeps editing",
+            ),
+        ],
+        HelpSection::Proxy => &[
+            (
+                "P",
+                "Claude: proxy manager; Pi: selected provider's proxy API",
+            ),
+            ("Tab / ↓→ / j l", "Next action"),
+            ("Shift+Tab / ↑← / k h", "Previous action"),
+            ("Enter / Space", "Run selected action"),
+            ("s / x / r", "Start / stop / refresh proxy"),
+            ("i / u", "Enable / disable startup at login"),
+            ("e", "Edit port when proxy is idle"),
+            (
+                "Port Enter / Esc",
+                "Apply / cancel port edit; form cursor keys also work",
+            ),
+            ("Esc / P / q", "Close proxy manager"),
+            (
+                "Grok P",
+                "Show gateway information; p connects API providers",
+            ),
+        ],
+        HelpSection::Pulse => &[
+            (
+                "Pulse",
+                "Standalone monitor (ccsw pulse), separate from Usage",
+            ),
+            ("q / Ctrl+C", "Quit monitor"),
+            ("?", "Toggle monitor help"),
+            ("Tab / 1–4", "Cycle / select agent"),
+            ("e", "Open editor in a new tab"),
+            ("r", "Refresh account usage and sessions"),
+            ("m", "Summary: toggle model / provider breakdown"),
+            ("s / c / v", "Toggle sessions / chart / visual view"),
+            ("t", "Sessions: toggle sorting by tokens"),
+            ("↑↓ / j k", "Scroll one line"),
+            ("PgUp / PgDn", "Scroll ten lines"),
+            ("Home / Esc", "Close help and return to top"),
+            ("End", "Scroll to bottom"),
         ],
     }
 }
 
-pub(super) fn help_tabs(active: HelpSection) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (index, section) in HelpSection::ALL.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("  "));
-        }
-        let label = format!(" {} {} ", index + 1, section.label());
-        let style = if *section == active {
-            Style::default()
-                .fg(Color::Black)
-                .bg(ROUTE)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(MUTED)
-        };
-        spans.push(Span::styled(label, style));
+fn help_rows(help: &HelpModal) -> Vec<(&'static str, &'static str)> {
+    let mut rows = help_commands(help.section).to_vec();
+    if !help.pi
+        && matches!(
+            help.section,
+            HelpSection::Home | HelpSection::AllEnabled | HelpSection::Provider
+        )
+    {
+        rows.push(("D (Shift+d)", "Disconnect current client; Codex asks for confirmation. Claude preferences also use Alt+X."));
     }
-    Line::from(spans)
+    if help.pi
+        && matches!(
+            help.section,
+            HelpSection::Home | HelpSection::Provider | HelpSection::AllEnabled
+        )
+    {
+        rows.retain(|(key, _)| {
+            !matches!(
+                *key,
+                "Space" | "A" | "Space / d / 1" | "A / C" | "Space / status dot"
+            )
+        });
+        rows.extend([
+            ("Pi d / 1", "Set default / change context window"),
+            (
+                "Pi p / P",
+                "Set startup provider/model / toggle selected provider's proxy API",
+            ),
+            (
+                "Pi i / s",
+                "Reload Pi files / show local configuration status",
+            ),
+            (
+                "Pi Space / A / C / D",
+                "Show configuration information; entries have no enable switch",
+            ),
+        ]);
+    }
+    if help.codex
+        && matches!(
+            help.section,
+            HelpSection::Home | HelpSection::Provider | HelpSection::AllEnabled
+        )
+    {
+        rows.extend([
+            ("Codex F3", "ChatGPT accounts; shortcuts in Accounts"),
+            ("Codex g", "Set reasoning effort"),
+            (
+                "Codex s / D",
+                "Local status / disconnect and restore managed settings",
+            ),
+            (
+                "Codex p",
+                "Sync API models and startup default, or apply chosen ChatGPT account",
+            ),
+        ]);
+    }
+    if help.grok
+        && matches!(
+            help.section,
+            HelpSection::Home | HelpSection::Provider | HelpSection::AllEnabled
+        )
+    {
+        rows.extend([
+            ("Grok o / i", "OAuth accounts / import native configuration"),
+            ("Grok p / s / D", "Connect / show local status / disconnect"),
+            ("Grok P", "Show gateway information"),
+        ]);
+    }
+    rows
 }
 
-pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static>> {
-    let heading = match section {
-        HelpSection::Home => "Home · Providers",
-        HelpSection::AllEnabled => "All Models · Across providers",
-        HelpSection::Provider => "Provider · Models and connection",
-        HelpSection::Forms => "Forms · Editing",
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HelpAction {
+    Providers,
+    AllModels,
+    Provider,
+    AddProvider,
+    AddModel,
+    Usage,
+    Refresh,
+    Reset,
+    Accounts,
+    Settings,
+    Proxy,
+    Sync,
+    Disconnect,
+}
+
+fn section_action(section: HelpSection) -> Option<HelpAction> {
+    Some(match section {
+        HelpSection::Home => HelpAction::Providers,
+        HelpSection::AllEnabled => HelpAction::AllModels,
+        HelpSection::Provider => HelpAction::Provider,
+        HelpSection::Forms => HelpAction::AddModel,
+        HelpSection::Usage => HelpAction::Usage,
+        HelpSection::Accounts => HelpAction::Accounts,
+        HelpSection::Settings => HelpAction::Settings,
+        HelpSection::Proxy => HelpAction::Proxy,
+        HelpSection::Pulse => return None,
+    })
+}
+
+fn help_actions(help: &HelpModal) -> Vec<(HelpAction, &'static str)> {
+    let mut actions = match help.section {
+        HelpSection::Home => vec![
+            (HelpAction::Providers, "Providers [l]"),
+            (HelpAction::AddProvider, "Add Provider [a]"),
+        ],
+        HelpSection::AllEnabled => vec![
+            (HelpAction::AllModels, "All Models [l]"),
+            (HelpAction::AddModel, "Add Model [a]"),
+        ],
+        HelpSection::Provider => vec![
+            (HelpAction::Provider, "Provider [l]"),
+            (HelpAction::AddModel, "Add Model [a]"),
+        ],
+        HelpSection::Forms => vec![
+            (HelpAction::AddModel, "Add Model [l]"),
+            (HelpAction::AddProvider, "Add Provider [a]"),
+        ],
+        HelpSection::Usage => vec![
+            (HelpAction::Usage, "Usage [l]"),
+            (HelpAction::Refresh, "Refresh [r]"),
+            (HelpAction::Reset, "Reset [x]"),
+        ],
+        HelpSection::Accounts if help.codex || help.grok => {
+            vec![(HelpAction::Accounts, "Accounts [l]")]
+        }
+        HelpSection::Settings => vec![(HelpAction::Settings, "Settings [l]")],
+        HelpSection::Proxy if !help.grok => vec![(HelpAction::Proxy, "Proxy [l]")],
+        _ => vec![],
     };
+    if matches!(
+        help.section,
+        HelpSection::Home | HelpSection::AllEnabled | HelpSection::Provider
+    ) {
+        actions.push((HelpAction::Sync, "Sync / Apply [p]"));
+    }
+    if !help.pi && help.section != HelpSection::Pulse {
+        actions.push((HelpAction::Disconnect, "Disconnect [D]"));
+    }
+    if help.section != HelpSection::Settings {
+        actions.push((HelpAction::Settings, "Settings [F4]"));
+    }
+    if help.section != HelpSection::Usage {
+        actions.push((HelpAction::Usage, "Usage [F6]"));
+    }
+    actions
+}
+
+pub(super) fn help_key_action(help: &HelpModal, key: KeyEvent) -> Option<HelpAction> {
+    if !key.modifiers.is_empty() {
+        return None;
+    }
+    let action = match key.code {
+        KeyCode::Char('l') | KeyCode::Enter => section_action(help.section)?,
+        KeyCode::F(4) => HelpAction::Settings,
+        KeyCode::F(6) => HelpAction::Usage,
+        KeyCode::Char('D') => HelpAction::Disconnect,
+        KeyCode::Char('p') => HelpAction::Sync,
+        KeyCode::Char('a') if matches!(help.section, HelpSection::Home | HelpSection::Forms) => {
+            HelpAction::AddProvider
+        }
+        KeyCode::Char('a') => HelpAction::AddModel,
+        KeyCode::Char('r') => HelpAction::Refresh,
+        KeyCode::Char('x') => HelpAction::Reset,
+        _ => return None,
+    };
+    help_actions(help)
+        .iter()
+        .any(|(candidate, _)| *candidate == action)
+        .then_some(action)
+}
+
+impl App {
+    pub(super) fn run_help_action(&mut self, action: HelpAction) -> Result<()> {
+        if self.codex_navigation_blocked() || self.grok_auth.busy {
+            self.set_error(
+                "Finish or cancel the current account operation before opening another action",
+            );
+            return Ok(());
+        }
+        self.modal = None;
+        self.help_return = None;
+        if action == HelpAction::Settings {
+            self.open_appearance();
+            return Ok(());
+        }
+        self.usage.active = false;
+        self.codex_ui.accounts = false;
+        self.grok_auth.page = None;
+        self.all_models_filter.active = false;
+        if let Some(editor) = &mut self.provider_editor {
+            editor.search_active = false;
+        }
+        match action {
+            HelpAction::Providers => self.return_home(),
+            HelpAction::AllModels => self.enter_all_enabled_view(),
+            HelpAction::Provider => {
+                if self.view_mode == ViewMode::AllEnabled {
+                    self.open_selected_global_model();
+                } else if self.selected_profile().is_some() {
+                    self.enter_provider_view();
+                } else {
+                    self.set_error("Select a provider before opening its models");
+                }
+            }
+            HelpAction::AddProvider => self.new_profile(),
+            HelpAction::AddModel => self.open_add_model_modal(),
+            HelpAction::Usage | HelpAction::Refresh | HelpAction::Reset => {
+                self.open_usage();
+                if action != HelpAction::Usage {
+                    let code = if action == HelpAction::Refresh {
+                        'r'
+                    } else {
+                        'x'
+                    };
+                    self.usage_key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::NONE));
+                }
+            }
+            HelpAction::Accounts => {
+                if self.codex_ui.enabled {
+                    self.open_codex_accounts();
+                } else if self.grok_enabled {
+                    self.open_grok_auth();
+                } else {
+                    self.set_error("Accounts are available for Codex and Grok");
+                }
+            }
+            HelpAction::Proxy => {
+                self.open_appearance();
+                self.open_proxy_manager();
+            }
+            HelpAction::Sync | HelpAction::Disconnect => {
+                let code = if action == HelpAction::Sync { 'p' } else { 'D' };
+                self.handle_key_inner(KeyEvent::new(KeyCode::Char(code), KeyModifiers::NONE))?;
+            }
+            HelpAction::Settings => unreachable!(),
+        }
+        Ok(())
+    }
+}
+
+fn help_tab_lines(active: HelpSection, width: u16) -> Vec<Line<'static>> {
+    let mut rows = vec![];
+    let mut spans = vec![];
+    let mut used = 0;
+    for (index, section) in HelpSection::ALL.iter().enumerate() {
+        let label = format!(" {} {} ", index + 1, section.label());
+        let len = UnicodeWidthStr::width(label.as_str()) as u16;
+        if used > 0 && used + len > width {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        spans.push(Span::styled(
+            label,
+            if *section == active {
+                Style::default()
+                    .fg(ROUTE)
+                    .bg(theme::PROVIDER_SELECTION)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(MUTED)
+            },
+        ));
+        used += len;
+    }
+    rows.push(Line::from(spans));
+    rows
+}
+
+#[cfg(test)]
+pub(super) fn help_content(section: HelpSection, wide: bool) -> Vec<Line<'static>> {
+    format_help_rows(section, help_commands(section), wide)
+}
+
+fn format_help_rows(section: HelpSection, rows: &[(&str, &str)], wide: bool) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::styled(
-            heading,
+            section.label(),
             Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
     ];
-    for (key, action) in help_commands(section) {
-        let key = if wide {
-            format!("{key:<18}")
+    for (key, action) in rows {
+        if wide {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{key:<28}"), Style::default().fg(ROUTE)),
+                Span::raw(action.to_string()),
+            ]));
         } else {
-            format!("{key}  ")
-        };
-        lines.push(Line::from(vec![
-            Span::styled(key, Style::default().fg(ROUTE).add_modifier(Modifier::BOLD)),
-            Span::raw(*action),
-        ]));
+            lines.push(Line::styled(
+                key.to_string(),
+                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+            ));
+            lines.push(Line::raw(format!("  {action}")));
+        }
     }
-    lines.push(Line::raw(""));
-    lines.push(Line::from(vec![
-        Span::styled("●", Style::default().fg(ENABLED)),
-        Span::styled(" enabled  ", Style::default().fg(MUTED)),
-        Span::styled("○", Style::default().fg(MUTED)),
-        Span::styled(" disabled  ", Style::default().fg(MUTED)),
-        Span::styled("◆", Style::default().fg(DEFAULT_MODEL)),
-        Span::styled(" default  ", Style::default().fg(MUTED)),
-        Span::styled("◈", Style::default().fg(ENABLED)),
-        Span::styled(" role dependency", Style::default().fg(MUTED)),
-    ]));
     lines
 }
 
-pub(super) fn draw_help(frame: &mut ratatui::Frame, area: Rect, help: &HelpModal) {
-    let compact = area.width < 58 || area.height < 14;
-    let label = if help.codex {
-        [
-            "Providers",
-            if help.codex_accounts {
-                "Accounts"
-            } else {
-                "All Models"
-            },
-            "Models",
-            "Forms",
-        ][help.section.index()]
-    } else {
-        help.section.label()
-    };
-    let title = if compact {
-        format!(" Help · {} · Esc ", label)
-    } else {
-        format!(" Help · {} ", label)
-    };
-    let title = if help.codex {
-        title.replacen("Help", "Codex Help", 1)
-    } else if help.grok {
-        title.replacen("Help", "Grok Help", 1)
-    } else if help.pi {
-        title.replacen("Help", "Pi Help", 1)
-    } else {
-        title
-    };
-    frame.render_widget(panel(&title, true), area);
-
+pub(super) fn help_tab_at(area: Rect, column: u16, row: u16) -> Option<usize> {
     let inner = panel_inner(area);
-    let show_button = area.height >= 12;
-    let usable = Rect::new(
+    let tabs = Rect::new(
         inner.x,
         inner.y,
         inner.width,
-        inner.height.saturating_sub(if show_button { 2 } else { 0 }),
+        help_tab_lines(HelpSection::Home, inner.width).len() as u16,
     );
-    if usable.height == 0 {
-        return;
+    let mut x = tabs.x;
+    let mut y = tabs.y;
+    for (index, section) in HelpSection::ALL.iter().enumerate() {
+        let width =
+            UnicodeWidthStr::width(format!(" {} {} ", index + 1, section.label()).as_str()) as u16;
+        if x > tabs.x && x + width > tabs.x + tabs.width {
+            x = tabs.x;
+            y += 1;
+        }
+        if y < tabs.y + tabs.height && row == y && column >= x && column < x + width {
+            return Some(index);
+        }
+        x += width;
     }
-
-    let tab_height = if compact { 2 } else { 1 }.min(usable.height);
-    let tabs = Rect::new(usable.x, usable.y, usable.width, tab_height);
-    frame.render_widget(
-        Paragraph::new(if help.codex {
-            Line::from(
-                HelpSection::ALL
-                    .iter()
-                    .enumerate()
-                    .map(|(i, section)| {
-                        let label = [
-                            "Providers",
-                            if help.codex_accounts {
-                                "Accounts"
-                            } else {
-                                "All Models"
-                            },
-                            "Models",
-                            "Forms",
-                        ][i];
-                        Span::styled(
-                            format!(" {} {} ", i + 1, label),
-                            if *section == help.section {
-                                Style::default().fg(Color::Black).bg(ROUTE)
-                            } else {
-                                Style::default().fg(MUTED)
-                            },
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            help_tabs(help.section)
-        })
-        .wrap(Wrap { trim: true }),
-        tabs,
-    );
-
-    let show_navigation = !compact && usable.height > tab_height;
-    let navigation_height = u16::from(show_navigation);
-    if show_navigation {
-        let navigation = Rect::new(
-            usable.x,
-            usable.y.saturating_add(tab_height),
-            usable.width,
-            1,
-        );
-        frame.render_widget(
-            Paragraph::new("←→ / Tab sections · ↑↓ scroll · 1–4 jump")
-                .style(Style::default().fg(MUTED)),
-            navigation,
-        );
-    }
-
-    let content_y = usable
-        .y
-        .saturating_add(tab_height)
-        .saturating_add(navigation_height);
-    let content = Rect::new(
-        usable.x,
-        content_y,
-        usable.width,
-        usable
-            .height
-            .saturating_sub(tab_height.saturating_add(navigation_height)),
-    );
-    if content.height > 0 {
-        frame.render_widget(
-            Paragraph::new(if help.codex {
-                if help.section == HelpSection::AllEnabled && !help.codex_accounts {
-                    vec![Line::raw("All Models · enabled models across API providers"), Line::raw("↑↓ select · Enter open provider · Space disable model"), Line::raw("p sync catalog and set startup default · Esc back"), Line::raw("ChatGPT enabled: API models pause; the ChatGPT Account card shows the subscription state."), Line::raw("Home → ChatGPT Account → Space: confirm enable or disable and restore API models.")]
-                } else { codex_help_content(help.section) }
-            } else if help.grok {
-                grok_help_content(help.section)
-            } else if help.pi {
-                pi_help_content(help.section)
-            } else {
-                help_content(help.section, area.width >= 58)
-            })
-            .wrap(Wrap { trim: false })
-            .scroll((help.scroll, 0)),
-            content,
-        );
-    }
-
-    if show_button {
-        draw_modal_buttons(frame, area, &["Close  Esc / q / ? / Enter"]);
-    }
+    None
 }
 
-fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
-    if section == HelpSection::Forms {
-        let mut lines = help_content(section, false);
-        lines.pop(); // The shared availability / role legend does not apply to Pi.
-        lines.push(Line::raw(
-            "Ctrl+S writes models.json; all saved models are configured.",
-        ));
-        return lines;
+fn help_geometry(
+    help: &HelpModal,
+    area: Rect,
+) -> (Rect, Vec<(HelpAction, &'static str, Rect)>, Rect) {
+    let inner = panel_inner(area);
+    let tabs_height = help_tab_lines(help.section, inner.width).len() as u16;
+    let tabs = Rect::new(inner.x, inner.y, inner.width, tabs_height.min(inner.height));
+    let bottom = inner.y + inner.height.saturating_sub(2);
+    let mut x = inner.x;
+    let mut y = tabs.y + tabs.height + 1;
+    let mut actions = vec![];
+    for (action, label) in help_actions(help) {
+        let width = (UnicodeWidthStr::width(label) as u16 + 2).min(inner.width);
+        if x > inner.x && x + width > inner.x + inner.width {
+            x = inner.x;
+            y += 1;
+        }
+        if y < bottom {
+            actions.push((action, label, Rect::new(x, y, width, 1)));
+        }
+        x += width + 1;
     }
+    let content_y = (y + 2).min(bottom);
+    (
+        tabs,
+        actions,
+        Rect::new(
+            inner.x,
+            content_y,
+            inner.width,
+            bottom.saturating_sub(content_y),
+        ),
+    )
+}
+
+pub(super) fn help_action_at(
+    help: &HelpModal,
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<HelpAction> {
+    help_geometry(help, area)
+        .1
+        .into_iter()
+        .find(|(_, _, rect)| contains(*rect, column, row))
+        .map(|(action, _, _)| action)
+}
+
+pub(super) fn help_navigation_at(area: Rect, column: u16, row: u16) -> Option<usize> {
+    modal_button_rects(area, 3)
+        .iter()
+        .position(|rect| contains(*rect, column, row))
+}
+
+fn wrapped_help(help: &HelpModal, width: u16) -> Vec<Line<'static>> {
+    let source = format_help_rows(help.section, &help_rows(help), width >= 80);
     let mut lines = vec![
         Line::styled(
-            "Pi · Configuration files, providers and models",
-            Style::default().fg(ROUTE),
+            "Click an action · l / Enter opens this section · h / Esc returns",
+            Style::default().fg(MUTED),
         ),
-        Line::raw("n / a  Add a provider / model directly to models.json"),
-        Line::raw("e / E  Edit model / provider; saving updates models.json"),
-        Line::raw("p  Set the selected provider and model in settings.json"),
-        Line::raw("P  Enable/disable the selected provider's CCSW proxy API"),
-        Line::raw("d / 1  Set default / change the model context window"),
-        Line::raw("i  Reload Pi configuration files"),
-        Line::raw("r  Test connection and fetch provider models"),
-        Line::raw("s  Inspect Pi configuration status"),
+        Line::styled(
+            "1–9 / click: categories · Tab / Shift+Tab: switch · j k / Pg / Home End: scroll",
+            Style::default().fg(MUTED),
+        ),
         Line::raw(""),
     ];
-    for (key, action) in help_commands(section) {
-        if (key.contains('p') && (action.contains("proxy") || action.contains("sync")))
-            || key.contains("Space")
-            || *key == "A / C"
-            || *key == "A"
-        {
-            continue;
-        }
-        lines.push(Line::raw(format!("{key}  {action}")));
-    }
-    lines.extend([
-        Line::raw(""),
-        Line::raw("Pi reads models.json / settings.json directly; proxy entries stay in Pi files."),
-        Line::raw("Pi has no enable switch: x deletes an entry. Unknown fields are preserved."),
-        Line::raw(
-            "Read-only entries and their reasons are shown in status. auth.json is not edited.",
-        ),
-        Line::raw("Proxy API keeps the direct provider and adds a local Pi provider for the selected model."),
-    ]);
+    lines.extend(source);
     lines
-}
-
-fn codex_help_content(section: HelpSection) -> Vec<Line<'static>> {
-    let rows: &[(&str, &str)] = match section {
-        HelpSection::Home => &[
-            (
-                "F3",
-                "Open ChatGPT accounts; also available as the first provider",
-            ),
-            (
-                "Enter / click again",
-                "Open All Models, a provider or ChatGPT Account",
-            ),
-            (
-                "Space",
-                "Toggle provider; ChatGPT enable/disable requires confirmation",
-            ),
-            (
-                "All Models",
-                "Browse enabled models; subscription mode pauses API models",
-            ),
-            ("n / e / x", "Add / edit / remove an API provider"),
-            ("p", "Sync all API models or apply saved ChatGPT account"),
-            (
-                "Top tabs / F2",
-                "Switch independent Claude / Codex / Pi configurations",
-            ),
-            (
-                "",
-                "ChatGPT pauses API providers; disabling restores their previous enablement.",
-            ),
-        ],
-        HelpSection::AllEnabled => &[
-            (
-                "b / d",
-                "Browser / device code login; optional account label",
-            ),
-            ("e", "Rename the highlighted account"),
-            ("x", "Delete the highlighted saved account (confirm)"),
-            ("r", "Refresh account usage and status"),
-            ("PgUp / PgDn", "Scroll cached account details"),
-            ("i", "Import current Codex login; optional account label"),
-            (
-                "I",
-                "Import auth.json: file path, then optional account label",
-            ),
-            ("Up/Down", "Move the account cursor"),
-            ("Space", "Select the highlighted account without applying"),
-            ("p / Apply", "Activate the account and ChatGPT provider"),
-            ("Esc / Back", "Return to API providers"),
-            (
-                "",
-                "Import highlights; Space selects; Apply activates. No quota queries.",
-            ),
-            (
-                "",
-                "Revoked token: sign in with Codex, then reimport the fresh login.",
-            ),
-            (
-                "",
-                "Restart Codex CLI / App and open a new chat after switching.",
-            ),
-        ],
-        HelpSection::Provider => &[
-            ("a / e / E", "Add model / edit model / edit provider"),
-            (
-                "Mouse",
-                "Click Provider status once to select, again to edit",
-            ),
-            (
-                "Space / d / 1",
-                "Enable model / set default / toggle 1M context",
-            ),
-            (
-                "p / g",
-                "Sync all API models, set startup default / set reasoning",
-            ),
-            (
-                "s / D",
-                "Local status / disconnect and restore managed settings",
-            ),
-            (
-                "",
-                "Restart Codex after syncing catalog changes, then use /model without restarting.",
-            ),
-        ],
-        HelpSection::Forms => return help_content(section, false),
-    };
-    rows.iter()
-        .map(|(key, action)| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{key}  "),
-                    Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(*action),
-            ])
+        .into_iter()
+        .flat_map(|line| {
+            wrap_styled_segments(
+                line.spans
+                    .into_iter()
+                    .map(|s| (s.content.into_owned(), s.style))
+                    .collect(),
+                width.max(1),
+            )
         })
         .collect()
 }
 
-fn grok_help_content(section: HelpSection) -> Vec<Line<'static>> {
-    let mut lines = help_content(section, true);
-    for line in &mut lines {
-        for span in &mut line.spans {
-            span.content = span
-                .content
-                .replace("Claude", "Grok")
-                .replace(
-                    "Connect or sync all models / manage proxy",
-                    "Connect/sync models; direct API",
-                )
-                .into();
-        }
+pub(super) fn help_scroll_limit(help: &HelpModal, area: Rect) -> u16 {
+    let (_, _, content) = help_geometry(help, area);
+    wrapped_help(help, content.width)
+        .len()
+        .saturating_sub(content.height as usize)
+        .min(u16::MAX as usize) as u16
+}
+
+pub(super) fn draw_help(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    help: &HelpModal,
+    theme: theme::Theme,
+) {
+    frame.render_widget(
+        panel(&format!(" Help · {} ", help.section.label()), true),
+        area,
+    );
+    let (tabs, actions, content) = help_geometry(help, area);
+    frame.render_widget(
+        Paragraph::new(help_tab_lines(help.section, tabs.width)),
+        tabs,
+    );
+    for (action, label, rect) in actions {
+        let color = if action == HelpAction::Disconnect {
+            ERROR
+        } else {
+            ROUTE
+        };
+        frame.render_widget(
+            Paragraph::new(toolbar::action_line(label, color, false, theme)),
+            rect,
+        );
     }
-    lines.extend([
-        Line::raw("i import native models/settings (preview) · s connection status · D disconnect"),
-        Line::raw(
-            "p syncs enabled models from every provider; selected model only sets the default.",
-        ),
-        Line::raw("Grok OAuth Account: Enter / click again opens the account page; Esc returns."),
-        Line::raw(
-            "OAuth: b browser · d device code · u use native model · r refresh usage · x sign out.",
-        ),
-        Line::raw("Grok OAuth and API providers coexist; p sets an API default, /model selects any enabled API model."),
-        Line::raw("Account usage: credits, resets, prepaid/on-demand amounts · PgUp/PgDn scroll."),
-        Line::raw("Failed refresh retains the current account's cached usage; expired login needs reauth."),
-        Line::raw("Restart Grok, then /model lists all synced models; grok models verifies the catalog."),
-        Line::raw("F4 → c: Grok defaults, reasoning, permissions, compact mode and thinking."),
-        Line::raw("Settings: Alt+M cycles configured model keys; model IDs may also be typed."),
-        Line::raw(
-            "Uses $GROK_HOME/config.toml or ~/.grok/config.toml; restart Grok after syncing.",
-        ),
-        Line::raw(
-            "External managed-field edits pause automatic sync; p previews reconnect conflicts.",
-        ),
-    ]);
-    lines
+    let lines = wrapped_help(help, content.width);
+    let limit = lines
+        .len()
+        .saturating_sub(content.height as usize)
+        .min(u16::MAX as usize) as u16;
+    frame.render_widget(
+        Paragraph::new(lines).scroll((help.scroll.min(limit), 0)),
+        content,
+    );
+    if area.height >= 12 {
+        draw_modal_buttons(
+            frame,
+            area,
+            &["Previous [Shift+Tab]", "Next [Tab]", "Back [h / Esc]"],
+        );
+    }
 }

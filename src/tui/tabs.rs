@@ -7,6 +7,7 @@ pub(super) enum ClientTab {
     Pi,
     Grok,
     Usage,
+    Settings,
 }
 
 impl ClientTab {
@@ -16,7 +17,8 @@ impl ClientTab {
             Self::Codex => Self::Pi,
             Self::Pi => Self::Grok,
             Self::Grok => Self::Usage,
-            Self::Usage => Self::Claude,
+            Self::Usage => Self::Settings,
+            Self::Settings => Self::Claude,
         }
     }
 
@@ -27,24 +29,27 @@ impl ClientTab {
             Self::Pi => "Pi",
             Self::Grok => "Grok",
             Self::Usage => "Usage",
+            Self::Settings => "Settings",
         }
     }
 }
 
-pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 5] {
+pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 6] {
     let mut x = area.x.saturating_add(1);
     [
-        (ClientTab::Claude, if area.width < 64 { 9 } else { 11 }),
-        (ClientTab::Codex, if area.width < 64 { 7 } else { 9 }),
-        (ClientTab::Pi, if area.width < 64 { 2 } else { 6 }),
-        (ClientTab::Grok, if area.width < 64 { 4 } else { 10 }),
-        (ClientTab::Usage, if area.width < 64 { 5 } else { 8 }),
+        (ClientTab::Claude, 11),
+        (ClientTab::Codex, 9),
+        (ClientTab::Pi, 5),
+        (ClientTab::Grok, 8),
+        (ClientTab::Usage, 8),
+        (ClientTab::Settings, 12),
     ]
     .map(|(tab, width)| {
+        let right = area.right().saturating_sub(1);
         let rect = Rect::new(
             x,
             area.y,
-            width.min(area.right().saturating_sub(x)),
+            width.min(right.saturating_sub(x)),
             u16::from(area.height > 0),
         );
         x = x.saturating_add(width + 1);
@@ -53,6 +58,12 @@ pub(super) fn client_tabs(area: Rect) -> [(ClientTab, Rect); 5] {
 }
 impl App {
     pub(super) fn client_tab(&self) -> ClientTab {
+        if matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))) {
+            return ClientTab::Settings;
+        }
+        if matches!(self.modal, Some(Modal::Help(_))) && self.help_return.is_some() {
+            return ClientTab::Settings;
+        }
         if self.usage.active {
             return ClientTab::Usage;
         }
@@ -70,11 +81,19 @@ impl App {
         }
     }
     pub(super) fn select_client_tab(&mut self, tab: ClientTab) {
-        if self.modal.is_some()
+        if (self.modal.is_some()
+            && !matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))))
             || self.codex_navigation_blocked()
             || self.grok_auth.busy
             || tab == self.client_tab()
         {
+            return;
+        }
+        if matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))) {
+            self.modal = None;
+        }
+        if tab == ClientTab::Settings {
+            self.open_appearance();
             return;
         }
         if tab == ClientTab::Usage {
@@ -97,7 +116,7 @@ impl App {
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
             ClientTab::Grok => config::Client::Grok,
-            ClientTab::Usage => unreachable!(),
+            ClientTab::Settings | ClientTab::Usage => unreachable!(),
         };
         let mut config = match if tab == ClientTab::Pi {
             crate::pi::native::load(&self.pi_home)
@@ -123,8 +142,9 @@ impl App {
         self.model_idx = 0;
         self.profile_offset = 0;
         self.model_offset = 0;
+        self.all_models_filter = Default::default();
         self.home_all_selected = false;
-        self.codex_ui.home_models = tab == ClientTab::Codex;
+        self.codex_ui.home_models = tab == ClientTab::Codex && !self.config.profiles.is_empty();
         self.pi_enabled = tab == ClientTab::Pi;
         self.grok_enabled = tab == ClientTab::Grok;
         self.grok_auth.home_selected = false;
@@ -140,7 +160,7 @@ impl App {
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
             ClientTab::Pi => "Pi · direct API or proxy · p default · P proxy API · i reload",
             ClientTab::Grok => "Grok · o OAuth · i import · p connect · s status · D disconnect",
-            ClientTab::Usage => unreachable!(),
+            ClientTab::Settings | ClientTab::Usage => unreachable!(),
         }
         .into();
         if tab == ClientTab::Pi {
@@ -180,7 +200,7 @@ impl App {
             ClientTab::Codex => config::Client::Codex,
             ClientTab::Pi => config::Client::Pi,
             ClientTab::Grok => config::Client::Grok,
-            ClientTab::Usage => unreachable!(),
+            ClientTab::Settings | ClientTab::Usage => unreachable!(),
         }
     }
     pub(super) fn client_cache_path(&self, client: config::Client) -> std::path::PathBuf {

@@ -86,8 +86,20 @@ impl App {
             self.cancel_grok_auth();
             return Ok(false);
         }
-        if matches!(self.modal, Some(Modal::Appearance(_))) {
-            self.handle_modal(key)?;
+        if matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))) {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+                self.back_one_level()?;
+            } else if key.code == KeyCode::Char('?') {
+                self.open_help();
+            } else if matches!(self.modal, Some(Modal::Appearance(_)))
+                && key.code == KeyCode::Char('P')
+            {
+                self.open_proxy_manager();
+            } else if matches!(self.modal, Some(Modal::Proxy(_))) && key.code == KeyCode::F(4) {
+                self.open_appearance();
+            } else {
+                self.handle_modal(key)?;
+            }
             return Ok(false);
         }
         if self.modal.is_none() && key.code == KeyCode::F(4) {
@@ -95,11 +107,49 @@ impl App {
             return Ok(false);
         }
         if self.usage.active {
+            if self.modal.is_some() {
+                self.handle_modal(key)?;
+                return Ok(false);
+            }
             return Ok(self.usage_key(key));
         }
         if self.modal.is_none() && key.code == KeyCode::F(6) {
             self.open_usage();
             return Ok(false);
+        }
+        if self.view_mode == ViewMode::AllEnabled
+            && self.all_models_filter.active
+            && self.modal.is_none()
+        {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Ok(true);
+            }
+            self.global_filter_key(key);
+            return Ok(false);
+        }
+        if self.modal.is_none()
+            && matches!(key.code, KeyCode::Esc | KeyCode::Char('q'))
+            && !self.codex_input_active()
+            && !(self.view_mode == ViewMode::AllEnabled
+                && !self.all_models_filter.query.is_empty()
+                && key.code == KeyCode::Esc)
+            && !self
+                .provider_editor
+                .as_ref()
+                .is_some_and(|editor| editor.search_active)
+            && !self
+                .usage
+                .page
+                .as_ref()
+                .is_some_and(|page| self.usage.active && page.session_searching)
+            && !(self
+                .grok_auth
+                .page
+                .as_ref()
+                .is_some_and(|page| page.selected == 0)
+                && key.code == KeyCode::Char('q'))
+        {
+            return self.back_one_level();
         }
         if self.grok_enabled && self.grok_auth.page.is_some() && self.modal.is_none() {
             if key.code == KeyCode::F(2) && !self.grok_auth.busy {
@@ -143,6 +193,94 @@ impl App {
             self.handle_modal(key)?;
             return Ok(false);
         }
+        if self.view_mode == ViewMode::AllEnabled && key.code == KeyCode::Char('/') {
+            self.focus = Focus::Models;
+            self.all_models_filter.active = true;
+            return Ok(false);
+        }
+        if self.view_mode == ViewMode::AllEnabled
+            && self.focus == Focus::Models
+            && matches!(
+                key.code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::Char('j' | 'k')
+            )
+        {
+            self.all_models_filter.detail_scroll = 0;
+        }
+        if self.view_mode == ViewMode::AllEnabled
+            && key.code == KeyCode::Esc
+            && !self.all_models_filter.query.is_empty()
+        {
+            self.update_global_filter(String::new());
+            return Ok(false);
+        }
+        let searching = self.view_mode == ViewMode::Provider
+            && self
+                .provider_editor
+                .as_ref()
+                .is_some_and(|editor| editor.search_active);
+
+        if !searching && matches!(key.code, KeyCode::Char('h' | 'l')) {
+            let forward = key.code == KeyCode::Char('l');
+            if !forward
+                && (self.view_mode == ViewMode::Home
+                    || (provider_workspace(self.screen) && self.focus == Focus::Profiles))
+            {
+                return self.back_one_level();
+            }
+            match (self.view_mode, self.focus, forward) {
+                (ViewMode::Provider | ViewMode::AllEnabled, Focus::Details, false) => {
+                    self.focus = Focus::Models
+                }
+                (ViewMode::Provider | ViewMode::AllEnabled, Focus::Models, false)
+                    if provider_workspace(self.screen) =>
+                {
+                    self.focus = Focus::Profiles
+                }
+                (_, _, false) => self.return_home(),
+                (ViewMode::Home, _, true) | (_, Focus::Profiles, true) => {
+                    if self.home_all_selected
+                        || self.home_account_selected()
+                        || self.home_grok_oauth_selected()
+                    {
+                        self.enter_all_enabled_view();
+                    } else if self.view_mode == ViewMode::Home {
+                        self.enter_provider_view();
+                    } else {
+                        self.focus = Focus::Models;
+                    }
+                }
+                (ViewMode::AllEnabled, Focus::Models, true) if !provider_workspace(self.screen) => {
+                    self.open_selected_global_model()
+                }
+                (_, Focus::Models, true) => self.focus = Focus::Details,
+                (ViewMode::AllEnabled, Focus::Details, true) => self.open_selected_global_model(),
+                _ => {}
+            }
+            return Ok(false);
+        }
+        if !searching && key.code == KeyCode::Char('D') && self.client_tab() == ClientTab::Claude {
+            if let Err(error) = self.disconnect_claude() {
+                self.set_error(format!("Cannot disconnect: {error:#}"));
+            }
+            return Ok(false);
+        }
+        if key.code == KeyCode::Char('a') && !searching {
+            if self.view_mode == ViewMode::Home
+                || (provider_workspace(self.screen) && self.focus == Focus::Profiles)
+            {
+                self.new_profile();
+            } else {
+                self.open_add_model_modal();
+            }
+            return Ok(false);
+        }
         if key.code == KeyCode::F(5) {
             self.start_model_test();
             return Ok(false);
@@ -159,7 +297,7 @@ impl App {
                 KeyCode::PageDown => self.move_selection(5),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                     if self.home_account_selected() || self.home_grok_oauth_selected() {
-                        self.enter_all_enabled_view();
+                        self.focus = Focus::Details;
                     } else {
                         self.focus = Focus::Models;
                     }
@@ -173,7 +311,6 @@ impl App {
                 KeyCode::Char('x') if self.selected_profile().is_some() => {
                     self.modal = Some(Modal::DeleteProfile)
                 }
-                KeyCode::Char('n') => self.new_profile(),
                 KeyCode::Char('p') => self.sync_all_to_claude(),
                 KeyCode::Char('P') => self.open_proxy_manager(),
                 KeyCode::Char('?') => self.open_help(),
@@ -194,7 +331,6 @@ impl App {
                 KeyCode::Enter | KeyCode::Char('l') if self.selected_profile().is_some() => {
                     self.enter_provider_view();
                 }
-                KeyCode::Char('n') => self.new_profile(),
                 KeyCode::Char('e') | KeyCode::Char('E') => self.edit_profile(),
                 KeyCode::Char('x') if self.selected_profile().is_some() => {
                     self.modal = Some(Modal::DeleteProfile);
@@ -208,6 +344,31 @@ impl App {
                 _ => {}
             },
             ViewMode::AllEnabled => match key.code {
+                KeyCode::Esc if !self.all_models_filter.query.is_empty() => {
+                    self.update_global_filter(String::new())
+                }
+                KeyCode::Up | KeyCode::Char('k') if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll =
+                        self.all_models_filter.detail_scroll.saturating_sub(1)
+                }
+                KeyCode::Down | KeyCode::Char('j') if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll =
+                        self.all_models_filter.detail_scroll.saturating_add(1)
+                }
+                KeyCode::PageUp if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll =
+                        self.all_models_filter.detail_scroll.saturating_sub(10)
+                }
+                KeyCode::PageDown if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll =
+                        self.all_models_filter.detail_scroll.saturating_add(10)
+                }
+                KeyCode::Home if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll = 0
+                }
+                KeyCode::End if self.focus == Focus::Details => {
+                    self.all_models_filter.detail_scroll = usize::MAX
+                }
                 KeyCode::Tab | KeyCode::BackTab if provider_workspace(self.screen) => {
                     self.toggle_focus()
                 }
@@ -220,11 +381,11 @@ impl App {
                 }
                 KeyCode::PageDown => {
                     self.model_idx = (self.model_idx + 10)
-                        .min(self.all_managed_models().len().saturating_sub(1));
+                        .min(self.filtered_global_models().len().saturating_sub(1));
                 }
                 KeyCode::Home => self.model_idx = 0,
                 KeyCode::End => {
-                    self.model_idx = self.all_managed_models().len().saturating_sub(1);
+                    self.model_idx = self.filtered_global_models().len().saturating_sub(1);
                 }
                 KeyCode::Char(' ') => {
                     self.toggle_selected_global_model()?;
@@ -412,9 +573,6 @@ impl App {
                             self.commit_provider_editor()?;
                             self.status = "Cleared non-essential enabled models".into();
                         }
-                        KeyCode::Char('a') if self.selected_profile().is_some() => {
-                            self.open_add_model_modal();
-                        }
                         KeyCode::Char('x') if self.focus == Focus::Details => {
                             self.modal = Some(Modal::DeleteProfile);
                         }
@@ -434,9 +592,57 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Result<MouseAction> {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && (self.modal.is_none()
+                || matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))))
+            && let Some((tab, _)) = client_tabs(area)
+                .into_iter()
+                .find(|(_, rect)| contains(*rect, mouse.column, mouse.row))
+        {
+            self.select_client_tab(tab);
+            return Ok(MouseAction::None);
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && (matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_)))
+                || (self.modal.is_none()
+                    && !provider_workspace(area)
+                    && (self.codex_ui.accounts || self.grok_auth.page.is_some())))
+        {
+            let page = self.modal.as_ref().map_or_else(
+                || workspace_content_area(area),
+                |modal| modal_area_for(modal, area),
+            );
+            let [(help, back)] = page_header_actions(page);
+            if contains(help, mouse.column, mouse.row) {
+                self.open_help();
+                return Ok(MouseAction::None);
+            }
+            if contains(back, mouse.column, mouse.row) {
+                return Ok(if self.back_one_level()? {
+                    MouseAction::Quit
+                } else {
+                    MouseAction::None
+                });
+            }
+        }
+        if matches!(self.modal, Some(Modal::Proxy(_)))
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && contains(
+                settings_appearance_button(modal_area_for(self.modal.as_ref().unwrap(), area)),
+                mouse.column,
+                mouse.row,
+            )
+        {
+            self.open_appearance();
+            return Ok(MouseAction::None);
+        }
         if matches!(self.modal, Some(Modal::Appearance(_))) {
             let modal_area = modal_area_for(self.modal.as_ref().unwrap(), area);
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                if contains(settings_proxy_button(modal_area), mouse.column, mouse.row) {
+                    self.open_proxy_manager();
+                    return Ok(MouseAction::None);
+                }
                 if let Some((index, _)) = theme::rows(
                     modal_area,
                     match self.modal.as_ref().unwrap() {
@@ -498,6 +704,17 @@ impl App {
             }
             return Ok(MouseAction::None);
         }
+        if self.modal.is_some() {
+            let before = self.config.clone();
+            let before_client = self.config_client();
+            self.handle_modal_mouse(mouse, area)?;
+            if before != self.config && before_client == self.config_client() {
+                self.queue_sync(false, None);
+                self.sync_pi_after_edit();
+                self.sync_grok_after_edit();
+            }
+            return Ok(MouseAction::None);
+        }
         if area.width >= 40
             && area.height >= 12
             && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -518,7 +735,8 @@ impl App {
             && self.modal.is_none()
             && self.view_mode == ViewMode::Provider
         {
-            let is_provider_card = ui_areas(area, self.focus, self.view_mode)
+            let is_provider_card = self
+                .provider_ui_areas(area)
                 .details
                 .map(provider_detail_cards)
                 .is_some_and(|(_, card)| {
@@ -552,13 +770,236 @@ impl App {
             return Ok(MouseAction::None);
         }
 
-        if self.grok_enabled && self.grok_auth.page.is_some() {
+        if self.grok_enabled && self.grok_auth.page.is_some() && !provider_workspace(area) {
             self.grok_auth_page_mouse(mouse, area)?;
             return Ok(MouseAction::None);
         }
+        if self.grok_enabled && self.home_grok_oauth_selected() && provider_workspace(area) {
+            if let Some(panel) = self.provider_ui_areas(area).details
+                && contains(panel, mouse.column, mouse.row)
+            {
+                if self.grok_auth.page.is_none()
+                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                {
+                    self.open_grok_auth();
+                }
+                let content = panel_inner(panel);
+                let rows = embedded_account_rows(content, self.grok_auth.busy);
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                    if self
+                        .grok_auth
+                        .page
+                        .as_ref()
+                        .is_some_and(|page| page.confirm_logout)
+                    {
+                        if let Some(index) =
+                            modal_button_rects(grok_auth::confirmation_area(content), 2)
+                                .iter()
+                                .position(|rect| contains(*rect, mouse.column, mouse.row))
+                        {
+                            self.grok_auth_page_key(KeyEvent::new(
+                                KeyCode::Char(if index == 0 { 'y' } else { 'n' }),
+                                KeyModifiers::NONE,
+                            ))?;
+                        }
+                        return Ok(MouseAction::None);
+                    }
+                    if let Some(index) = grok_auth::account_actions(content)
+                        .iter()
+                        .position(|rect| contains(*rect, mouse.column, mouse.row))
+                    {
+                        if index == 6 {
+                            return Ok(MouseAction::None);
+                        }
+                        if self.grok_auth.busy {
+                            if index == 6 {
+                                self.cancel_grok_auth();
+                            }
+                        } else {
+                            if let Some(page) = self.grok_auth.page.as_mut() {
+                                page.selected = index + 1;
+                            }
+                            self.grok_auth_page_key(KeyEvent::new(
+                                KeyCode::Enter,
+                                KeyModifiers::NONE,
+                            ))?;
+                        }
+                        return Ok(MouseAction::None);
+                    }
+                    let inner = panel_inner(rows[2]);
+                    if mouse.row == inner.y && contains(inner, mouse.column, mouse.row) {
+                        if let Some(page) = self.grok_auth.page.as_mut() {
+                            page.selected = 0;
+                        }
+                    }
+                } else if contains(rows[2], mouse.column, mouse.row) {
+                    if let Some(page) = self.grok_auth.page.as_mut() {
+                        page.scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                            page.scroll.saturating_add(1)
+                        } else if mouse.kind == MouseEventKind::ScrollUp {
+                            page.scroll.saturating_sub(1)
+                        } else {
+                            page.scroll
+                        };
+                    }
+                }
+                return Ok(MouseAction::None);
+            }
+        }
         self.screen = area;
         let pi = self.pi_enabled;
-        let ui = ui_areas(area, self.focus, self.view_mode);
+        let ui = self.provider_ui_areas(area);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some(panel) = ui.profiles
+                && contains(panel, mouse.column, mouse.row)
+            {
+                self.focus = Focus::Profiles;
+                self.all_models_filter.active = false;
+                if let Some(editor) = &mut self.provider_editor {
+                    editor.search_active = false;
+                }
+                if header_add_button_rect(panel)
+                    .is_some_and(|button| contains(button, mouse.column, mouse.row))
+                {
+                    self.new_profile();
+                    return Ok(MouseAction::None);
+                }
+            } else if let Some(panel) = ui.models
+                && contains(panel, mouse.column, mouse.row)
+            {
+                self.focus = Focus::Models;
+                let list_y = if self.view_mode == ViewMode::AllEnabled {
+                    all_models::areas(panel).1.y
+                } else {
+                    panel.y + 3
+                };
+                if mouse.row >= list_y {
+                    self.all_models_filter.active = false;
+                    if let Some(editor) = &mut self.provider_editor {
+                        editor.search_active = false;
+                    }
+                }
+                if model_add_button_rect(panel, self.view_mode)
+                    .is_some_and(|button| contains(button, mouse.column, mouse.row))
+                {
+                    self.all_models_filter.active = false;
+                    if let Some(editor) = &mut self.provider_editor {
+                        editor.search_active = false;
+                    }
+                    self.open_add_model_modal();
+                    return Ok(MouseAction::None);
+                }
+            } else if ui
+                .details
+                .is_some_and(|panel| contains(panel, mouse.column, mouse.row))
+            {
+                self.focus = Focus::Details;
+                self.all_models_filter.active = false;
+                if let Some(editor) = &mut self.provider_editor {
+                    editor.search_active = false;
+                }
+            }
+        }
+        if self.view_mode == ViewMode::AllEnabled {
+            if let Some(panel) = ui.models
+                && contains(panel, mouse.column, mouse.row)
+            {
+                let (search, list) = all_models::areas(panel);
+                match mouse.kind {
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        self.focus = Focus::Models;
+                        self.move_selection(if mouse.kind == MouseEventKind::ScrollUp {
+                            -1
+                        } else {
+                            1
+                        });
+                    }
+                    MouseEventKind::Down(MouseButton::Left)
+                    | MouseEventKind::Drag(MouseButton::Left) => {
+                        self.focus = Focus::Models;
+                        if contains(search, mouse.column, mouse.row) {
+                            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                                if !self.all_models_filter.query.is_empty()
+                                    && all_models::clear_area(search)
+                                        .is_some_and(|r| contains(r, mouse.column, mouse.row))
+                                {
+                                    self.update_global_filter(String::new());
+                                    self.all_models_filter.active = false;
+                                } else {
+                                    self.all_models_filter.active = true;
+                                }
+                            }
+                        } else {
+                            let models = self.filtered_global_models();
+                            let index = scrollbar_index(
+                                list,
+                                mouse.column,
+                                mouse.row,
+                                models.len(),
+                                usize::from(list.height.saturating_sub(2) / 2),
+                            )
+                            .or_else(|| {
+                                clicked_list_index(
+                                    list,
+                                    mouse.column,
+                                    mouse.row,
+                                    self.model_offset,
+                                    2,
+                                )
+                            });
+                            if let Some(index) = index.filter(|index| *index < models.len()) {
+                                let repeated = self.model_idx == index;
+                                self.model_idx = index;
+                                self.all_models_filter.active = false;
+                                self.all_models_filter.detail_scroll = 0;
+                                let marker_x =
+                                    list.x + 1 + u16::from(self.theme.terminal_background());
+                                if !pi
+                                    && mouse.column == marker_x
+                                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                                {
+                                    self.toggle_selected_global_model()?;
+                                } else if !provider_workspace(area)
+                                    && repeated
+                                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                                {
+                                    self.open_selected_global_model();
+                                } else {
+                                    self.status_error = false;
+                                    self.status = format!(
+                                        "{} · {} · Enter open provider",
+                                        models[index].profile_name,
+                                        models[index].model.label()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return Ok(MouseAction::None);
+            }
+            if let Some(details) = ui.details
+                && contains(details, mouse.column, mouse.row)
+            {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        self.all_models_filter.detail_scroll =
+                            self.all_models_filter.detail_scroll.saturating_sub(1)
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.all_models_filter.detail_scroll =
+                            self.all_models_filter.detail_scroll.saturating_add(1)
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        self.all_models_filter.active = false
+                    }
+                    _ => {}
+                }
+                self.focus = Focus::Details;
+                return Ok(MouseAction::None);
+            }
+        }
         // The wide sidebar navigates in place and shares compact two-line hit targets.
         if provider_workspace(area)
             && let Some(panel) = ui.profiles
@@ -604,7 +1045,7 @@ impl App {
                             } else if repeated
                                 && (self.home_account_selected() || self.home_grok_oauth_selected())
                             {
-                                self.enter_all_enabled_view();
+                                self.focus = Focus::Details;
                             }
                         }
                     }
@@ -650,15 +1091,6 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-                if self.view_mode != ViewMode::Home
-                    && mouse.row == area.y + 1
-                    && mouse.column >= area.x
-                    && mouse.column <= area.x + 16
-                {
-                    self.return_home();
-                    return Ok(MouseAction::None);
-                }
-
                 if let Some(panel) = ui.profiles {
                     let visible = if self.view_mode == ViewMode::Home {
                         visible_variable_items(
@@ -719,12 +1151,7 @@ impl App {
                                 return Ok(MouseAction::None);
                             }
                         }
-                        if let Some(btn_rect) = catalog_add_button_rect(search_area)
-                            && contains(btn_rect, mouse.column, mouse.row)
-                        {
-                            self.open_add_model_modal();
-                            return Ok(MouseAction::None);
-                        }
+
                         if contains(search_area, mouse.column, mouse.row) {
                             self.focus = Focus::Models;
                             if let Some(editor) = self.ensure_provider_editor() {
@@ -804,14 +1231,21 @@ impl App {
                 if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
                     return Ok(MouseAction::None);
                 }
-                for (control, rect) in self.client_footer_controls(ui.footer, area.width < 100) {
+                for (control, rect) in self.provider_page_layout(area).controls {
                     if !contains(rect, mouse.column, mouse.row) {
                         continue;
                     }
+                    if let Some(editor) = &mut self.provider_editor {
+                        editor.search_active = false;
+                    }
+                    self.all_models_filter.active = false;
                     return Ok(match control {
                         FooterControl::Back => {
-                            self.return_home();
-                            MouseAction::None
+                            if self.back_one_level()? {
+                                MouseAction::Quit
+                            } else {
+                                MouseAction::None
+                            }
                         }
                         FooterControl::Models => {
                             self.focus = Focus::Models;
@@ -825,12 +1259,20 @@ impl App {
                             self.modal = Some(Modal::DeleteProfile);
                             MouseAction::None
                         }
+                        FooterControl::AddModel => {
+                            self.open_add_model_modal();
+                            MouseAction::None
+                        }
                         FooterControl::AddProfile => {
                             self.new_profile();
                             MouseAction::None
                         }
                         FooterControl::Sync => {
                             self.sync_all_to_claude();
+                            MouseAction::None
+                        }
+                        FooterControl::Disconnect => {
+                            self.run_help_action(HelpAction::Disconnect)?;
                             MouseAction::None
                         }
                         FooterControl::Proxy => {
@@ -910,30 +1352,7 @@ impl App {
                     && let Some(index) =
                         clicked_list_index(panel, mouse.column, mouse.row, self.model_offset, 2)
                 {
-                    if self.view_mode == ViewMode::AllEnabled {
-                        let models = self.all_managed_models();
-                        if index < models.len() {
-                            let was_selected = self.model_idx == index;
-                            self.focus = Focus::Models;
-                            self.model_idx = index;
-                            if !pi && mouse.column < panel.x.saturating_add(4) {
-                                self.toggle_selected_global_model()?;
-                                return Ok(MouseAction::None);
-                            }
-                            if was_selected {
-                                self.open_selected_global_model();
-                            } else {
-                                let entry = &models[index];
-                                self.status_error = false;
-                                self.status = format!(
-                                    "{} · {} · selected · Enter or click again to open provider",
-                                    entry.profile_name,
-                                    entry.model.label()
-                                );
-                            }
-                            return Ok(MouseAction::None);
-                        }
-                    } else if index < self.models().len() {
+                    if index < self.models().len() {
                         self.focus = Focus::Models;
                         self.model_idx = index;
                         if let Some(model) = self.selected_model() {
@@ -1215,6 +1634,19 @@ impl App {
             }
             return Ok(());
         }
+        if let Some(Modal::Help(help)) = self.modal.as_ref() {
+            if let Some(index) = help_tab_at(area, mouse.column, mouse.row) {
+                if let Some(Modal::Help(help)) = &mut self.modal {
+                    help.select(index);
+                }
+            } else if let Some(action) = help_action_at(help, area, mouse.column, mouse.row) {
+                self.run_help_action(action)?;
+            } else if let Some(index) = help_navigation_at(area, mouse.column, mouse.row) {
+                let code = [KeyCode::BackTab, KeyCode::Tab, KeyCode::Esc][index];
+                self.handle_modal(KeyEvent::new(code, KeyModifiers::NONE))?;
+            }
+            return Ok(());
+        }
         let button_count = match self.modal.as_ref() {
             Some(Modal::Help(_)) => 1,
             Some(Modal::Proxy(_)) => 0,
@@ -1463,20 +1895,34 @@ impl App {
                 KeyCode::Char('s') | KeyCode::Esc => return Ok(()),
                 _ => {}
             },
-            Modal::Help(help) => match key.code {
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+            Modal::Help(help) => {
+                let limit = help_scroll_limit(
+                    help,
+                    modal_area_for(&Modal::Help(help.clone()), self.screen),
+                );
+                help.scroll = help.scroll.min(limit);
+                if let Some(action) = help_key_action(help, key) {
+                    self.run_help_action(action)?;
                     return Ok(());
                 }
-                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => help.move_section(true),
-                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => help.move_section(false),
-                KeyCode::Down | KeyCode::PageDown | KeyCode::Char('j') => help.scroll(true),
-                KeyCode::Up | KeyCode::PageUp | KeyCode::Char('k') => help.scroll(false),
-                KeyCode::Char('1') => help.select(0),
-                KeyCode::Char('2') => help.select(1),
-                KeyCode::Char('3') => help.select(2),
-                KeyCode::Char('4') => help.select(3),
-                _ => {}
-            },
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q' | 'h') => {
+                        self.modal = self.help_return.take().map(|modal| *modal);
+                        return Ok(());
+                    }
+                    KeyCode::Tab | KeyCode::Right => help.move_section(true),
+                    KeyCode::BackTab | KeyCode::Left => help.move_section(false),
+                    KeyCode::Down | KeyCode::Char('j') => help.scroll(true),
+                    KeyCode::PageDown => help.scroll = help.scroll.saturating_add(10),
+                    KeyCode::Up | KeyCode::Char('k') => help.scroll(false),
+                    KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(10),
+                    KeyCode::Char(c @ '1'..='9') => help.select((c as u8 - b'1') as usize),
+                    KeyCode::Home => help.scroll = 0,
+                    KeyCode::End => help.scroll = limit,
+                    _ => {}
+                }
+                help.scroll = help.scroll.min(limit);
+            }
             Modal::DeleteProfile => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     if let Some(id) = self.selected_profile_id() {

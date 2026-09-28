@@ -54,7 +54,7 @@ pub(super) struct UsagePage {
     session_sort_tokens: bool,
     session_follow_range: bool,
     session_search: String,
-    session_searching: bool,
+    pub(super) session_searching: bool,
     limit: std::cell::Cell<usize>,
     dashboard: std::cell::RefCell<view::DashboardState>,
 }
@@ -458,16 +458,29 @@ impl App {
         });
     }
 
-    pub(super) fn usage_key(&mut self, key: KeyEvent) -> bool {
+    pub(super) fn usage_key(&mut self, mut key: KeyEvent) -> bool {
         let searching = self
             .usage
             .page
             .as_ref()
             .is_some_and(|p| p.session_searching);
-        if (!searching && key.code == KeyCode::Char('q'))
-            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-        {
+        if !searching && key.modifiers.is_empty() {
+            key.code = match key.code {
+                KeyCode::Char('h') => KeyCode::Esc,
+                KeyCode::Char('l') => KeyCode::Enter,
+                other => other,
+            };
+        }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
+        }
+        if !searching && key.code == KeyCode::Char('q') {
+            self.usage.active = false;
+            return false;
+        }
+        if !searching && key.code == KeyCode::Char('?') {
+            self.open_help();
+            return false;
         }
         if !searching && key.code == KeyCode::F(2) {
             self.select_client_tab(ClientTab::Claude);

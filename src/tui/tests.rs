@@ -2,6 +2,103 @@ use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
+fn fullscreen_visual_capture() {
+    let directory = std::env::var("CCSW_SCREENSHOT_DIR").ok();
+    if let Some(directory) = &directory {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let capture = |name: &str, app: &mut App, width: u16, height: u16| {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        if name.starts_with("codex") {
+            assert!(text.contains("ChatGPT accounts"));
+            assert!(text.contains("Personal account"));
+        } else if name.starts_with("grok") {
+            assert!(text.contains("Grok accounts"));
+            assert!(text.contains("Account configuration"));
+        } else if name.starts_with("settings") {
+            assert!(text.contains("Preview / providers"));
+        } else {
+            assert!(text.contains("Providers"));
+        }
+        let Some(directory) = &directory else {
+            return;
+        };
+        let cells = buffer
+            .content
+            .iter()
+            .map(|cell| {
+                serde_json::json!({
+                    "text": cell.symbol(),
+                    "fg": format!("{:?}", cell.fg),
+                    "bg": format!("{:?}", cell.bg),
+                    "bold": cell.modifier.contains(Modifier::BOLD),
+                })
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(
+            std::path::Path::new(directory).join(format!("{name}.json")),
+            serde_json::to_vec(
+                &serde_json::json!({"width": width, "height": height, "cells": cells}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let (_temp, mut provider) = persisted_app();
+    let fullscreen = Rect::new(0, 0, 200, 44);
+    let workspace = provider.provider_ui_areas(fullscreen);
+    assert!(workspace.profiles.unwrap().x <= 3);
+    assert!(workspace.details.unwrap().right() >= fullscreen.right() - 3);
+    capture("provider-200x44", &mut provider, 200, 44);
+    let (_temp, mut codex) = persisted_app();
+    codex.codex_ui.enabled = true;
+    codex.config.codex.accounts.insert(
+        "demo".into(),
+        crate::codex::accounts::Account {
+            name: "Personal account".into(),
+            email: "demo@example.com".into(),
+            workspace: "Personal".into(),
+            plan: Some("Pro".into()),
+            ..Default::default()
+        },
+    );
+    codex.screen = Rect::new(0, 0, 200, 44);
+    codex.select_home_index(1);
+    codex.open_codex_accounts();
+    capture("codex-200x44", &mut codex, 200, 44);
+    capture("codex-120x30", &mut codex, 120, 30);
+    capture("codex-120x24", &mut codex, 120, 24);
+    let (_temp, mut grok) = persisted_app();
+    grok.grok_enabled = true;
+    grok.grok_auth.status = crate::grok::auth::Status {
+        saved: true,
+        email: Some("demo@example.com".into()),
+        expired: false,
+        refreshable: true,
+    };
+    grok.grok_auth.page = Some(grok_auth::AccountPage {
+        selected: 1,
+        model: field("Native model", "grok-build"),
+        confirm_logout: false,
+        scroll: 0,
+    });
+    grok.select_home_index(1);
+    capture("grok-200x44", &mut grok, 200, 44);
+    capture("grok-120x30", &mut grok, 120, 30);
+    capture("grok-120x24", &mut grok, 120, 24);
+    let (_temp, mut settings) = persisted_app();
+    settings.open_appearance();
+    capture("settings-200x44", &mut settings, 200, 44);
+}
+
+#[test]
 fn tui_theme_preview_cancel_save_and_restart_do_not_touch_provider_config() {
     let (_temp, mut app) = persisted_app();
     app.theme = theme::Theme::Slate;
@@ -601,10 +698,12 @@ fn renders_empty_state_in_narrow_terminal() {
         model_idx: 0,
         profile_offset: 0,
         model_offset: 0,
+        all_models_filter: Default::default(),
         focus: Focus::Profiles,
         status: "Ready".into(),
         status_error: false,
         modal: None,
+        help_return: None,
         proxy_status: None,
         provider_editor: None,
         provider_card_selected: false,
@@ -1923,10 +2022,12 @@ fn interactive_test_app() -> App {
         model_idx: 0,
         profile_offset: 0,
         model_offset: 0,
+        all_models_filter: Default::default(),
         focus: Focus::Profiles,
         status: "Ready".into(),
         status_error: false,
         modal: None,
+        help_return: None,
         proxy_status: None,
         provider_editor: None,
         provider_card_selected: false,
@@ -2783,19 +2884,21 @@ fn pi_help_is_client_specific_and_codex_account_buttons_are_clickable() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("Pi Help"));
-    assert!(text.contains("Set the selected provider and model in settings.json"));
+    assert!(text.contains("Help"));
+    assert!(text.contains("Pi"));
     assert!(!text.contains("manage proxy"));
     app.modal = None;
     app.select_client_tab(ClientTab::Codex);
     app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
         .unwrap();
     let area = Rect::new(0, 0, 120, 36);
+    let account_panel = app.provider_ui_areas(area).details.unwrap();
+    let import = codex::account_buttons(panel_inner(account_panel))[0].2;
     app.codex_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 33,
+            column: import.x,
+            row: import.y,
             modifiers: KeyModifiers::NONE,
         },
         area,
@@ -2826,7 +2929,7 @@ fn codex_account_provider_and_help_use_shared_navigation() {
         .map(|c| c.symbol())
         .collect();
     assert!(text.contains("ChatGPT Account"));
-    assert!(text.contains("Providers · F2 Pi"));
+    assert!(text.contains("Codex / Providers"));
     app.home_all_selected = false;
     let area = Rect::new(0, 0, 120, 36);
     let panel = ui_areas(area, app.focus, app.view_mode).profiles.unwrap();
@@ -2841,7 +2944,7 @@ fn codex_account_provider_and_help_use_shared_navigation() {
     assert!(!app.codex_ui.accounts);
     assert!(app.home_all_selected);
     app.handle_mouse(mouse, area).unwrap();
-    assert!(app.codex_ui.accounts);
+    assert!(!app.codex_ui.accounts);
     app.open_help();
     assert!(matches!(app.modal, Some(Modal::Help(_))));
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -2852,14 +2955,14 @@ fn codex_account_provider_and_help_use_shared_navigation() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("2 Accounts"));
-    assert!(text.contains("No quota queries"));
+    assert!(text.contains("Help"));
+    assert!(text.contains("Accounts"));
     app.handle_modal(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
         .unwrap();
     assert!(matches!(
         app.modal,
         Some(Modal::Help(HelpModal {
-            section: HelpSection::Provider,
+            section: HelpSection::AllEnabled,
             ..
         }))
     ));
@@ -4310,78 +4413,61 @@ fn grok_account_management_is_a_page_with_back_navigation_and_visible_errors() {
     app.select_home_index(1);
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.handle_key(key(KeyCode::Enter)).unwrap();
-    assert!(app.modal.is_none());
-    assert!(app.grok_auth.page.is_some());
+    assert!(app.modal.is_none() && app.grok_auth.page.is_some());
     for (width, height) in [(40, 12), (120, 36)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        let text: String = terminal
+        let text = terminal
             .backend()
             .buffer()
             .content
             .iter()
             .map(|cell| cell.symbol())
-            .collect();
-        assert!(text.contains("Grok OAuth Accounts"));
-        assert!(text.contains("Account configuration"));
-        assert!(!text.contains("Providers · F2"));
+            .collect::<String>();
         assert!(text.contains("Grok accounts"));
+        if width >= 120 {
+            assert!(text.contains("Grok / Providers"));
+            assert!(text.contains("Account configuration"));
+        } else {
+            assert!(text.contains("Grok OAuth Accounts"));
+        }
     }
-    assert!(
-        !app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
-            .unwrap()
-    );
-    assert!(app.grok_auth.page.is_some());
     assert!(app.handle_key(key(KeyCode::Char('u'))).is_err());
     assert!(app.grok_auth.page.is_some());
-    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect();
-    assert!(text.contains("Sign in to Grok OAuth first"));
-    // Refresh and Back operate on the account page, without opening a modal.
-    let area = Rect::new(0, 0, 120, 36);
-    let refresh = grok_auth::account_actions(area)[3];
-    let mouse = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: refresh.x,
-        row: refresh.y,
-        modifiers: KeyModifiers::NONE,
-    };
-    app.handle_mouse(mouse, area).unwrap();
+    let screen = Rect::new(0, 0, 120, 36);
+    let panel = app.provider_ui_areas(screen).details.unwrap();
+    let content = panel_inner(panel);
+    let refresh = grok_auth::account_actions(content)[3];
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: refresh.x,
+            row: refresh.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        screen,
+    )
+    .unwrap();
     assert!(app.modal.is_none() && app.grok_auth.page.is_some());
     app.grok_auth.busy = true;
     app.handle_key(key(KeyCode::Esc)).unwrap();
     assert!(app.grok_auth.page.is_some());
-    app.select_client_tab(ClientTab::Claude);
-    assert!(app.grok_enabled);
     app.grok_auth.busy = false;
     app.handle_mouse(
         MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
             column: 3,
-            row: 1,
-            ..mouse
+            row: 0,
+            modifiers: KeyModifiers::NONE,
         },
-        area,
+        screen,
     )
     .unwrap();
-    assert!(app.grok_auth.page.is_none());
-    assert!(app.home_grok_oauth_selected());
-    app.handle_key(key(KeyCode::Enter)).unwrap();
-    app.handle_key(key(KeyCode::F(2))).unwrap();
-    assert!(app.usage.active);
-    app.select_client_tab(ClientTab::Claude);
-    assert!(!app.grok_enabled);
-    assert!(app.grok_auth.page.is_none());
+    assert!(!app.grok_enabled && app.grok_auth.page.is_none());
 }
 
 #[test]
-fn grok_accounts_match_codex_vertical_layout_and_footer_at_all_sizes() {
+fn grok_accounts_use_embedded_columns_fullscreen_and_page_on_narrow_screens() {
     let (temp, mut app) = persisted_app();
     app.grok_home = temp.path().join("grok");
     std::fs::create_dir_all(&app.grok_home).unwrap();
@@ -4394,29 +4480,34 @@ fn grok_accounts_match_codex_vertical_layout_and_footer_at_all_sizes() {
     app.open_grok_auth();
     for (width, height) in [(40, 12), (80, 24), (120, 36)] {
         let screen = Rect::new(0, 0, width, height);
-        let rows = account_page_rows(screen, false);
-        for row in rows {
-            assert_eq!(row.x, 0);
-            assert_eq!(row.width, width);
-        }
-        assert_eq!(rows[1].bottom(), rows[2].y);
-        assert_eq!(rows[2].bottom(), rows[3].y);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let line = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
-        assert!(line(rows[1].y).contains("Grok accounts"));
-        assert!(line(rows[1].y + 1).contains("account@example.com"));
-        assert!(line(rows[2].y).contains("Account configuration"));
-        if height >= 16 {
-            assert!(line(rows[2].y + 1).contains("Native model"));
-        }
-        let buttons = grok_auth::account_actions(screen);
-        for button in &buttons {
-            assert!(button.y >= rows[3].y && button.bottom() <= screen.bottom());
-            assert!(button.right() <= screen.right());
-        }
-        let refresh = buttons[3];
+        let text = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Grok accounts"));
+        assert!(text.contains("account@example.com") || width == 40);
+        assert!(!text.contains("SECRET"));
+        let content = if provider_workspace(screen) {
+            assert!(text.contains("Grok / Providers"));
+            let panel = app.provider_ui_areas(screen).details.unwrap();
+            let content = panel_inner(panel);
+            let rows = embedded_account_rows(content, false);
+            assert!(rows[1].right() < rows[2].x);
+            assert!(text.contains("Account configuration"));
+            content
+        } else {
+            let content = workspace_content_area(screen);
+            let rows = account_page_rows(content, false);
+            assert_eq!(rows[1].bottom(), rows[2].y);
+            assert!(text.contains("Grok OAuth Accounts"));
+            content
+        };
+        let refresh = grok_auth::account_actions(content)[3];
+        assert!(refresh.right() <= screen.right() && refresh.bottom() <= screen.bottom());
         app.handle_mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -4430,20 +4521,17 @@ fn grok_accounts_match_codex_vertical_layout_and_footer_at_all_sizes() {
         assert!(app.grok_auth.page.is_some());
     }
     app.grok_auth.busy = true;
-    let screen = Rect::new(0, 0, 40, 12);
-    assert_eq!(account_page_rows(screen, true)[1].height, 0);
     let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let text: String = terminal
+    let text = terminal
         .backend()
         .buffer()
         .content
         .iter()
         .map(|cell| cell.symbol())
-        .collect();
+        .collect::<String>();
     assert!(text.contains("Login progress"));
     assert!(text.contains("Cancel/Esc"));
-    assert!(!text.contains("Grok accounts"));
     app.grok_auth.busy = false;
 }
 

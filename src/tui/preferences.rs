@@ -158,33 +158,15 @@ impl App {
                 form.message = "Save or discard this draft before disconnecting".into();
                 return false;
             }
-            if self.background.sync_running || self.background.proxy_running {
-                form.message = "Wait for the current sync to finish".into();
-                return false;
-            }
-            match claude_config::settings_path()
-                .and_then(|path| sync::disconnect(&self.paths, &path))
-            {
-                Ok(conflicts) => {
-                    self.background.connected = false;
-                    self.background.queued_sync = None;
-                    self.background.status = sync::Status::NotConnected;
-                    self.status = if conflicts.is_empty() {
-                        "Disconnected; previous Claude preferences restored".into()
-                    } else {
-                        format!(
-                            "Disconnected; external edits preserved: {}",
-                            conflicts.join(", ")
-                        )
-                    };
-                    return true;
-                }
+            match self.disconnect_claude() {
+                Ok(()) => return true,
                 Err(e) => {
                     form.message = format!("Cannot disconnect: {e:#}");
                     return false;
                 }
             }
         }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             if let Some((index, preset)) = form.fields[6..]
                 .as_chunks::<2>()

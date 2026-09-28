@@ -39,6 +39,23 @@ impl App {
             );
             return;
         }
+        if matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))) {
+            self.draw_client_tabs(frame, area);
+            if let Some(modal) = &self.modal {
+                self.draw_modal(frame, modal);
+                self.draw_page_header_actions(frame, modal_area_for(modal, area));
+            }
+            return;
+        }
+        if matches!(self.modal, Some(Modal::Help(_))) {
+            if let Some(previous) = &self.help_return {
+                self.draw_client_tabs(frame, area);
+                self.draw_modal(frame, previous);
+                self.draw_page_header_actions(frame, modal_area_for(previous, area));
+                self.draw_modal(frame, self.modal.as_ref().unwrap());
+                return;
+            }
+        }
         if self.usage.active {
             self.draw_client_tabs(frame, area);
             if let Some(page) = &self.usage.page {
@@ -49,15 +66,35 @@ impl App {
             }
             return;
         }
-        if self.codex_ui.enabled && self.codex_ui.accounts {
+        if provider_workspace(area)
+            && self.codex_ui.enabled
+            && self.codex_ui.accounts
+            && !self.home_account_selected()
+        {
+            self.return_home();
+            self.select_home_index(1);
+            self.focus = Focus::Details;
+        }
+        if provider_workspace(area)
+            && self.grok_enabled
+            && self.grok_auth.page.is_some()
+            && !self.home_grok_oauth_selected()
+        {
+            self.return_home();
+            self.select_home_index(1);
+            self.focus = Focus::Details;
+        }
+        if self.codex_ui.enabled && self.codex_ui.accounts && !provider_workspace(area) {
             self.draw_codex_accounts(frame, area);
+            self.draw_page_header_actions(frame, workspace_content_area(area));
             if let Some(modal) = &self.modal {
                 self.draw_modal(frame, modal);
             }
             return;
         }
-        if self.grok_enabled && self.grok_auth.page.is_some() {
+        if self.grok_enabled && self.grok_auth.page.is_some() && !provider_workspace(area) {
             self.draw_grok_accounts(frame, area);
+            self.draw_page_header_actions(frame, workspace_content_area(area));
             if let Some(modal) = &self.modal {
                 self.draw_modal(frame, modal);
             }
@@ -77,9 +114,18 @@ impl App {
         {
             self.focus = Focus::Models;
         }
-        let rows = app_rows(area);
-        self.draw_route(frame, rows[0]);
-        let ui = ui_areas(area, self.focus, self.view_mode);
+        self.draw_client_tabs(frame, area);
+        let page = self.provider_page_layout(area);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(theme::SURFACE))
+                .border_style(Style::default().fg(theme::ACTIVE_EDGE))
+                .title(self.provider_page_title()),
+            page.shell,
+        );
+        self.draw_provider_actions(frame, &page);
+        let ui = ui_content_areas(area, page.content, page.status, self.focus, self.view_mode);
         if let Some(profiles) = ui.profiles {
             self.draw_profiles(frame, profiles);
         }
@@ -87,97 +133,97 @@ impl App {
             self.draw_models(frame, models);
         }
         if let Some(details) = ui.details {
-            self.draw_details(frame, details, self.focus == Focus::Details);
+            if self.view_mode == ViewMode::AllEnabled {
+                self.draw_global_model_details(frame, details);
+            } else {
+                self.draw_details(frame, details, self.focus == Focus::Details);
+            }
         }
-        self.draw_status(frame, ui.footer, area.width < 100);
+        self.draw_status(frame, ui.footer);
         if let Some(modal) = &self.modal {
             self.draw_modal(frame, modal);
         }
         self.draw_codex_overlay(frame, area);
     }
 
-    pub(super) fn draw_route(&self, frame: &mut ratatui::Frame, area: Rect) {
-        self.draw_client_tabs(frame, area);
-        let area = Rect::new(
-            area.x,
-            area.y.saturating_add(1),
-            area.width,
-            area.height.saturating_sub(1),
+    fn draw_page_header_actions(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let [(help, back)] = page_header_actions(area);
+        frame.render_widget(
+            Paragraph::new(toolbar::action_line("Help [?]", ROUTE, false, self.theme))
+                .alignment(Alignment::Center),
+            help,
         );
-        let profile = self
-            .selected_profile()
-            .map(|profile| profile.name.as_str())
-            .unwrap_or("no profile");
-        let model = self
-            .selected_model()
-            .map(|model| model.label().to_owned())
-            .unwrap_or_else(|| "no model".into());
+        frame.render_widget(
+            Paragraph::new(toolbar::action_line(
+                if area.width < 56 {
+                    "Back [q]"
+                } else {
+                    "Back [Esc/q]"
+                },
+                FIELD_LABEL,
+                false,
+                self.theme,
+            ))
+            .alignment(Alignment::Center),
+            back,
+        );
+    }
+
+    fn provider_page_title(&self) -> Line<'static> {
+        let mut title = vec![
+            Span::styled(
+                format!(" {} / Providers ", self.config_tab().label()),
+                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ", Style::default().fg(MUTED)),
+        ];
         let line = match self.view_mode {
             ViewMode::Home => Line::from(vec![
-                Span::styled(" CCSW ", button_style(false, false, false)),
                 Span::styled(
-                    format!("  Providers · F2 {}", self.client_tab().next().label()),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    "PROVIDERS  ",
+                    Style::default()
+                        .fg(FIELD_LABEL)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(
-                        "  ·  {} providers",
-                        self.config.profiles.len()
-                            + usize::from(self.codex_ui.enabled || self.grok_enabled)
-                    ),
+                    format!("{} configured", self.config.profiles.len()),
                     Style::default().fg(MUTED),
                 ),
             ]),
             ViewMode::Provider => Line::from(vec![
                 Span::styled(
-                    if provider_workspace(self.screen) {
-                        " Providers "
-                    } else {
-                        " ‹ Back (Esc) "
-                    },
-                    button_style(false, false, false),
+                    self.selected_profile()
+                        .map_or("No provider", |p| p.name.as_str())
+                        .to_owned(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
+                Span::styled("  /  ", Style::default().fg(MUTED)),
                 Span::styled(
-                    format!("  {profile}  "),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("→", Style::default().fg(ROUTE)),
-                Span::styled(
-                    format!("  {model}  "),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    self.selected_model()
+                        .map_or_else(|| "No model".into(), |m| m.label().to_owned()),
+                    Style::default()
+                        .fg(DEFAULT_MODEL)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
             ViewMode::AllEnabled => Line::from(vec![
                 Span::styled(
-                    if provider_workspace(self.screen) {
-                        " Providers "
-                    } else {
-                        " ‹ Back (Esc) "
-                    },
-                    button_style(false, false, false),
+                    "ALL MODELS  ",
+                    Style::default()
+                        .fg(FIELD_LABEL)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "  All Models",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  ·  {} models", self.all_enabled_model_count()),
+                    format!("{} enabled · all providers", self.all_enabled_model_count()),
                     Style::default().fg(ENABLED),
                 ),
             ]),
         };
-        frame.render_widget(
-            Paragraph::new(line).wrap(Wrap { trim: true }).block(
-                Block::default()
-                    .border_style(Style::default().fg(theme::EDGE))
-                    .borders(if area.height > 1 {
-                        Borders::BOTTOM
-                    } else {
-                        Borders::NONE
-                    }),
-            ),
-            area,
-        );
+        title.extend(line.spans);
+        title.push(Span::raw(" "));
+        Line::from(title)
     }
 
     pub(super) fn draw_profiles(&mut self, frame: &mut ratatui::Frame, area: Rect) {
@@ -295,7 +341,7 @@ impl App {
             }
         }));
         let title = if sidebar {
-            " Providers · n add "
+            " Providers · a add "
         } else {
             " Providers "
         };
@@ -316,6 +362,7 @@ impl App {
             area,
             &mut state,
         );
+        draw_header_add_button(frame, area);
         self.profile_offset = state.offset();
         let visible_items = if is_home {
             visible_variable_items(
@@ -331,7 +378,10 @@ impl App {
 
     pub(super) fn draw_models(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         if self.view_mode == ViewMode::AllEnabled {
-            let models = self.all_managed_models();
+            let models = self.filtered_global_models();
+            self.model_idx = self.model_idx.min(models.len().saturating_sub(1));
+            let (search, area) = all_models::areas(area);
+            self.draw_global_filter(frame, search, models.len(), self.all_managed_models().len());
             let enabled_count = models.iter().filter(|entry| entry.enabled).count();
             let items = models
                 .iter()
@@ -373,7 +423,7 @@ impl App {
             };
             frame.render_stateful_widget(
                 List::new(items)
-                    .block(panel(&title, true))
+                    .block(panel(&title, self.focus == Focus::Models))
                     .highlight_style(Style::default().bg(theme::PROVIDER_SELECTION))
                     .highlight_symbol(self.theme.selection_symbol()),
                 area,
@@ -389,15 +439,14 @@ impl App {
             );
             if models.is_empty() {
                 frame.render_widget(
-                    Paragraph::new(
-                        "No managed models.\nAdd models in a provider, or enable a provider from Home.",
-                    )
-                    .style(Style::default().fg(MUTED))
-                    .alignment(Alignment::Center)
-                    .block(panel(&title, true)),
+                    Paragraph::new("No matching models.\nClear the filter or enable a provider.")
+                        .style(Style::default().fg(MUTED))
+                        .alignment(Alignment::Center)
+                        .block(panel(&title, self.focus == Focus::Models)),
                     area,
                 );
             }
+            draw_header_add_button(frame, area);
             return;
         }
         if self.view_mode == ViewMode::Provider {
@@ -483,41 +532,14 @@ impl App {
                         Span::raw("")
                     },
                 ]);
-                let add_btn = catalog_add_button_rect(search_area);
-                let text_width = if let Some(btn) = add_btn {
-                    search_inner
-                        .width
-                        .saturating_sub(btn.width.saturating_add(1))
-                } else {
-                    search_inner.width
-                };
-                let text_area = Rect::new(
-                    search_inner.x,
-                    search_inner.y,
-                    text_width,
-                    search_inner.height,
-                );
-                frame.render_widget(Paragraph::new(line), text_area);
-                if let Some(btn_rect) = add_btn {
-                    let label = if btn_rect.width >= 14 {
-                        "[+ Add model (a)]"
-                    } else {
-                        "[+ a]"
-                    };
-                    frame.render_widget(
-                        Paragraph::new(label)
-                            .alignment(Alignment::Center)
-                            .style(button_style(false, false, false)),
-                        btn_rect,
-                    );
-                }
+                frame.render_widget(Paragraph::new(line), search_inner);
             }
 
             let filtered = editor.filtered_indices();
             let list_title = if self.pi_enabled {
-                " Models · ◆ default  ● configured "
+                " Models · a add · ◆ default  ● configured "
             } else {
-                " Models · ◆ default  ● enabled  ○ disabled "
+                " Models · a add · ◆ default  ● enabled  ○ disabled "
             };
             let block = panel(
                 list_title,
@@ -525,6 +547,7 @@ impl App {
             );
             let inner = panel_inner(list_area);
             frame.render_widget(block, list_area);
+            draw_header_add_button(frame, list_area);
             if inner.width == 0 || inner.height == 0 {
                 return;
             }
@@ -844,7 +867,7 @@ impl App {
         let button_rows = 1;
         let content = Rect::new(
             inner.x,
-            inner.y,
+            inner.y + button_rows,
             inner.width,
             inner.height.saturating_sub(button_rows),
         );
@@ -930,7 +953,7 @@ impl App {
                     ClientTab::Codex => "Codex models",
                     ClientTab::Pi => "Pi /model",
                     ClientTab::Grok => "Grok /model",
-                    ClientTab::Usage => unreachable!(),
+                    ClientTab::Usage | ClientTab::Settings => unreachable!(),
                 },
                 &format!(
                     "{} models across {} providers",
@@ -966,23 +989,21 @@ impl App {
                 ClientTab::Grok => {
                     "Press p to connect; saved changes sync automatically. Restart Grok."
                 }
-                ClientTab::Usage => unreachable!(),
+                ClientTab::Usage | ClientTab::Settings => unreachable!(),
             },
             Style::default().fg(MUTED),
         ));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
-        draw_detail_controls(frame, area);
+        draw_detail_controls(frame, area, self.theme);
     }
 
     pub(super) fn draw_details(&self, frame: &mut ratatui::Frame, area: Rect, active: bool) {
         if self.home_grok_oauth_selected() {
-            frame.render_widget(Paragraph::new(format!("Grok OAuth Account\n\n{}\n\nEnter / click again to configure browser or device-code login, select a native model, or sign out.\nExisting API providers are retained.", self.grok_auth_status_description()))
-                .block(panel(" Grok OAuth provider ", active)).wrap(Wrap { trim: false }), area);
+            self.draw_grok_accounts_embedded(frame, area);
             return;
         }
         if self.home_account_selected() {
-            frame.render_widget(Paragraph::new("ChatGPT Account\n\nEnter / click Account to import or switch saved logins.\nSpace: enable / disable subscription (confirmation required).\nEnabling pauses API providers; disabling restores their previous states.")
-                .block(panel(" ChatGPT provider ", active)).wrap(Wrap { trim: false }), area);
+            self.draw_codex_accounts_embedded(frame, area);
             return;
         }
         let Some(profile) = self.selected_profile() else {
@@ -1030,20 +1051,7 @@ impl App {
         self.draw_provider_details(frame, area, profile, active, false);
     }
 
-    pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect, compact: bool) {
-        for (control, rect) in self.client_footer_controls(area, compact) {
-            let (label, style) = self.footer_control_style(
-                control,
-                compact,
-                self.footer_uses_short_labels(area, compact),
-            );
-            frame.render_widget(
-                Paragraph::new(label)
-                    .alignment(Alignment::Center)
-                    .style(style),
-                rect,
-            );
-        }
+    pub(super) fn draw_status(&self, frame: &mut ratatui::Frame, area: Rect) {
         let color = if self.status_error { ERROR } else { MUTED };
         let sync_color = match self.background.status {
             sync::Status::Synced => CONNECTED,
@@ -1073,40 +1081,32 @@ impl App {
             ),
             Span::styled(&self.status, Style::default().fg(color)),
         ]);
-        if area.height > 1 {
-            frame.render_widget(
-                Paragraph::new(footer).wrap(Wrap { trim: true }),
-                Rect {
-                    y: area.y.saturating_add(1),
-                    height: area.height.saturating_sub(1),
-                    ..area
-                },
-            );
-        }
+        frame.render_widget(Paragraph::new(footer), area);
     }
 
-    pub(super) fn footer_control_style(
+    pub(super) fn footer_control_name(
         &self,
         control: FooterControl,
-        _compact: bool,
-        tiny: bool,
-    ) -> (String, Style) {
-        let selected = match control {
-            FooterControl::Models => self.focus == Focus::Models,
-            FooterControl::Details => self.focus == Focus::Details,
-            _ => false,
-        };
-        let (name, shortcut) = match control {
-            FooterControl::AddProfile => ("+ Provider", "n"),
-            FooterControl::DeleteProfile => ("Delete", "x"),
-            FooterControl::Back => (
-                if provider_workspace(self.screen) {
-                    "Providers"
+    ) -> (&'static str, &'static str) {
+        match control {
+            FooterControl::AddProfile => (
+                "Add Provider",
+                if self.view_mode == ViewMode::Home || self.focus == Focus::Profiles {
+                    "a"
                 } else {
-                    "Back"
+                    ""
                 },
-                "Esc",
             ),
+            FooterControl::AddModel => (
+                "Add Model",
+                if self.focus != Focus::Profiles {
+                    "a"
+                } else {
+                    ""
+                },
+            ),
+            FooterControl::DeleteProfile => ("Delete", "x"),
+            FooterControl::Back => (if self.is_root_layer() { "Quit" } else { "Back" }, "Esc/q"),
             FooterControl::Models => ("Models", "h"),
             FooterControl::Details => ("Details", "l"),
             FooterControl::Sync => (
@@ -1127,10 +1127,69 @@ impl App {
                 },
                 "P",
             ),
+            FooterControl::Disconnect => ("Disconnect", "D"),
             FooterControl::Settings => ("Settings", "F4"),
             FooterControl::Help => ("Help", "?"),
             FooterControl::Quit => ("Quit", "q"),
+        }
+    }
+
+    pub(super) fn provider_action_text(&self, control: FooterControl) -> String {
+        let (name, shortcut) = self.footer_control_name(control);
+        let name = name;
+        if shortcut.is_empty() {
+            name.into()
+        } else {
+            format!("{name} [{shortcut}]")
+        }
+    }
+
+    fn draw_provider_actions(&self, frame: &mut ratatui::Frame, page: &ProviderPageLayout) {
+        for (control, rect) in &page.controls {
+            let selected = match control {
+                FooterControl::Models => self.focus == Focus::Models,
+                FooterControl::Details => self.focus == Focus::Details,
+                _ => false,
+            };
+            let color = if selected {
+                ROUTE
+            } else {
+                match control {
+                    FooterControl::Sync => CONNECTED,
+                    FooterControl::DeleteProfile | FooterControl::Disconnect => ERROR,
+                    FooterControl::Back | FooterControl::Settings | FooterControl::Help => {
+                        FIELD_LABEL
+                    }
+                    FooterControl::Quit => Color::White,
+                    _ => DATA_SECONDARY,
+                }
+            };
+            frame.render_widget(
+                Paragraph::new(toolbar::action_line(
+                    &self.provider_action_text(*control),
+                    color,
+                    selected,
+                    self.theme,
+                ))
+                .alignment(Alignment::Center),
+                *rect,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn footer_control_style(
+        &self,
+        control: FooterControl,
+        _compact: bool,
+        tiny: bool,
+    ) -> (String, Style) {
+        let selected = match control {
+            FooterControl::Models => self.focus == Focus::Models,
+            FooterControl::Details => self.focus == Focus::Details,
+            _ => false,
         };
+        let (name, shortcut) = self.footer_control_name(control);
         let label = if tiny && matches!(control, FooterControl::Sync) {
             name.to_owned()
         } else if tiny {
@@ -1341,7 +1400,11 @@ impl App {
                 frame,
                 area,
                 manager,
-                if self.codex_ui.enabled {
+                if self.grok_enabled {
+                    "Grok"
+                } else if self.pi_enabled {
+                    "Pi"
+                } else if self.codex_ui.enabled {
                     "Codex"
                 } else {
                     "Claude"
@@ -1363,7 +1426,7 @@ impl App {
                 );
                 draw_modal_buttons(frame, area, &["Delete", "Cancel"]);
             }
-            Modal::Help(help) => draw_help(frame, area, help),
+            Modal::Help(help) => draw_help(frame, area, help, self.theme),
         }
         if self.status_error && area.height >= 5 && !matches!(modal, Modal::Profile(_)) {
             let rect = Rect::new(

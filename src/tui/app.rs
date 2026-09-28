@@ -115,6 +115,14 @@ impl App {
     pub(super) fn select_sidebar_index(&mut self, index: usize) {
         self.return_home();
         self.select_home_index(index);
+        if provider_workspace(self.screen) {
+            if !self.home_account_selected() {
+                self.codex_ui.accounts = false;
+            }
+            if !self.home_grok_oauth_selected() {
+                self.grok_auth.page = None;
+            }
+        }
         if self.home_all_selected {
             if !self.home_account_selected() && !self.home_grok_oauth_selected() {
                 self.enter_all_enabled_view();
@@ -249,7 +257,7 @@ impl App {
                 description: model.description.clone(),
             })
         } else if self.view_mode == ViewMode::AllEnabled {
-            self.all_managed_models()
+            self.filtered_global_models()
                 .get(self.model_idx)
                 .map(|entry| entry.model.clone())
         } else {
@@ -264,6 +272,7 @@ impl App {
                 (ViewMode::Provider, Focus::Models) => Focus::Details,
                 (ViewMode::Provider, Focus::Details) => Focus::Profiles,
                 (ViewMode::AllEnabled, Focus::Profiles) => Focus::Models,
+                (ViewMode::AllEnabled, Focus::Models) => Focus::Details,
                 _ => Focus::Profiles,
             };
             return;
@@ -326,7 +335,7 @@ impl App {
         let len = match self.focus {
             Focus::Profiles => self.config.profiles.len(),
             Focus::Models if self.view_mode == ViewMode::AllEnabled => {
-                self.all_managed_models().len()
+                self.filtered_global_models().len()
             }
             Focus::Models => self.models().len(),
             Focus::Details => return,
@@ -354,10 +363,10 @@ impl App {
         }
         if self.focus == Focus::Models {
             if self.view_mode == ViewMode::AllEnabled {
-                if let Some(entry) = self.all_managed_models().get(self.model_idx) {
+                if let Some(entry) = self.filtered_global_models().get(self.model_idx) {
                     self.status_error = false;
                     self.status = format!(
-                        "{} · {} · {} · Enter/click again to open provider",
+                        "{} · {} · {} · / filter · Enter open provider",
                         entry.profile_name,
                         entry.model.label(),
                         if self.pi_enabled {
@@ -546,6 +555,13 @@ impl App {
     }
 
     pub(super) fn open_add_model_modal(&mut self) {
+        if self.view_mode == ViewMode::AllEnabled {
+            self.open_selected_global_model();
+        }
+        if self.selected_profile().is_none() {
+            self.set_error("Select a provider or model before adding a model");
+            return;
+        }
         self.reload_for_edit();
         self.status_error = false;
         let cached = self
@@ -652,22 +668,25 @@ impl App {
             return;
         }
         self.view_mode = ViewMode::AllEnabled;
+        self.provider_editor = None;
+        self.all_models_filter.active = false;
         self.focus = Focus::Models;
         self.model_idx = self
             .model_idx
-            .min(self.all_managed_models().len().saturating_sub(1));
+            .min(self.filtered_global_models().len().saturating_sub(1));
         self.model_offset = 0;
         self.status_error = false;
         self.status = if self.pi_enabled {
-            "p set default · Enter/click again to open provider · Esc back"
+            "p set default · / filter · Enter open provider · Esc back"
         } else {
-            "Space toggle model · Enter/click again to open provider · Esc back"
+            "Space toggle model · / filter · Enter open provider · Esc back"
         }
         .into();
     }
 
     pub(super) fn return_home(&mut self) {
         self.provider_card_selected = false;
+        self.all_models_filter.active = false;
         self.view_mode = ViewMode::Home;
         self.focus = Focus::Profiles;
         self.status_error = false;
@@ -675,7 +694,7 @@ impl App {
     }
 
     pub(super) fn open_selected_global_model(&mut self) {
-        let Some(selected) = self.all_managed_models().get(self.model_idx).cloned() else {
+        let Some(selected) = self.filtered_global_models().get(self.model_idx).cloned() else {
             return;
         };
         let Some(profile_idx) = self
@@ -688,6 +707,7 @@ impl App {
         self.profile_idx = profile_idx;
         self.home_all_selected = false;
         self.view_mode = ViewMode::Provider;
+        self.all_models_filter.active = false;
         self.provider_card_selected = false;
         self.focus = Focus::Models;
         self.provider_editor = self.create_route_editor_for(selected.profile_id);
@@ -746,11 +766,30 @@ impl App {
         self.modal = Some(Modal::Profile(Box::new(form)));
     }
 
+    pub(super) fn disconnect_claude(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            !self.background.sync_running && !self.background.proxy_running,
+            "Wait for the current sync to finish before disconnecting"
+        );
+        let conflicts = sync::disconnect(&self.paths, &claude_config::settings_path()?)?;
+        self.background.connected = false;
+        self.background.queued_sync = None;
+        self.background.status = sync::Status::NotConnected;
+        self.status_error = false;
+        self.status = if conflicts.is_empty() {
+            "Disconnected; previous Claude preferences restored".into()
+        } else {
+            format!(
+                "Disconnected; external edits preserved: {}",
+                conflicts.join(", ")
+            )
+        };
+        Ok(())
+    }
+
     pub(super) fn open_proxy_manager(&mut self) {
-        if self.grok_enabled {
-            return;
-        }
-        if self.pi_enabled {
+        self.usage.active = false;
+        if self.pi_enabled && !matches!(self.modal, Some(Modal::Appearance(_) | Modal::Proxy(_))) {
             self.toggle_pi_proxy();
             return;
         }
@@ -759,14 +798,97 @@ impl App {
         self.start_proxy_action(ProxyControl::Refresh);
     }
 
+    pub(super) fn is_root_layer(&self) -> bool {
+        self.modal.is_none()
+            && !self.usage.active
+            && !self.codex_ui.accounts
+            && self.grok_auth.page.is_none()
+            && (self.view_mode == ViewMode::Home
+                || (provider_workspace(self.screen) && self.focus == Focus::Profiles))
+    }
+
+    pub(super) fn back_one_level(&mut self) -> Result<bool> {
+        if matches!(self.modal, Some(Modal::Proxy(_))) {
+            if self.modal.as_ref().is_some_and(
+                |modal| matches!(modal, Modal::Proxy(manager) if manager.port_field.is_some()),
+            ) {
+                self.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+            } else {
+                self.modal = None;
+                self.open_appearance();
+            }
+            return Ok(false);
+        }
+        if self.modal.is_some() {
+            self.handle_modal(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+            return Ok(false);
+        }
+        if self.usage.active {
+            self.usage.active = false;
+            return Ok(false);
+        }
+        if self.codex_ui.accounts {
+            self.handle_codex_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+            if !self.codex_ui.accounts && !provider_workspace(self.screen) {
+                self.codex_ui.home_models = true;
+            }
+            return Ok(false);
+        }
+        if self.grok_auth.page.is_some() {
+            self.grok_auth_page_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+            if self.grok_auth.page.is_none() && !provider_workspace(self.screen) {
+                self.grok_auth.home_selected = false;
+            }
+            return Ok(false);
+        }
+        if self.view_mode != ViewMode::Home {
+            if provider_workspace(self.screen) && self.focus == Focus::Profiles {
+                return Ok(true);
+            }
+            if self.focus == Focus::Details {
+                self.focus = Focus::Models;
+            } else if self.focus == Focus::Models && provider_workspace(self.screen) {
+                self.focus = Focus::Profiles;
+            } else {
+                self.return_home();
+            }
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(super) fn open_help(&mut self) {
+        self.help_return = self
+            .modal
+            .take()
+            .filter(|modal| matches!(modal, Modal::Appearance(_) | Modal::Proxy(_)))
+            .map(Box::new);
         let mut help = HelpModal::for_view(self.view_mode);
+        if self
+            .help_return
+            .as_deref()
+            .is_some_and(|modal| matches!(modal, Modal::Appearance(_)))
+        {
+            help.section = HelpSection::Settings;
+        } else if self
+            .help_return
+            .as_deref()
+            .is_some_and(|modal| matches!(modal, Modal::Proxy(_)))
+        {
+            help.section = HelpSection::Proxy;
+        }
         help.grok = self.grok_enabled;
         help.pi = self.pi_enabled;
         help.codex = self.codex_ui.enabled;
         help.codex_accounts = self.codex_ui.accounts;
         if help.codex && self.codex_ui.accounts {
-            help.section = HelpSection::AllEnabled;
+            help.section = HelpSection::Accounts;
+        }
+        if self.grok_auth.page.is_some() {
+            help.section = HelpSection::Accounts;
+        }
+        if self.usage.active {
+            help.section = HelpSection::Usage;
         }
         self.modal = Some(Modal::Help(help));
     }
@@ -828,6 +950,9 @@ impl App {
     }
 
     pub(super) fn sync_all_to_claude(&mut self) {
+        if self.reject_empty_global_filter() {
+            return;
+        }
         if self.grok_enabled {
             self.apply_grok(false);
             return;
@@ -873,14 +998,14 @@ impl App {
     }
 
     pub(super) fn toggle_selected_global_model(&mut self) -> Result<()> {
-        let Some(selected) = self.all_managed_models().get(self.model_idx).cloned() else {
+        let Some(selected) = self.filtered_global_models().get(self.model_idx).cloned() else {
             return Ok(());
         };
         let profile = self.toggled_global_model_profile(&selected)?;
         let profile_id = selected.profile_id.clone();
         self.config =
             self.update_client_profile(&profile_id, &self.config.profiles[&profile_id], &profile)?;
-        let remaining = self.all_managed_models().len();
+        let remaining = self.filtered_global_models().len();
         self.model_idx = self.model_idx.min(remaining.saturating_sub(1));
         let action = if selected.enabled {
             "Disabled"

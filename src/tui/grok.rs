@@ -163,7 +163,7 @@ impl App {
     fn grok_preferred(&self) -> Option<String> {
         if self.view_mode == ViewMode::AllEnabled {
             return self
-                .all_managed_models()
+                .filtered_global_models()
                 .get(self.model_idx)
                 .filter(|e| {
                     self.config.profiles[&e.profile_id].enabled
@@ -190,6 +190,9 @@ impl App {
         })
     }
     pub(super) fn apply_grok(&mut self, reconnect: bool) {
+        if self.reject_empty_global_filter() {
+            return;
+        }
         if self.home_grok_oauth_selected() {
             self.open_grok_auth();
             return;

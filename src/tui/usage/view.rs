@@ -223,9 +223,9 @@ enum Action {
     Sort,
     Clear,
     Refresh,
-    Close,
-    Quit,
     Reset,
+    Help,
+    BackQuit,
     Search,
     SessionScope,
     SessionClear,
@@ -1667,7 +1667,8 @@ fn control_rows(inner: Rect, page: &UsagePage) -> (Vec<(String, Action, Rect)>, 
         vec![
             ("Refresh [r]".into(), Action::Refresh),
             ("Reset [x]".into(), Action::Reset),
-            ("Back [Esc]".into(), Action::Close),
+            ("Help [?]".into(), Action::Help),
+            ("Back [Esc/q]".into(), Action::BackQuit),
         ],
         std::iter::once(("Agent".into(), Action::DateLabel))
             .chain(
@@ -1685,9 +1686,6 @@ fn control_rows(inner: Rect, page: &UsagePage) -> (Vec<(String, Action, Rect)>, 
             ("All [y]".into(), Action::Range(3)),
         ],
     ];
-    if inner.width >= 116 {
-        groups[0].push(("Quit [q]".into(), Action::Quit));
-    }
     let window = match page.start_day() {
         None => "All dates".into(),
         Some(start) if start == page.day => page.day.clone(),
@@ -1731,8 +1729,12 @@ fn control_rows(inner: Rect, page: &UsagePage) -> (Vec<(String, Action, Rect)>, 
     }
     if inner.width < 60 {
         for group in &mut groups {
-            for (text, _) in group {
-                *text = text.replace(" [", "·").replace(']', "");
+            for (text, action) in group {
+                *text = if matches!(action, Action::BackQuit) {
+                    "Back·q".into()
+                } else {
+                    text.replace(" [", "·").replace(']', "")
+                };
             }
         }
     }
@@ -1788,29 +1790,13 @@ fn control_line(
             Action::Client(_) | Action::Previous | Action::Next => Color::White,
             Action::Refresh => CONNECTED,
             Action::Reset | Action::SessionClear => MUTED,
-            Action::Range(_) | Action::Close => FIELD_LABEL,
+            Action::BackQuit => FIELD_LABEL,
+            Action::Help => ROUTE,
+            Action::Range(_) => FIELD_LABEL,
             _ => DATA_SECONDARY,
         }
     };
-    let mut style = Style::default().fg(color);
-    if selected {
-        style = style
-            .add_modifier(Modifier::BOLD)
-            .bg(theme::PROVIDER_SELECTION);
-    }
-    let (name, shortcut) = text
-        .split_once(" [")
-        .map_or((text, ""), |(name, key)| (name, key));
-    let marker = if selected {
-        theme.selection_symbol()
-    } else {
-        ""
-    };
-    let mut spans = vec![Span::styled(format!("{marker}{name}"), style)];
-    if !shortcut.is_empty() {
-        spans.push(muted(format!(" [{}", shortcut)));
-    }
-    Line::from(spans).style(if selected { style } else { Style::default() })
+    toolbar::action_line(text, color, selected, theme)
 }
 
 impl App {
@@ -2020,8 +2006,10 @@ impl App {
             return MouseAction::None;
         };
         page.scroll = page.dashboard.borrow().effective_scroll;
+
         let mut close = false;
-        let mut quit = false;
+        let mut help = false;
+
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 page.scroll = if mouse.kind == MouseEventKind::ScrollUp {
@@ -2109,8 +2097,8 @@ impl App {
                             self.usage.updated = None;
                             self.usage.sessions_updated = None;
                         }
-                        Action::Close => close = true,
-                        Action::Quit => quit = true,
+                        Action::Help => help = true,
+                        Action::BackQuit => close = true,
                         Action::Previous | Action::Next | Action::Today => {
                             page.key(
                                 KeyEvent::new(
@@ -2146,13 +2134,15 @@ impl App {
             }
             _ => {}
         }
-        self.usage.active = !close;
+
         self.usage.page = Some(page);
-        if quit {
-            MouseAction::Quit
-        } else {
-            MouseAction::None
+        if close {
+            self.usage.active = false;
         }
+        if help {
+            self.open_help();
+        }
+        MouseAction::None
     }
 }
 

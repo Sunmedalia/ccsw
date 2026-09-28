@@ -21,11 +21,11 @@ pub(super) struct AuthUi {
     cancel: Arc<AtomicBool>,
     sender: Sender<Update>,
     receiver: Receiver<Update>,
-    status: auth::Status,
-    message: String,
+    pub(super) status: auth::Status,
+    pub(super) message: String,
     progress: Vec<String>,
-    usage: Option<usage::Snapshot>,
-    usage_error: Option<String>,
+    pub(super) usage: Option<usage::Snapshot>,
+    pub(super) usage_error: Option<String>,
     usage_refreshing: bool,
     usage_request: u64,
     usage_waking: bool,
@@ -96,7 +96,7 @@ pub(super) fn account_actions(screen: Rect) -> Vec<Rect> {
         })
         .collect()
 }
-fn confirmation_area(screen: Rect) -> Rect {
+pub(super) fn confirmation_area(screen: Rect) -> Rect {
     centered_rect(
         screen.width.saturating_sub(4).min(72),
         screen.height.saturating_sub(2).min(8),
@@ -165,9 +165,6 @@ impl App {
         }
         lines.push(Line::raw(""));
         lines
-    }
-    pub(super) fn grok_auth_status_description(&self) -> String {
-        self.grok_auth.status.description()
     }
     pub(super) fn load_grok_auth_status(&mut self) {
         self.grok_auth.status = auth::status(&self.grok_home).unwrap_or_default();
@@ -265,6 +262,11 @@ impl App {
             confirm_logout: false,
             scroll: 0,
         });
+        if provider_workspace(self.screen) {
+            self.return_home();
+            self.select_home_index(1);
+            self.focus = Focus::Details;
+        }
         self.refresh_grok_usage();
     }
     fn refresh_grok_auth(&mut self) {
@@ -401,7 +403,7 @@ impl App {
     pub(super) fn grok_auth_key(
         &mut self,
         dialog: &mut AccountPage,
-        key: KeyEvent,
+        mut key: KeyEvent,
     ) -> Result<bool> {
         if self.grok_auth.busy {
             if key.code == KeyCode::Esc
@@ -425,6 +427,15 @@ impl App {
                 _ => {}
             }
             return Ok(false);
+        }
+        if dialog.selected != 0 && key.modifiers.is_empty() {
+            key.code = match key.code {
+                KeyCode::Char('h') => KeyCode::Esc,
+                KeyCode::Char('l') => KeyCode::Enter,
+                KeyCode::Char('j') => KeyCode::Down,
+                KeyCode::Char('k') => KeyCode::Up,
+                other => other,
+            };
         }
         match key.code {
             KeyCode::Esc => return Ok(true),
@@ -560,10 +571,7 @@ impl App {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return Ok(());
         }
-        if mouse.row == screen.y + 1 && mouse.column < screen.x + 18 {
-            return self.grok_auth_page_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        }
-        let area = account_page_rows(screen, self.grok_auth.busy)[2];
+        let area = account_page_rows(workspace_content_area(screen), self.grok_auth.busy)[2];
         let confirm = self
             .grok_auth
             .page
@@ -605,29 +613,52 @@ impl App {
         Ok(())
     }
     pub(super) fn draw_grok_accounts(&self, frame: &mut ratatui::Frame, screen: Rect) {
-        let rows = account_page_rows(screen, self.grok_auth.busy);
-        self.draw_client_tabs(frame, rows[0]);
+        self.draw_grok_accounts_content(frame, workspace_content_area(screen), false);
+        self.draw_client_tabs(frame, screen);
+    }
+
+    pub(super) fn draw_grok_accounts_embedded(&self, frame: &mut ratatui::Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " ‹ Back (Esc) ",
-                    self.footer_control_style(FooterControl::Back, false, false)
-                        .1,
-                ),
-                Span::styled(
-                    " Grok OAuth Accounts ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
+            panel(" Grok OAuth account ", self.focus == Focus::Details),
+            area,
+        );
+        self.draw_grok_accounts_content(frame, panel_inner(area), true);
+    }
+
+    fn draw_grok_accounts_content(
+        &self,
+        frame: &mut ratatui::Frame,
+        content: Rect,
+        embedded: bool,
+    ) {
+        let rows = if embedded {
+            embedded_account_rows(content, self.grok_auth.busy)
+        } else {
+            account_page_rows(content, self.grok_auth.busy)
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                if embedded {
+                    "OAuth login and usage"
+                } else {
+                    "Grok OAuth Accounts"
+                },
+                Style::default().fg(ROUTE).add_modifier(Modifier::BOLD),
+            )])),
+            Rect::new(
+                rows[0].x,
+                rows[0].y + u16::from(!embedded),
+                rows[0].width,
+                1,
+            ),
         );
         frame.render_widget(
             Paragraph::new(self.grok_auth.status.description()).wrap(Wrap { trim: false }),
             Rect::new(
                 rows[0].x,
-                rows[0].y + 2,
+                rows[0].y + 1 + u16::from(!embedded),
                 rows[0].width,
-                rows[0].height.saturating_sub(2),
+                rows[0].height.saturating_sub(1 + u16::from(!embedded)),
             ),
         );
         let items = if self.grok_auth.status.saved {
@@ -666,9 +697,21 @@ impl App {
             rows[1],
             &mut state,
         );
-        let Some(page) = &self.grok_auth.page else {
-            return;
+        let fallback = AccountPage {
+            selected: 1,
+            model: field(
+                "Native model",
+                self.config
+                    .grok
+                    .preferences
+                    .default
+                    .as_deref()
+                    .unwrap_or("grok-build"),
+            ),
+            confirm_logout: false,
+            scroll: 0,
         };
+        let page = self.grok_auth.page.as_ref().unwrap_or(&fallback);
         frame.render_widget(
             panel(
                 if self.grok_auth.busy {
@@ -751,7 +794,10 @@ impl App {
                 inner.height.saturating_sub(u16::from(show_model)),
             ),
         );
-        for (i, rect) in account_actions(screen).into_iter().enumerate() {
+        for (i, rect) in account_actions(content).into_iter().enumerate() {
+            if embedded && i == 6 {
+                continue;
+            }
             frame.render_widget(
                 Paragraph::new(if self.grok_auth.busy && i == 6 {
                     "Cancel/Esc"
@@ -770,7 +816,7 @@ impl App {
             );
         }
         if page.confirm_logout {
-            let area = confirmation_area(screen);
+            let area = confirmation_area(content);
             frame.render_widget(Clear, area);
             frame.render_widget(panel(" Sign out of Grok? ", true), area);
             let inner = panel_inner(area);

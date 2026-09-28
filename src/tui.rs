@@ -1,3 +1,4 @@
+mod all_models;
 mod app;
 mod background;
 mod codex;
@@ -17,6 +18,7 @@ mod tabs;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod toolbar;
 mod usage;
 mod views;
 
@@ -111,10 +113,12 @@ pub struct App {
     model_idx: usize,
     profile_offset: usize,
     model_offset: usize,
+    all_models_filter: all_models::Filter,
     focus: Focus,
     status: String,
     status_error: bool,
     modal: Option<Modal>,
+    help_return: Option<Box<Modal>>,
     proxy_status: Option<proxy::ProxyStatus>,
     provider_editor: Option<RouteEditor>,
     provider_card_selected: bool,
@@ -142,10 +146,12 @@ pub fn run(paths: AppPaths, config: Config, import: Option<ImportCandidate>) -> 
         model_idx: 0,
         profile_offset: 0,
         model_offset: 0,
+        all_models_filter: Default::default(),
         focus: Focus::Profiles,
         status: "↑↓ Select · Space toggle provider · Enter open".into(),
         status_error: false,
         modal: None,
+        help_return: None,
         proxy_status,
         provider_editor: None,
         provider_card_selected: false,

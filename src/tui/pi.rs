@@ -51,6 +51,7 @@ impl App {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn footer_uses_short_labels(&self, area: Rect, compact: bool) -> bool {
         let controls: Vec<_> = footer_controls(Rect::new(0, 0, 200, 1), compact, self.view_mode)
             .into_iter()
@@ -76,6 +77,7 @@ impl App {
         width + controls.len().saturating_sub(1) > usize::from(area.width)
     }
 
+    #[cfg(test)]
     pub(super) fn client_footer_controls(
         &self,
         area: Rect,
@@ -167,8 +169,11 @@ impl App {
         Ok(Some(false))
     }
     pub(super) fn apply_pi(&mut self) {
+        if self.reject_empty_global_filter() {
+            return;
+        }
         let global = (self.view_mode == ViewMode::AllEnabled)
-            .then(|| self.all_managed_models().get(self.model_idx).cloned())
+            .then(|| self.filtered_global_models().get(self.model_idx).cloned())
             .flatten();
         let Some(profile) = global
             .as_ref()
@@ -211,7 +216,7 @@ impl App {
 
     pub(super) fn toggle_pi_proxy(&mut self) {
         let selected = (self.view_mode == ViewMode::AllEnabled)
-            .then(|| self.all_managed_models().get(self.model_idx).cloned())
+            .then(|| self.filtered_global_models().get(self.model_idx).cloned())
             .flatten();
         let Some(id) = selected
             .as_ref()

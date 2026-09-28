@@ -1443,7 +1443,27 @@ pub(super) fn draw_proxy_manager(
         draw_modal_buttons(frame, area, &["Save port", "Cancel"]);
         return;
     }
-    frame.render_widget(panel(" Proxy control · e edit port ", true), area);
+    frame.render_widget(panel(" Settings ", true), area);
+    frame.render_widget(
+        Paragraph::new(if area.width < 90 {
+            "UI"
+        } else {
+            "Appearance [F4]"
+        })
+        .alignment(Alignment::Center)
+        .style(button_style(false, false, false)),
+        settings_appearance_button(area),
+    );
+    frame.render_widget(
+        Paragraph::new(if area.width < 90 {
+            "Proxy"
+        } else {
+            "Proxy [P]"
+        })
+        .alignment(Alignment::Center)
+        .style(button_style(true, false, false)),
+        settings_proxy_button(area),
+    );
     let inner = panel_inner(area);
     let running = manager
         .runtime
