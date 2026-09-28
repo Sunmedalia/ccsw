@@ -46,6 +46,8 @@ struct RouteTarget {
     codex: bool,
     #[serde(default)]
     grok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pi_home: Option<PathBuf>,
     config_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile_id: Option<String>,
@@ -205,6 +207,7 @@ pub fn aggregate_profile(
                 default_profile_id: Some(default_profile_id.into()),
                 codex: false,
                 grok: false,
+                pi_home: None,
                 config_path: paths.config.clone(),
                 profile_id: None,
                 models: targets.clone(),
@@ -444,6 +447,7 @@ fn health_matches_build(value: &Value) -> bool {
         && value["config_version"].as_u64() == Some(u64::from(config::CONFIG_VERSION))
         && value["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
         && value["grok_gateway"] == true
+        && value["pi_proxy"] == true
 }
 
 fn health_document(paths: &AppPaths) -> Result<Value> {
@@ -819,7 +823,7 @@ async fn health(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             anyhow::anyhow!("invalid local proxy credential"),
         );
     }
-    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION"), "grok_gateway": true})).into_response()
+    Json(json!({"name":"ccsw-proxy","status":"ok", "config_version": config::CONFIG_VERSION, "version": env!("CARGO_PKG_VERSION"), "grok_gateway": true, "pi_proxy": true})).into_response()
 }
 
 async fn shutdown_request(State(state): State<ServerState>, headers: HeaderMap) -> Response {
@@ -930,7 +934,11 @@ async fn route_config(target: &RouteTarget) -> Result<config::Config> {
     let path = target.config_path.clone();
     let codex = target.codex;
     let grok = target.grok;
+    let pi_home = target.pi_home.clone();
     tokio::task::spawn_blocking(move || {
+        if let Some(home) = pi_home {
+            return crate::pi::native::load(&home);
+        }
         config::load_client(
             &path,
             if grok {
@@ -991,7 +999,11 @@ fn resolve_profile_from_config(
     if !profile.enabled {
         bail!("profile '{profile_id}' is disabled");
     }
-    if target.profile_id.is_some() && !target.codex && !profile.api_format.is_openai() {
+    if target.profile_id.is_some()
+        && !target.codex
+        && target.pi_home.is_none()
+        && !profile.api_format.is_openai()
+    {
         bail!("profile '{profile_id}' is not an OpenAI route");
     }
     let active = crate::discovery::active_models(&profile, &[]);
@@ -2426,6 +2438,7 @@ pub(crate) fn prepare_grok_route(
             default_profile_id: None,
             codex: false,
             grok: true,
+            pi_home: None,
             config_path: paths.config.clone(),
             profile_id: None,
             models,
@@ -2522,6 +2535,7 @@ pub(crate) fn prepare_codex_route(
             default_profile_id: None,
             codex: true,
             grok: false,
+            pi_home: None,
             config_path: paths.config.clone(),
             profile_id: None,
             models: targets,
@@ -2557,6 +2571,114 @@ pub(crate) fn restore_codex_route(paths: &AppPaths, plan: &CodexRoutePlan) -> Re
         }
         Ok(())
     })?
+}
+
+pub(crate) struct PiRoutePlan {
+    id: String,
+    before: Option<RouteTarget>,
+    after: RouteTarget,
+}
+
+pub(crate) fn prepare_pi_route(
+    paths: &AppPaths,
+    home: &Path,
+    profile_id: &str,
+) -> Result<(PiRoutePlan, String, String)> {
+    let config = crate::pi::native::load(home)?;
+    let profile = config
+        .profiles
+        .get(profile_id)
+        .with_context(|| format!("Pi provider '{profile_id}' no longer exists"))?;
+    if crate::discovery::active_models(profile, &[]).is_empty() {
+        bail!("Add at least one model before enabling the Pi proxy API");
+    }
+    start(paths, None)?;
+    let registry = load_registry(&ProxyPaths::from_app(paths)?)?;
+    let existing = registry.routes.iter().find(|(_, target)| {
+        target.pi_home.as_deref() == Some(home)
+            && target.config_path == paths.config
+            && target.profile_id.as_deref() == Some(profile_id)
+    });
+    let plan = PiRoutePlan {
+        id: existing
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+        before: existing.map(|(_, target)| target.clone()),
+        after: RouteTarget {
+            default_profile_id: None,
+            codex: false,
+            grok: false,
+            pi_home: Some(home.to_owned()),
+            config_path: paths.config.clone(),
+            profile_id: Some(profile_id.to_owned()),
+            models: BTreeMap::new(),
+        },
+    };
+    // Pi's anthropic-messages client appends /v1/messages itself.
+    let url = format!("http://{}/r/{}", registry.listen, plan.id);
+    Ok((plan, url, registry.local_token))
+}
+
+pub(crate) fn apply_pi_route(paths: &AppPaths, plan: &PiRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != plan.before.as_ref() {
+            bail!("Pi proxy route changed during preparation; retry");
+        }
+        registry.routes.insert(plan.id.clone(), plan.after.clone());
+        Ok(())
+    })?
+}
+
+pub(crate) fn restore_pi_route(paths: &AppPaths, plan: &PiRoutePlan) -> Result<()> {
+    update_registry(&ProxyPaths::from_app(paths)?, None, |registry| {
+        if registry.routes.get(&plan.id) != Some(&plan.after) {
+            bail!("Pi proxy route changed during rollback");
+        }
+        if let Some(before) = &plan.before {
+            registry.routes.insert(plan.id.clone(), before.clone());
+        } else {
+            registry.routes.remove(&plan.id);
+        }
+        Ok(())
+    })?
+}
+
+pub(crate) fn remove_pi_route(paths: &AppPaths, home: &Path, profile_id: &str) -> Result<()> {
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    if !proxy_paths.registry.exists() {
+        return Ok(());
+    }
+    update_registry(&proxy_paths, None, |registry| {
+        registry.routes.retain(|_, target| {
+            target.pi_home.as_deref() != Some(home)
+                || target.config_path != paths.config
+                || target.profile_id.as_deref() != Some(profile_id)
+        });
+    })
+}
+
+pub(crate) fn prune_pi_routes(paths: &AppPaths, home: &Path) -> Result<()> {
+    let proxy_paths = ProxyPaths::from_app(paths)?;
+    if !proxy_paths.registry.exists() {
+        return Ok(());
+    }
+    let config = crate::pi::native::load(home)?;
+    let mut active = std::collections::BTreeSet::new();
+    for id in config.profiles.keys() {
+        if crate::pi::native::proxy_endpoint(home, id)?.is_some() {
+            active.insert(id.clone());
+        }
+    }
+    update_registry(&proxy_paths, None, |registry| {
+        registry.routes.retain(|_, target| {
+            target.pi_home.as_deref() != Some(home)
+                || target.config_path != paths.config
+                || target
+                    .profile_id
+                    .as_ref()
+                    .is_some_and(|id| active.contains(id))
+        });
+    })
 }
 
 #[cfg(test)]
@@ -2775,6 +2897,7 @@ mod tests {
             default_profile_id: Some("local".into()),
             codex: false,
             grok: false,
+            pi_home: None,
             config_path: paths.config.clone(),
             profile_id: None,
             models: BTreeMap::from([(
@@ -2833,11 +2956,14 @@ mod tests {
 
     #[test]
     fn proxy_health_requires_current_config_and_binary_versions() {
-        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true});
+        let current = serde_json::json!({"name":"ccsw-proxy", "config_version":crate::config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true});
         assert!(super::health_matches_build(&current));
         let mut without_grok = current.clone();
         without_grok.as_object_mut().unwrap().remove("grok_gateway");
         assert!(!super::health_matches_build(&without_grok));
+        let mut without_pi = current.clone();
+        without_pi.as_object_mut().unwrap().remove("pi_proxy");
+        assert!(!super::health_matches_build(&without_pi));
         assert!(!super::health_matches_build(
             &serde_json::json!({"name":"ccsw-proxy"})
         ));
@@ -2865,6 +2991,7 @@ mod tests {
             default_profile_id: Some("a".into()),
             codex: false,
             grok: false,
+            pi_home: None,
             config_path: path.clone(),
             profile_id: None,
             models: BTreeMap::new(),
@@ -3064,6 +3191,7 @@ mod tests {
             default_profile_id: Some("one".into()),
             codex: false,
             grok: false,
+            pi_home: None,
             config_path: path.clone(),
             profile_id: None,
             models: ["a", "b"]
@@ -3358,6 +3486,7 @@ mod tests {
                     default_profile_id: None,
                     codex: false,
                     grok: false,
+                    pi_home: None,
                     config_path: paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3539,6 +3668,7 @@ mod tests {
             name: "OpenAI".into(),
             enabled: true,
             base_url: format!("http://{upstream_address}"),
+            models_url: None,
             api_format: ApiFormat::OpenaiChat,
             credential: Credential::Bearer {
                 value: "upstream-secret".into(),
@@ -3568,6 +3698,7 @@ mod tests {
                     default_profile_id: None,
                     codex: false,
                     grok: false,
+                    pi_home: None,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3629,6 +3760,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pi_proxy_uses_native_upstream_and_records_pi_usage() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let upstream_task = thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let mut request = vec![0_u8; 65536];
+            let size = stream.read(&mut request).unwrap();
+            request_tx
+                .send(String::from_utf8_lossy(&request[..size]).into_owned())
+                .unwrap();
+            let body = r#"{"id":"chat-1","model":"pi-model","choices":[{"finish_reason":"stop","message":{"content":"from upstream"}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("pi");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("models.json"),
+            serde_json::to_vec(&json!({"providers":{"direct":{
+                "name":"Direct Pi", "baseUrl":format!("http://{upstream_address}/v1"),
+                "api":"openai-completions", "models":[{"id":"pi-model"}]
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            home.join("auth.json"),
+            r#"{"direct":{"type":"api_key","key":"upstream-secret"}}"#,
+        )
+        .unwrap();
+        let paths = AppPaths {
+            config: temp.path().join("config.toml"),
+            state_dir: temp.path().join("state"),
+            cache: temp.path().join("cache.json"),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_paths = ProxyPaths::from_app(&paths).unwrap();
+        update_registry(&proxy_paths, Some(&address.to_string()), |registry| {
+            registry.routes.insert(
+                "pi-route".into(),
+                RouteTarget {
+                    default_profile_id: None,
+                    codex: false,
+                    grok: false,
+                    pi_home: Some(home.clone()),
+                    config_path: paths.config.clone(),
+                    profile_id: Some("direct".into()),
+                    models: BTreeMap::new(),
+                },
+            );
+        })
+        .unwrap();
+        let registry = load_registry(&proxy_paths).unwrap();
+        crate::pi::native::set_proxy(
+            &home,
+            "direct",
+            "pi-model",
+            Some((
+                &format!("http://{address}/r/pi-route"),
+                &registry.local_token,
+            )),
+        )
+        .unwrap();
+        let base = crate::pi::native::proxy_endpoint(&home, "direct")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            api_endpoint(&base, "messages").unwrap().path(),
+            "/r/pi-route/v1/messages"
+        );
+        let registry_path = proxy_paths.registry.clone();
+        let server =
+            tokio::spawn(async move { serve_with_listener(registry_path, Some(listener)).await });
+        let response = Client::new()
+            .post(format!("http://{address}/r/pi-route/v1/messages"))
+            .bearer_auth(&registry.local_token)
+            .json(&json!({"model":"pi-model", "max_tokens":20,
+                "messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = response.json().await.unwrap();
+        assert_eq!(value["content"][0]["text"], "from upstream");
+        let request = request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(request.contains("authorization: Bearer upstream-secret"));
+        assert!(!request.contains(&registry.local_token));
+        let usage = crate::usage::tests::settled_for(
+            &paths.state_dir.join(crate::usage::FILE),
+            &paths.config,
+            1,
+        )
+        .await;
+        let totals = usage.total(Some("Pi"), Some("direct"), None, "generation");
+        assert_eq!(
+            (totals.calls, totals.success, totals.input, totals.output),
+            (1, 1, 5, 2)
+        );
+        server.abort();
+        upstream_task.join().unwrap();
+    }
+
+    #[tokio::test]
     async fn aggregate_proxy_passes_namespaced_model_to_anthropic_provider() {
         check_anthropic_model_forwarding("anthropic::claude-test").await;
     }
@@ -3668,6 +3911,7 @@ mod tests {
             name: "Anthropic compatible".into(),
             enabled: true,
             base_url: format!("http://{upstream_address}"),
+            models_url: None,
             api_format: ApiFormat::Anthropic,
             credential: Credential::XApiKey {
                 value: "anthropic-secret".into(),
@@ -3700,6 +3944,7 @@ mod tests {
                     default_profile_id: Some("anthropic".into()),
                     codex: false,
                     grok: false,
+                    pi_home: None,
                     config_path: app_paths.config.clone(),
                     profile_id: None,
                     models: BTreeMap::from([(
@@ -3767,6 +4012,7 @@ enabled_models = ["b"]
             default_profile_id: None,
             codex: false,
             grok: false,
+            pi_home: None,
             config_path: path.clone(),
             profile_id: None,
             models: ["a", "b"]
@@ -4086,6 +4332,7 @@ mod client_search_integration {
                             profile_id: Some("test".into()),
                             codex: false,
                             grok: false,
+                            pi_home: None,
                             default_profile_id: None,
                             models: BTreeMap::new(),
                         },

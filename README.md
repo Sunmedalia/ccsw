@@ -12,7 +12,7 @@ CCSW 是 Claude Code、Codex、Pi Agent 与 Grok 的多厂商、多模型配置�
 - 将所有已启用模型聚合到 Claude 原生 `/model`，并实时同步启用状态。
 - 把 Anthropic Messages 请求转发到 Anthropic、OpenAI Chat Completions 或 Responses 兼容网关。
 
-> 本文对应 v0.1.17。新增 Codex 后台账号切换适配，并改进 Grok 与 Codex 的账号用量、token 和 Pulse 展示；提供 macOS ARM64、Linux x64/ARM64 和 Windows x64 发布包。
+> 本文对应 v0.1.18。Pi 可使用 CCSW 本地 Proxy API；Claude、Codex、Pi 和 Grok 的 Provider 都支持单独配置模型目录地址。本版发布 macOS ARM64、Linux x64/ARM64；Windows 发布包暂缓。
 
 [快速开始](#快速开始) · [快捷键](#tui-导航) · [Codex 配置与账号](#codex-配置与账号) · [Pi Agent 配置](#pi-agent-配置) · [Grok 配置](#grok-配置) · [模型参数](#模型-token-参数) · [同步](#claude-model-同步) · [端口设置](#修改本地代理端口--多系统用户) · [Herdr Pulse](#herdr-pulse-常驻监控) · [卸载](#卸载与配置清理) · [开发与测试](#开发)
 
@@ -42,14 +42,14 @@ Herdr 模式先检查 `herdr` 命令，不存在就提示“没有 Herdr”并�
 指定 CCSW 发布版本：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.17 bash -s -- ccsw
+  curl -fsSL https://raw.githubusercontent.com/Sunmedalia/ccsw/main/install.sh | CCSW_VERSION=v0.1.18 bash -s -- ccsw
 ```
 
 以上在线命令需要本脚本已合并到 GitHub 的 main 分支。本地源码安装方式见下文。
 
 ### 下载 Release
 
-v0.1.17 提供 macOS Apple Silicon、Linux x86_64/ARM64 二进制与 Windows x64 ZIP。Windows 安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
+v0.1.18 提供 macOS Apple Silicon 与 Linux x86_64/ARM64 二进制。Windows 发布包暂缓；现有 [v0.1.17 Windows x64 ZIP](https://github.com/Sunmedalia/ccsw/releases/download/v0.1.17/ccsw-windows-x86_64.zip) 仍可下载，安装及环境变量说明见 [README-Windows.md](README-Windows.md)。
 
 ```sh
 # macOS Apple Silicon
@@ -65,12 +65,12 @@ chmod +x ccsw
 sudo install ccsw /usr/local/bin/ccsw
 ```
 
-### Windows（x64 ZIP）
+### Windows（上一个发布版）
 
-从 [最新 Release 下载 Windows x64 ZIP](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip)，并下载旁边的 [SHA-256 文件](https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip.sha256) 校验：
+Windows 暂无 v0.1.18 安装包。可从 [v0.1.17 Release 下载 Windows x64 ZIP](https://github.com/Sunmedalia/ccsw/releases/download/v0.1.17/ccsw-windows-x86_64.zip)，并下载旁边的 [SHA-256 文件](https://github.com/Sunmedalia/ccsw/releases/download/v0.1.17/ccsw-windows-x86_64.zip.sha256) 校验：
 
 ```powershell
-$release = 'https://github.com/Sunmedalia/ccsw/releases/latest/download/ccsw-windows-x86_64.zip'
+$release = 'https://github.com/Sunmedalia/ccsw/releases/download/v0.1.17/ccsw-windows-x86_64.zip'
 Invoke-WebRequest "$release" -OutFile '.\ccsw-windows-x86_64.zip'
 Invoke-WebRequest "${release}.sha256" -OutFile '.\ccsw-windows-x86_64.zip.sha256'
 $expected = ((Get-Content '.\ccsw-windows-x86_64.zip.sha256' -Raw) -split '\s+')[0]
@@ -105,7 +105,7 @@ ccsw          # 打开 TUI
 
 首次使用时：
 
-1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；点击底部 `Fetch models` 按钮或按 `Alt+F` 从该站点 API 获取模型，输入关键词搜索、用方向键选择、按 `Enter` 或点击 `Select` 回填默认模型。无需先保存厂商，`Esc` 或 `Back` 返回表单，获取失败可点击 `Refresh` 或按 `Ctrl+R` 重试，也可手填模型 ID。
+1. 按 `n` 新建厂商，填写 API Endpoint、认证方式和凭据；需要单独的模型目录地址时填写 `Fetch models URL`，留空则从 Base URL 推导 `/models`。点击底部 `Fetch models` 或按 `Alt+F` 获取模型。之后可反复打开缓存列表，搜索后单击模型或按 `Enter` 回填当前字段，无需重复请求。`Ctrl+R` 或 `Refresh` 会重新获取；修改 Base URL、Fetch models URL、协议或凭据后也会重新获取。无需先保存厂商，也可手填模型 ID。
 2. 进入厂商详情，按 `a` 打开添加模型；在添加模型表单中按 `Alt+F` 获取 API 模型目录，也可以手动填写模型 ID。厂商详情页不再提供整站模型刷新。
 3. 用 `Space` 启用模型；按 `e` 编辑输出 Token 上限等参数，按 `1` 切换 1M 标记。禁用只暂停模型，不会删除模型。
 4. 按 `p` 接入 Claude：自动启动本地代理，并将全部启用模型写入 Claude 设置。之后保存的变更会自动同步。
@@ -193,9 +193,11 @@ ccsw import --yes
 
 API 模型列表支持鼠标：单击选中，再次单击同一模型使用；也可以按 `Enter` 或点击 `Select` 使用。厂商表单会回填选定的目标字段。
 
+Claude、Codex、Pi、Grok 的厂商表单都支持 `Fetch models URL`。填写后从该地址获取模型目录；留空时从 Base URL 推导。获取结果按厂商缓存，重复选择不会重新请求，`Ctrl+R` 可强制刷新。Pi 的自定义目录地址保存在原生 `models.json` 中的 `ccswModelsUrl` 字段。
+
 DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获取模型时使用 `https://api.deepseek.com/models`，目录请求使用 Bearer 认证；对话仍使用配置的 Anthropic 地址和认证方式。
 
-获取模型会回填当前选中的模型字段：先选中 `Default model`、`Opus`、`Sonnet`、`Haiku`、`Fable`、`Subagent` 或 `Fallbacks`，再点击 `Fetch models` 或按 `Alt+F`。选择界面标题会显示目标字段；`Fallbacks` 追加且不重复添加，其他字段替换当前值。焦点在地址、凭据等非模型字段时，默认回填 `Default model`。
+获取模型会回填当前选中的模型字段：先选中 `Default model`、`Opus`、`Sonnet`、`Haiku`、`Fable`、`Subagent` 或 `Fallbacks`，再点击 `Fetch models` 或按 `Alt+F`。选择界面标题会显示目标字段；`Fallbacks` 追加且不重复添加，其他字段替换当前值。焦点在地址、凭据等非模型字段时，默认回填 `Default model`。填写 Default 时，未单独指定的 Opus、Sonnet、Haiku、Fable 都会同步该模型；之后修改 Default 不覆盖手工指定的角色模型。
 
 厂商表单中的 `Opus`、`Sonnet`、`Haiku`、`Fable` 填写上游实际模型 ID。Claude 会话发送 `A::x` 请求后，该会话后续角色请求使用 A 的配置；发送 `B::y` 后切换到 B。同步写入 `ccsw-role::sonnet` 等角色标识，让代理根据会话选择上游模型；也兼容 `sonnet`、`sonnet5`、`claude-sonnet-…` 和旧式 Claude 模型 ID。
 
@@ -210,7 +212,7 @@ DeepSeek 的 `https://api.deepseek.com/anthropic`、`/anthropic/v1` 等地址获
 | `←/→`、`Home/End` | 移动文本光标 |
 | `Backspace/Delete`、`Ctrl+U` | 删除字符 / 清空字段 |
 | `Space`、`←/→` | 切换开关或选项 |
-| `Alt+F`、`Ctrl+R` | 在厂商或自定义模型表单中，从厂商 API 获取可选模型 |
+| `Alt+F`、`Ctrl+R` | 在厂商表单中打开缓存模型列表 / 强制刷新；自定义模型表单中获取 API 模型 |
 | `Alt+1` | 在模型表单任意字段或 API 搜索中切换 1M 标记 |
 | `Ctrl+S` / `Esc` | 保存 / 取消 |
 
@@ -253,9 +255,9 @@ Provider 列表包含独立的 **Grok OAuth Account** 行。选中后按 `Enter`
 
 点击顶部 **Pi** 标签或按 `F2` 切换到 Pi 配置管理。首页与 Claude Code 使用相同的 `CCSW Providers · F2 <下一个 Agent> · N providers` 标题和厂商布局。Pi 的厂商、模型、目录缓存和接入配置独立管理，编辑与导入不会更改 Claude/Codex。
 
-进入 Pi 标签即读取 `PI_CODING_AGENT_DIR` 指定目录，默认 `~/.pi/agent`。无需导入：页面展示 `models.json` 中可编辑的自定义厂商，包括已有 `ccsw-*` 条目。新增、编辑、删除保存时直接修改原条目，不写入 CCSW 的 `[pi.profiles]`，也不生成带前缀的副本。状态栏显示实际读取目录。
+进入 Pi 标签即读取 `PI_CODING_AGENT_DIR` 指定目录，默认 `~/.pi/agent`。无需导入：页面展示 `models.json` 中可编辑的自定义厂商，包括已有 `ccsw-*` 条目；由 Proxy API 生成的入口不重复显示。新增、编辑、删除保存时直接修改原条目，不写入 CCSW 的 `[pi.profiles]`。状态栏显示实际读取目录。
 
-Pi 自行连接厂商；页面不显示代理按钮，`P` 不打开代理面板。
+Pi 默认直连厂商。选中厂商或模型后按 `P`（或点击 **Proxy API**）可开启 CCSW 本地代理：CCSW 为该厂商在 Pi 的 `models.json` 中添加 `ccsw-proxy-<厂商 ID>`，并把选中的模型设为 Pi 默认模型。原始厂商、上游地址和凭据保持可编辑；代理从原始厂商读取配置，代理请求会计入 Pi 的 Usage。再次按 `P` 可移除代理厂商并恢复直连默认值。代理运行地址显示在厂商详情中；使用代理时 CCSW 代理进程需要保持运行。
 
 | 按键 | 操作 |
 | --- | --- |
@@ -265,6 +267,7 @@ Pi 自行连接厂商；页面不显示代理按钮，`P` 不打开代理面板�
 | `E` | 编辑所属厂商 |
 | `x` | 删除选中的厂商或模型，确认后写回文件 |
 | `p` / Set default | 将选中厂商和模型写为 `settings.json` 的默认值 |
+| `P` / Proxy API | 开启或关闭选中厂商的本地代理入口 |
 | `s` | 查看实际配置目录、可编辑厂商数量和只读条目原因 |
 
 表单保存即生效，不需要先连接或同步。Pi 原生文件没有厂商/模型启用开关，配置中的模型都可用；列表统一显示 configured（已配置），不显示启用/禁用状态，模型表单也不再提供 Enable now 开关。单击仅选中条目，再次点击进入；`Space`、`A`、`C` 不修改文件，需要移除时使用 `x` 删除操作。删除当前默认厂商会清除默认引用，删除当前默认模型会改用该厂商的替代模型。`p`（或模型页的 `d`）仅设置默认选择，其他 `settings.json` 设置保留。
@@ -815,4 +818,4 @@ command = "ccsw.open"
 description = "Toggle CCSW Pulse usage monitor"
 ```
 
-也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.17`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。
+也可以安装固定版本：`herdr plugin install Sunmedalia/ccsw --ref v0.1.18`。该版本会自动绑定默认 `prefix+u` 快捷键；已有 CCSW 快捷键会保留，冲突会提示并跳过。

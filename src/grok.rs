@@ -744,6 +744,7 @@ pub fn prepare_import(home: &Path, current: &Settings) -> Result<Import> {
                     name: get("name").unwrap_or("Imported Grok provider").into(),
                     enabled: true,
                     base_url: url.into(),
+                    models_url: None,
                     api_format: backend,
                     credential,
                     default_model: model.into(),
@@ -983,6 +984,7 @@ mod tests {
             name: "Test".into(),
             enabled: true,
             base_url: "https://example.invalid/v1".into(),
+            models_url: None,
             api_format: format,
             credential: Credential::Bearer {
                 value: "test-secret".into(),

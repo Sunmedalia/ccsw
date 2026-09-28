@@ -138,7 +138,7 @@ impl App {
         self.status = match tab {
             ClientTab::Claude => "Claude · p sync · F2 next tab",
             ClientTab::Codex => "Codex · Account / API providers · p use · ? help",
-            ClientTab::Pi => "Pi · direct API · i import · p sync · s status · D disconnect",
+            ClientTab::Pi => "Pi · direct API or proxy · p default · P proxy API · i reload",
             ClientTab::Grok => "Grok · o OAuth · i import · p connect · s status · D disconnect",
             ClientTab::Usage => unreachable!(),
         }

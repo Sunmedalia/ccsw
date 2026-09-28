@@ -189,7 +189,7 @@ impl App {
         });
     }
 
-    pub(super) fn fetch_profile_models(&mut self) {
+    pub(super) fn fetch_profile_models(&mut self, force: bool) {
         let Some(Modal::Profile(form)) = &mut self.modal else {
             return;
         };
@@ -200,11 +200,27 @@ impl App {
                 return;
             }
         };
-        let mut picker = ModelForm::with_api_models(vec![]);
+        if !force && let Some(models) = form.cached_models_for(&profile) {
+            let mut picker = ModelForm::with_api_models(models.to_vec());
+            picker.focus_api_search = true;
+            picker.api_status = format!("{} cached models · Ctrl+R refresh", models.len());
+            form.picker = Some(picker);
+            form.picker_search = false;
+            return;
+        }
+        if form.fetching_profile.as_deref() == Some(&profile) {
+            return;
+        }
+        let existing = form
+            .cached_models_for(&profile)
+            .unwrap_or_default()
+            .to_vec();
+        let mut picker = ModelForm::with_api_models(existing);
         picker.focus_api_search = true;
         picker.api_status = "Fetching models…".into();
         form.picker = Some(picker);
         form.picker_search = false;
+        form.fetching_profile = Some(Box::new(profile.clone()));
         form.instance = uuid::Uuid::new_v4();
         let instance = form.instance;
         self.background.spawn(move || Completion::ProfileDiscover {
@@ -350,20 +366,28 @@ impl App {
                 } => {
                     if let Some(Modal::Profile(form)) = &mut self.modal
                         && form.instance == instance
-                        && form.discovery_profile().ok().as_ref() == Some(profile.as_ref())
-                        && let Some(picker) = &mut form.picker
+                        && form.fetching_profile.as_deref() == Some(profile.as_ref())
                     {
-                        match result {
-                            Ok(models) => {
-                                picker.api_status = format!(
-                                    "{} models · Enter selects · Esc returns",
-                                    models.len()
-                                );
-                                picker.api_models = models;
-                            }
-                            Err(error) => {
-                                picker.api_status =
-                                    format!("{error:#} · Ctrl+R retry · Esc returns")
+                        form.fetching_profile = None;
+                        if form.discovery_profile().ok().as_ref() == Some(profile.as_ref()) {
+                            match result {
+                                Ok(models) => {
+                                    form.fetched_profile = Some(profile);
+                                    form.fetched_models = models.clone();
+                                    if let Some(picker) = &mut form.picker {
+                                        picker.api_status = format!(
+                                            "{} models · Enter selects · Esc returns",
+                                            models.len()
+                                        );
+                                        picker.api_models = models;
+                                    }
+                                }
+                                Err(error) => {
+                                    if let Some(picker) = &mut form.picker {
+                                        picker.api_status =
+                                            format!("{error:#} · Ctrl+R retry · Esc returns")
+                                    }
+                                }
                             }
                         }
                     }
@@ -596,7 +620,109 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
+
+    #[test]
+    fn provider_form_reuses_one_fetch_until_explicit_refresh() {
+        let (_temp, mut app) = persisted_app();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while seen.load(Ordering::SeqCst) < 3 && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut request = [0; 2048];
+                        assert!(stream.read(&mut request).unwrap() > 0);
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        let body = r#"{"data":[{"id":"first"},{"id":"second"}]}"#;
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("mock discovery failed: {error}"),
+                }
+            }
+        });
+        let mut form = ProfileForm::new();
+        form.fields[3].value = format!("http://{address}");
+        form.fields[4].value = "none".into();
+        app.modal = Some(Modal::Profile(Box::new(form)));
+        app.fetch_profile_models(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while matches!(&app.modal, Some(Modal::Profile(form)) if form.fetched_models.is_empty())
+            && Instant::now() < deadline
+        {
+            app.poll_background();
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(&app.modal, Some(Modal::Profile(form)) if form.fetched_models.len() == 2));
+        if let Some(Modal::Profile(form)) = &mut app.modal {
+            form.selected = 6;
+            form.fill_selected_model("first");
+            form.picker = None;
+        }
+        app.fetch_profile_models(false);
+        assert!(
+            matches!(&app.modal, Some(Modal::Profile(form)) if form.picker.as_ref().is_some_and(|picker| picker.api_models.len() == 2) && form.fetching_profile.is_none())
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        app.fetch_profile_models(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while matches!(&app.modal, Some(Modal::Profile(form)) if form.fetching_profile.is_some())
+            && Instant::now() < deadline
+        {
+            app.poll_background();
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        if let Some(Modal::Profile(form)) = &mut app.modal {
+            form.fields[13].value = format!("http://{address}/custom/catalog");
+            form.picker = None;
+        }
+        app.fetch_profile_models(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while matches!(&app.modal, Some(Modal::Profile(form)) if form.fetching_profile.is_some())
+            && Instant::now() < deadline
+        {
+            app.poll_background();
+            thread::sleep(Duration::from_millis(2));
+        }
+        server.join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        if let Some(Modal::Profile(form)) = &mut app.modal {
+            form.fields[0].value = "new-provider".into();
+            form.fields[1].value = "New provider".into();
+            form.picker = None;
+        }
+        app.handle_modal(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(app.modal.is_none());
+        assert_eq!(app.cache.profiles["new-provider"].models.len(), 2);
+        app.edit_profile();
+        assert!(matches!(&app.modal, Some(Modal::Profile(form)) if form.fetched_models.len() == 2));
+        app.fetch_profile_models(false);
+        assert!(
+            matches!(&app.modal, Some(Modal::Profile(form)) if form.picker.as_ref().is_some_and(|picker| picker.api_models.len() == 2) && form.fetching_profile.is_none())
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
 
     #[test]
     fn slow_discovery_keeps_navigation_responsive() {

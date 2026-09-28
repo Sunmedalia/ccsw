@@ -69,7 +69,7 @@ pub(super) fn help_commands(section: HelpSection) -> &'static [(&'static str, &'
             ("Space / ←→", "Change toggle or option"),
             (
                 "Alt+F / Ctrl+R",
-                "Provider/model forms: fetch models from the provider API",
+                "Provider form: choose cached models / refresh from API",
             ),
             (
                 "Alt+1",
@@ -290,6 +290,7 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
         Line::raw("n / a  Add a provider / model directly to models.json"),
         Line::raw("e / E  Edit model / provider; saving updates models.json"),
         Line::raw("p  Set the selected provider and model in settings.json"),
+        Line::raw("P  Enable/disable the selected provider's CCSW proxy API"),
         Line::raw("d / 1  Set default / change the model context window"),
         Line::raw("i  Reload Pi configuration files"),
         Line::raw("r  Test connection and fetch provider models"),
@@ -308,12 +309,12 @@ fn pi_help_content(section: HelpSection) -> Vec<Line<'static>> {
     }
     lines.extend([
         Line::raw(""),
-        Line::raw("Pi reads models.json / settings.json directly; no CCSW profile mirror."),
+        Line::raw("Pi reads models.json / settings.json directly; proxy entries stay in Pi files."),
         Line::raw("Pi has no enable switch: x deletes an entry. Unknown fields are preserved."),
         Line::raw(
             "Read-only entries and their reasons are shown in status. auth.json is not edited.",
         ),
-        Line::raw("Pi connects directly to the API; no CCSW proxy or Codex subscription accounts."),
+        Line::raw("Proxy API keeps the direct provider and adds a local Pi provider for the selected model."),
     ]);
     lines
 }

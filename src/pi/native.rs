@@ -20,6 +20,9 @@ fn project(models: &Value, settings: &Value, auth: &Value) -> Result<config::Con
             .as_object()
             .context("Pi providers must be an object")?;
         for (id, value) in providers {
+            if value.get("ccswProxyOf").is_some() {
+                continue;
+            }
             match parse_provider(id, value, auth) {
                 Ok(mut profile) => {
                     for entry in &mut profile.models {
@@ -29,7 +32,11 @@ fn project(models: &Value, settings: &Value, auth: &Value) -> Result<config::Con
                             .and_then(|m| m["description"].as_str())
                             .map(str::to_owned);
                     }
-                    if settings["defaultProvider"] == *id
+                    let selected = settings["defaultProvider"].as_str();
+                    let proxy_source = selected
+                        .and_then(|selected| models["providers"].get(selected))
+                        .and_then(|selected| selected["ccswProxyOf"].as_str());
+                    if (selected == Some(id.as_str()) || proxy_source == Some(id.as_str()))
                         && let Some(model) = settings["defaultModel"].as_str()
                         && profile.models.iter().any(|m| m.id == model)
                     {
@@ -140,6 +147,11 @@ pub fn update(
             .unwrap_or(json!({}));
         let old_models = provider["models"].as_array().cloned().unwrap_or_default();
         provider["baseUrl"] = json!(profile.base_url);
+        if let Some(models_url) = &profile.models_url {
+            provider["ccswModelsUrl"] = json!(models_url);
+        } else {
+            provider.as_object_mut().unwrap().remove("ccswModelsUrl");
+        }
         provider["name"] = json!(profile.name);
         provider["api"] = json!(match profile.api_format {
             ApiFormat::Anthropic => "anthropic-messages",
@@ -240,6 +252,7 @@ pub fn update(
         );
         models["providers"][id] = provider;
     }
+    sync_proxy_mirrors(&mut models, &mut settings);
     if let Some((old, new, _)) = &rename
         && settings["defaultProvider"] == *old
     {
@@ -291,9 +304,143 @@ pub fn set_default(home: &Path, provider: &str, model: &str) -> Result<()> {
         bail!("Pi model missing");
     }
     let mut settings = read(&home.join("settings.json"))?;
-    settings["defaultProvider"] = json!(provider);
+    let mirrored = proxy_id(provider);
+    if settings["defaultProvider"] != mirrored {
+        settings["defaultProvider"] = json!(provider);
+    }
     settings["defaultModel"] = json!(model);
     save(&home.join("settings.json"), &settings)
+}
+
+fn proxy_id(provider: &str) -> String {
+    format!("ccsw-proxy-{provider}")
+}
+
+fn proxy_models(provider: &Value) -> Vec<Value> {
+    provider["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|model| {
+            let mut model = model.clone();
+            if let Some(fields) = model.as_object_mut() {
+                for key in ["api", "apiKey", "baseUrl", "headers"] {
+                    fields.remove(key);
+                }
+            }
+            model
+        })
+        .collect()
+}
+
+fn sync_proxy_mirrors(models: &mut Value, settings: &mut Value) {
+    let Some(providers) = models["providers"].as_object_mut() else {
+        return;
+    };
+    let mirrors = providers
+        .iter()
+        .filter_map(|(id, value)| {
+            value["ccswProxyOf"]
+                .as_str()
+                .map(|source| (id.clone(), source.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    for (id, source) in mirrors {
+        if let Some(original) = providers.get(&source) {
+            let copied = proxy_models(original);
+            if settings["defaultProvider"] == id
+                && !copied
+                    .iter()
+                    .any(|model| model["id"] == settings["defaultModel"])
+            {
+                if let Some(first) = copied.first().and_then(|model| model["id"].as_str()) {
+                    settings["defaultModel"] = json!(first);
+                } else {
+                    settings.as_object_mut().unwrap().remove("defaultProvider");
+                    settings.as_object_mut().unwrap().remove("defaultModel");
+                }
+            }
+            providers.get_mut(&id).unwrap()["models"] = Value::Array(copied);
+        } else {
+            providers.remove(&id);
+            if settings["defaultProvider"] == id {
+                settings.as_object_mut().unwrap().remove("defaultProvider");
+                settings.as_object_mut().unwrap().remove("defaultModel");
+            }
+        }
+    }
+}
+
+pub fn proxy_endpoint(home: &Path, provider: &str) -> Result<Option<String>> {
+    let models = read(&home.join("models.json"))?;
+    let mirror = &models["providers"][proxy_id(provider)];
+    Ok((mirror["ccswProxyOf"] == provider)
+        .then(|| mirror["baseUrl"].as_str().map(str::to_owned))
+        .flatten())
+}
+
+pub fn set_proxy(
+    home: &Path,
+    provider: &str,
+    model: &str,
+    endpoint: Option<(&str, &str)>,
+) -> Result<()> {
+    let _lock = lock(home)?;
+    recover_native(home)?;
+    let mut models = read(&home.join("models.json"))?;
+    let mut settings = read(&home.join("settings.json"))?;
+    let auth = read(&home.join("auth.json"))?;
+    let original_documents = [models.clone(), settings.clone()];
+    let id = proxy_id(provider);
+    if let Some((url, token)) = endpoint {
+        let config = project(&models, &settings, &auth)?;
+        let profile = config
+            .profiles
+            .get(provider)
+            .with_context(|| format!("Pi provider '{provider}' no longer exists"))?;
+        if !profile
+            .models
+            .iter()
+            .any(|entry| strip_1m(&entry.id) == strip_1m(model))
+        {
+            bail!("Pi model '{model}' no longer exists");
+        }
+        if let Some(existing) = models["providers"].get(&id)
+            && existing["ccswProxyOf"] != provider
+        {
+            bail!("Pi provider '{id}' already exists");
+        }
+        let original = models["providers"][provider].clone();
+        models["providers"][&id] = json!({
+            "ccswProxyOf": provider,
+            "name": format!("{} · CCSW Proxy", profile.name),
+            "baseUrl": url,
+            "api": "anthropic-messages",
+            "apiKey": token,
+            "authHeader": true,
+            "models": proxy_models(&original),
+        });
+        settings["defaultProvider"] = json!(id);
+        settings["defaultModel"] = json!(strip_1m(model));
+    } else {
+        if models["providers"][&id]["ccswProxyOf"] == provider {
+            models["providers"].as_object_mut().unwrap().remove(&id);
+        }
+        if settings["defaultProvider"] == id {
+            settings["defaultProvider"] = json!(provider);
+            let current = settings["defaultModel"].as_str().unwrap_or(model);
+            let retained = models["providers"][provider]["models"]
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == current));
+            if !retained {
+                settings["defaultModel"] = json!(strip_1m(model));
+            }
+        }
+    }
+    if documents(home)? != original_documents {
+        bail!("Pi files changed during proxy setup; reload and retry");
+    }
+    commit_native(home, [models, settings])
 }
 
 #[derive(Serialize, Deserialize)]
@@ -449,6 +596,66 @@ mod tests {
         assert!(settings.get("defaultProvider").is_none());
         assert_eq!(settings["theme"], "dark");
         assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth);
+    }
+
+    #[test]
+    fn proxy_mirror_keeps_direct_provider_and_tracks_model_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        fixture(home);
+        let url = "http://127.0.0.1:17321/r/pi-route";
+        set_proxy(home, "native", "two", Some((url, "local-token"))).unwrap();
+        assert_eq!(
+            proxy_endpoint(home, "native").unwrap().as_deref(),
+            Some(url)
+        );
+        let projected = load(home).unwrap();
+        assert_eq!(projected.profiles.len(), 1);
+        assert_eq!(
+            projected.profiles["native"].base_url,
+            "https://native.invalid/v1"
+        );
+        assert_eq!(projected.profiles["native"].default_model, "two");
+        let models = read(&home.join("models.json")).unwrap();
+        let mirror = &models["providers"]["ccsw-proxy-native"];
+        assert_eq!(mirror["api"], "anthropic-messages");
+        assert_eq!(mirror["apiKey"], "local-token");
+        assert_eq!(mirror["models"][0]["id"], "one");
+        assert_eq!(
+            read(&home.join("settings.json")).unwrap()["defaultProvider"],
+            "ccsw-proxy-native"
+        );
+        set_default(home, "native", "one").unwrap();
+        let settings = read(&home.join("settings.json")).unwrap();
+        assert_eq!(settings["defaultProvider"], "ccsw-proxy-native");
+        assert_eq!(settings["defaultModel"], "one");
+
+        update(home, |config| {
+            config.profiles.get_mut("native").unwrap().models[0].label = Some("Changed".into());
+            Ok(())
+        })
+        .unwrap();
+        let models = read(&home.join("models.json")).unwrap();
+        assert_eq!(
+            models["providers"]["ccsw-proxy-native"]["models"][0]["name"],
+            "Changed"
+        );
+
+        set_proxy(home, "native", "two", None).unwrap();
+        assert_eq!(proxy_endpoint(home, "native").unwrap(), None);
+        assert_eq!(
+            read(&home.join("settings.json")).unwrap()["defaultProvider"],
+            "native"
+        );
+        assert_eq!(
+            read(&home.join("settings.json")).unwrap()["defaultModel"],
+            "one"
+        );
+        assert!(
+            read(&home.join("models.json")).unwrap()["providers"]
+                .get("ccsw-proxy-native")
+                .is_none()
+        );
     }
 
     #[test]

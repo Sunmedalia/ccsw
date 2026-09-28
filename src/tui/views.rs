@@ -756,8 +756,26 @@ impl App {
             inner.width,
             inner.height.saturating_sub(button_rows),
         );
+        let pi_proxy = self
+            .pi_enabled
+            .then(|| {
+                self.selected_profile_id().and_then(|id| {
+                    crate::pi::native::proxy_endpoint(&self.pi_home, &id)
+                        .ok()
+                        .flatten()
+                })
+            })
+            .flatten();
         let api_format = if self.pi_enabled {
-            format!("{} · direct API", profile.api_format.label())
+            format!(
+                "{} · {}",
+                profile.api_format.label(),
+                if pi_proxy.is_some() {
+                    "CCSW proxy"
+                } else {
+                    "direct API"
+                }
+            )
         } else if profile.api_format.is_openai() {
             let proxy = self
                 .proxy_status
@@ -825,6 +843,12 @@ impl App {
             ),
             Line::raw(""),
         ];
+        if self.pi_enabled {
+            lines.insert(
+                5,
+                detail("Pi proxy API", pi_proxy.as_deref().unwrap_or("P to enable")),
+            );
+        }
         if self.client_tab() == ClientTab::Claude {
             for (role, model) in profile.aliases.iter() {
                 lines.push(detail(&format!("{role} alias"), model));
@@ -841,7 +865,7 @@ impl App {
             match self.config_tab() {
                 ClientTab::Claude => "Sync changes, then run Claude from your terminal.",
                 ClientTab::Codex => "Sync with p, restart to load models, then switch with /model.",
-                ClientTab::Pi => "Sync changes, then open /model in Pi.",
+                ClientTab::Pi => "Changes save directly · P toggles proxy API · open /model in Pi.",
                 ClientTab::Grok => {
                     "Press p to connect; saved changes sync automatically. Restart Grok."
                 }
@@ -935,7 +959,7 @@ impl App {
                 format!(
                     " {} · ",
                     if self.pi_enabled {
-                        "Pi · direct API"
+                        "Pi · P proxy API"
                     } else if self.grok_enabled {
                         "Grok · o OAuth · p connect · i import"
                     } else if self.codex_ui.enabled {
@@ -991,7 +1015,14 @@ impl App {
                 },
                 "p",
             ),
-            FooterControl::Proxy => ("Proxy", "P"),
+            FooterControl::Proxy => (
+                if self.pi_enabled {
+                    "Proxy API"
+                } else {
+                    "Proxy"
+                },
+                "P",
+            ),
             FooterControl::Settings => ("Settings", "F4"),
             FooterControl::Help => ("Help", "?"),
             FooterControl::Quit => ("Quit", "q"),
@@ -1113,7 +1144,7 @@ impl App {
                                 if form.picker_search {
                                     "Search · Esc: navigation"
                                 } else {
-                                    "j/k: select · l: use · h: back · /: search"
+                                    "click: fill · j/k: select · l: use · h: back · /: search"
                                 }
                             ),
                             true,
@@ -1163,7 +1194,14 @@ impl App {
                     frame,
                     area,
                     &[
-                        if area.width < 64 {
+                        if form.picker.is_some() {
+                            "Refresh models"
+                        } else if !form.fetched_models.is_empty()
+                            && form.fetched_profile.as_deref()
+                                == form.discovery_profile().ok().as_ref()
+                        {
+                            "Choose cached models"
+                        } else if area.width < 64 {
                             "Fetch models"
                         } else {
                             "Fetch models (Alt+F)"

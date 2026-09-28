@@ -40,7 +40,11 @@ pub fn discover(profile: &Profile) -> Result<Vec<ModelEntry>> {
 }
 
 fn discover_with_client(client: &Client, profile: &Profile) -> Result<Vec<ModelEntry>> {
-    let endpoint = crate::proxy::models_endpoint(&profile.base_url, profile.api_format)?;
+    let endpoint = if let Some(models_url) = &profile.models_url {
+        url::Url::parse(models_url).context("models_url is not a valid URL")?
+    } else {
+        crate::proxy::models_endpoint(&profile.base_url, profile.api_format)?
+    };
     let deepseek = endpoint.host_str() == Some("api.deepseek.com");
     let mut request = client
         .get(endpoint)
@@ -668,6 +672,7 @@ mod tests {
             name: "test".into(),
             enabled: true,
             base_url: format!("http://{address}"),
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::Bearer {
                 value: "secret-test-token".into(),
@@ -686,11 +691,44 @@ mod tests {
     }
 
     #[test]
+    fn discovery_uses_exact_configured_models_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let size = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).to_ascii_lowercase();
+            assert!(request.starts_with("get /custom/catalog?all=true "));
+            assert!(request.contains("authorization: bearer secret-test-token"));
+            let body = r#"{"data":[{"id":"model-b"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let mut profile: Profile = toml::from_str(
+            "name='test'\nbase_url='https://unused.example/v1'\ndefault_model='model-b'\n",
+        )
+        .unwrap();
+        profile.models_url = Some(format!("http://{address}/custom/catalog?all=true"));
+        profile.credential = Credential::Bearer {
+            value: "secret-test-token".into(),
+        };
+        assert_eq!(discover(&profile).unwrap()[0].id, "model-b");
+        server.join().unwrap();
+    }
+
+    #[test]
     fn active_models_exclude_unselected_catalog_entries() {
         let mut profile = Profile {
             name: "test".into(),
             enabled: true,
             base_url: "https://example.com".into(),
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::None,
             default_model: "model-a".into(),
@@ -741,6 +779,7 @@ mod tests {
             name: "edgefn".into(),
             enabled: true,
             base_url: "https://example.com".into(),
+            models_url: None,
             api_format: crate::config::ApiFormat::OpenaiChat,
             credential: Credential::None,
             default_model: "model-c[1m]".into(),
@@ -797,6 +836,7 @@ mod tests {
             name: "mixed-context".into(),
             enabled: true,
             base_url: "https://example.com".into(),
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::None,
             default_model: "model-a".into(),
@@ -854,6 +894,7 @@ mod tests {
             name: "test".into(),
             enabled: true,
             base_url: "https://example.com".into(),
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::None,
             default_model: "model-a".into(),

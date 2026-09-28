@@ -449,7 +449,7 @@ default_model = "model-z"
                                     Ok(count) => request.extend_from_slice(&chunk[..count]),
                                 }
                             }
-                            let body = json!({"name":"ccsw-proxy", "config_version":config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true}).to_string();
+                            let body = json!({"name":"ccsw-proxy", "config_version":config::CONFIG_VERSION, "version":env!("CARGO_PKG_VERSION"), "grok_gateway":true, "pi_proxy":true}).to_string();
                             let _ = write!(
                                 stream,
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

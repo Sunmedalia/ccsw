@@ -148,12 +148,26 @@ impl ProxyManager {
 }
 
 impl ProfileForm {
+    pub(super) fn hide_claude_roles(&mut self) {
+        if self.fields.len() > 13 {
+            self.fields.drain(7..13);
+        }
+    }
+
+    fn is_model_field(&self, index: usize) -> bool {
+        (6..=12).contains(&index)
+            && self
+                .fields
+                .get(index)
+                .is_some_and(|field| field.label != "Fetch models URL")
+    }
+
     pub(super) fn model_field_is_1m(&self, index: usize) -> bool {
         model_values_are_1m(&self.fields[index].value)
     }
 
     pub(super) fn toggle_model_field_1m(&mut self, index: usize) {
-        if !(6..self.fields.len()).contains(&index) {
+        if !self.is_model_field(index) {
             return;
         }
         let enabled = !self.model_field_is_1m(index);
@@ -173,7 +187,7 @@ impl ProfileForm {
     }
 
     pub(super) fn model_target_field(&self) -> usize {
-        if (6..self.fields.len()).contains(&self.selected) {
+        if self.is_model_field(self.selected) {
             self.selected
         } else {
             6
@@ -182,6 +196,7 @@ impl ProfileForm {
 
     pub(super) fn fill_selected_model(&mut self, id: &str) {
         let index = self.model_target_field();
+        let old_default = (index == 6).then(|| self.fields[6].value.clone());
         let target = &mut self.fields[index];
         if target.label == "Fallbacks (comma)" {
             let mut models: Vec<_> = target
@@ -200,6 +215,26 @@ impl ProfileForm {
         }
         target.cursor = target.char_count();
         self.selected = index;
+        if let Some(old_default) = old_default {
+            self.sync_default_aliases(&old_default);
+        }
+    }
+
+    pub(super) fn sync_default_aliases(&mut self, old_default: &str) {
+        if self.fields.len() <= 10 {
+            return;
+        }
+        let default = self.fields[6].value.clone();
+        for index in 7..=10 {
+            if self.fields[index].value.is_empty() || self.fields[index].value == old_default {
+                self.fields[index].value = default.clone();
+                self.fields[index].cursor = self.fields[index].char_count();
+            }
+        }
+    }
+
+    pub(super) fn cached_models_for(&self, profile: &Profile) -> Option<&[ModelEntry]> {
+        (self.fetched_profile.as_deref() == Some(profile)).then_some(self.fetched_models.as_slice())
     }
 
     pub(super) fn new() -> Self {
@@ -213,6 +248,7 @@ impl ProfileForm {
             "https://",
             "anthropic",
             "bearer",
+            "",
             "",
             "",
             "",
@@ -254,6 +290,7 @@ impl ProfileForm {
             profile.aliases.fable.as_deref().unwrap_or(""),
             profile.subagent_model.as_deref().unwrap_or(""),
             &profile.fallback_models.join(","),
+            profile.models_url.as_deref().unwrap_or(""),
         );
         form.provider_enabled = profile.enabled;
         form.original_profile = Some(profile.clone());
@@ -279,6 +316,7 @@ impl ProfileForm {
         fable: &str,
         subagent: &str,
         fallback: &str,
+        models_url: &str,
     ) -> Self {
         let fields = vec![
             field("ID", id),
@@ -302,6 +340,7 @@ impl ProfileForm {
             field("Fable", fable),
             field("Subagent", subagent),
             field("Fallbacks (comma)", fallback),
+            field("Fetch models URL", models_url),
         ];
         Self {
             test_message: None,
@@ -310,6 +349,9 @@ impl ProfileForm {
             instance: uuid::Uuid::new_v4(),
             picker: None,
             picker_search: false,
+            fetched_profile: None,
+            fetched_models: vec![],
+            fetching_profile: None,
             original_profile: None,
             provider_enabled: true,
             models,
@@ -350,22 +392,33 @@ impl ProfileForm {
             name: value(1),
             enabled: self.provider_enabled,
             base_url: value(3),
+            models_url: self
+                .fields
+                .iter()
+                .find(|field| field.label == "Fetch models URL")
+                .map(|field| field.value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             api_format,
             credential,
             default_model: value(6),
             aliases: RoleModels {
-                opus: optional(7),
-                sonnet: optional(8),
-                haiku: optional(9),
-                fable: optional(10),
+                opus: (self.fields.len() > 13).then(|| optional(7)).flatten(),
+                sonnet: (self.fields.len() > 13).then(|| optional(8)).flatten(),
+                haiku: (self.fields.len() > 13).then(|| optional(9)).flatten(),
+                fable: (self.fields.len() > 13).then(|| optional(10)).flatten(),
             },
-            subagent_model: optional(11),
-            fallback_models: value(12)
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect(),
+            subagent_model: (self.fields.len() > 13).then(|| optional(11)).flatten(),
+            fallback_models: if self.fields.len() > 13 {
+                value(12)
+            } else {
+                String::new()
+            }
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .collect(),
             enabled_models: self.enabled_models.clone(),
             disabled_models: self.disabled_models.clone(),
             models: self.models.clone(),
@@ -375,7 +428,7 @@ impl ProfileForm {
     }
 
     pub(super) fn model_test_request(&self) -> Result<(Profile, Vec<String>)> {
-        if !(6..self.fields.len()).contains(&self.selected) {
+        if !self.is_model_field(self.selected) {
             anyhow::bail!("Select a model field to test");
         }
         let models: Vec<String> = self.fields[self.selected]
@@ -415,8 +468,10 @@ impl ProfileForm {
         draft.fields[1] = field("Name", "Model discovery");
         draft.fields[6] = field("Default model", "discovery");
         draft.provider_enabled = true;
-        for entry in &mut draft.fields[7..] {
-            entry.value.clear();
+        for entry in draft.fields.iter_mut().skip(7) {
+            if entry.label != "Fetch models URL" {
+                entry.value.clear();
+            }
         }
         draft.to_profile().map(|(_, profile)| profile)
     }
@@ -1054,7 +1109,8 @@ fn draw_fields_with_context(
             field.value.clone()
         };
         let cursor = (current && field.choices.is_empty() && !field.toggle).then_some(field.cursor);
-        let context = context_controls && index >= 6;
+        let context =
+            context_controls && (6..=12).contains(&index) && field.label != "Fetch models URL";
         let connection_test = context_controls && index == 3;
         let width = input_width.saturating_sub(if context || connection_test { 12 } else { 0 });
         let shown = input_window(&value, cursor, width, field.secret);

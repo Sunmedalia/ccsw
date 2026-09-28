@@ -407,7 +407,14 @@ impl App {
     }
 
     pub(super) fn provider_usage_label(&self, tokens: bool) -> String {
-        if self.pi_enabled {
+        if self.pi_enabled
+            && self.selected_profile_id().is_none_or(|id| {
+                crate::pi::native::proxy_endpoint(&self.pi_home, &id)
+                    .ok()
+                    .flatten()
+                    .is_none()
+            })
+        {
             return "Not tracked (direct API)".into();
         }
         if self.usage.error.is_some() {
@@ -419,7 +426,9 @@ impl App {
         let Some(provider) = self.selected_profile_id() else {
             return "F6 Usage".into();
         };
-        let client = Some(if self.codex_ui.enabled {
+        let client = Some(if self.pi_enabled {
+            "Pi"
+        } else if self.codex_ui.enabled {
             "Codex"
         } else {
             "Claude"

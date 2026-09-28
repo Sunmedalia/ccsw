@@ -692,6 +692,7 @@ fn parse_provider(name: &str, value: &Value, auth: &Value) -> Result<Profile> {
         name: value["name"].as_str().unwrap_or(name).into(),
         enabled: true,
         base_url: base_url.into(),
+        models_url: value["ccswModelsUrl"].as_str().map(str::to_owned),
         api_format,
         credential,
         default_model,

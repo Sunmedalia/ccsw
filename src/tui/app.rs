@@ -365,7 +365,7 @@ impl App {
         let mut form = ProfileForm::new();
         form.template_selected = Some(0);
         if self.client_tab() != ClientTab::Claude {
-            form.fields.truncate(7);
+            form.hide_claude_roles();
         }
         self.modal = Some(Modal::Profile(Box::new(form)));
     }
@@ -395,7 +395,7 @@ impl App {
             form.selected = 5;
         }
         if self.client_tab() != ClientTab::Claude {
-            form.fields.truncate(7);
+            form.hide_claude_roles();
         }
         self.modal = Some(Modal::Profile(Box::new(form)));
     }
@@ -696,9 +696,15 @@ impl App {
             return;
         };
         let profile = self.config.profiles[&id].clone();
-        let mut form = ProfileForm::edit(id, &profile);
+        let mut form = ProfileForm::edit(id.clone(), &profile);
         if self.client_tab() != ClientTab::Claude {
-            form.fields.truncate(7);
+            form.hide_claude_roles();
+        }
+        if let Some(cached) = self.cache.profiles.get(&id)
+            && let Ok(discovery_profile) = form.discovery_profile()
+        {
+            form.fetched_profile = Some(Box::new(discovery_profile));
+            form.fetched_models = cached.models.clone();
         }
         self.modal = Some(Modal::Profile(Box::new(form)));
     }
@@ -708,10 +714,7 @@ impl App {
             return;
         }
         if self.pi_enabled {
-            return;
-        }
-        if self.pi_enabled {
-            self.status = "Pi connects directly to providers; no CCSW proxy required".into();
+            self.toggle_pi_proxy();
             return;
         }
         let manager = ProxyManager::empty();

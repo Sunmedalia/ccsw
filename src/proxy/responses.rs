@@ -1045,6 +1045,7 @@ mod tests {
                             default_profile_id: None,
                             codex: true,
                             grok: false,
+                            pi_home: None,
                             config_path: config_path.clone(),
                             profile_id: Some("test".into()),
                             models: BTreeMap::new(),

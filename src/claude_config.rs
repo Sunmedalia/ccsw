@@ -488,6 +488,7 @@ mod tests {
             name: "Route".into(),
             enabled: true,
             base_url: "https://gateway.example".into(),
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential: Credential::Bearer {
                 value: "secret-token".into(),

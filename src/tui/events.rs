@@ -1137,8 +1137,8 @@ impl App {
                         _ => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     }
                 }
-                (Some(Modal::Profile(_)), 0) => {
-                    self.fetch_profile_models();
+                (Some(Modal::Profile(form)), 0) => {
+                    self.fetch_profile_models(form.picker.is_some());
                     return Ok(());
                 }
                 (Some(Modal::Profile(form)), 1) if form.picker.is_some() => {
@@ -1197,7 +1197,11 @@ impl App {
                         && mouse.row >= api_inner.y.saturating_add(2)
                     {
                         let index = picker.api_scroll + usize::from(mouse.row - api_inner.y - 2);
-                        if let Some(id) = picker.click_api_model(index) {
+                        if let Some(id) = picker
+                            .filtered_api_models()
+                            .get(index)
+                            .map(|m| m.id.clone())
+                        {
                             form.fill_selected_model(&id);
                             form.picker = None;
                         }
@@ -1227,7 +1231,8 @@ impl App {
                         self.start_profile_connection_test();
                         return Ok(());
                     }
-                    if index >= 6
+                    if (6..=12).contains(&index)
+                        && form.fields[index].label != "Fetch models URL"
                         && contains(
                             profile_test_rect(content, (index - offset) as u16),
                             mouse.column,
@@ -1237,7 +1242,8 @@ impl App {
                         self.start_profile_model_test();
                         return Ok(());
                     }
-                    if index >= 6
+                    if (6..=12).contains(&index)
+                        && form.fields[index].label != "Fetch models URL"
                         && contains(
                             profile_1m_rect(content, (index - offset) as u16),
                             mouse.column,
@@ -1576,8 +1582,9 @@ impl App {
                 if (key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('f'))
                     || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('r'))
                 {
+                    let force = key.modifiers == KeyModifiers::CONTROL;
                     self.modal = Some(modal);
-                    self.fetch_profile_models();
+                    self.fetch_profile_models(force);
                     return Ok(());
                 }
                 if let Some(picker) = &mut form.picker {
@@ -1632,6 +1639,11 @@ impl App {
                     return Ok(());
                 }
                 if key.code == KeyCode::F(5) {
+                    if form.fields[form.selected].label == "Fetch models URL" {
+                        self.status = "Use Fetch models to test the model catalog URL".into();
+                        self.modal = Some(modal);
+                        return Ok(());
+                    }
                     let connection = form.selected == 3;
                     self.modal = Some(modal);
                     if connection {
@@ -1646,7 +1658,14 @@ impl App {
                     self.modal = Some(modal);
                     return Ok(());
                 }
+                let old_default = (form.selected == 6 && form.fields.len() > 10)
+                    .then(|| form.fields[6].value.clone());
                 let outcome = handle_form_key(&mut form.fields, &mut form.selected, key);
+                if let Some(old_default) = old_default
+                    && form.fields[6].value != old_default
+                {
+                    form.sync_default_aliases(&old_default);
+                }
                 if outcome == FormOutcome::Close {
                     return Ok(());
                 }
@@ -1695,19 +1714,35 @@ impl App {
                             let connection_changed =
                                 form.original_profile.as_ref().is_some_and(|old| {
                                     old.base_url != current.base_url
+                                        || old.models_url != current.models_url
                                         || old.api_format != current.api_format
                                         || old.credential != current.credential
                                 });
+                            let fetched = form
+                                .discovery_profile()
+                                .ok()
+                                .filter(|profile| form.fetched_profile.as_deref() == Some(profile))
+                                .map(|_| CachedModels {
+                                    fetched_at: now_epoch(),
+                                    models: form.fetched_models.clone(),
+                                });
                             let mut cache_error = None;
-                            if let Some(original) = &form.original_id
-                                && (original != &id || connection_changed)
+                            if form
+                                .original_id
+                                .as_ref()
+                                .is_some_and(|original| original != &id || connection_changed)
+                                || fetched.is_some()
                             {
                                 let result = discovery::update_cache(
                                     &self.client_cache_path(self.config_client()),
                                     |cache| {
-                                        if let Some(cached) = cache.profiles.remove(original)
-                                            && !connection_changed
-                                        {
+                                        let previous = form
+                                            .original_id
+                                            .as_ref()
+                                            .and_then(|original| cache.profiles.remove(original));
+                                        if let Some(cached) = fetched.or_else(|| {
+                                            (!connection_changed).then_some(previous).flatten()
+                                        }) {
                                             cache.profiles.insert(id.clone(), cached);
                                         }
                                     },
@@ -1715,7 +1750,9 @@ impl App {
                                 match result {
                                     Ok(cache) => self.cache = cache,
                                     Err(error) => {
-                                        self.cache.profiles.remove(original);
+                                        if let Some(original) = &form.original_id {
+                                            self.cache.profiles.remove(original);
+                                        }
                                         cache_error = Some(error);
                                     }
                                 }

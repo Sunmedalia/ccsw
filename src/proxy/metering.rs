@@ -14,7 +14,9 @@ pub(super) async fn begin(
         state.usage.clone(),
         Request {
             config: target.config_path.clone(),
-            client: if target.grok {
+            client: if target.pi_home.is_some() {
+                "Pi"
+            } else if target.grok {
                 "Grok"
             } else if target.codex {
                 "Codex"

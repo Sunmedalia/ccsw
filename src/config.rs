@@ -55,6 +55,9 @@ pub struct Profile {
     #[serde(default = "default_profile_enabled", skip_serializing_if = "is_true")]
     pub enabled: bool,
     pub base_url: String,
+    /// Optional exact endpoint for fetching this provider's model catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_url: Option<String>,
     #[serde(default)]
     pub api_format: ApiFormat,
     #[serde(default)]
@@ -283,6 +286,12 @@ impl Profile {
         let url = Url::parse(&self.base_url).context("base_url is not a valid URL")?;
         if !matches!(url.scheme(), "http" | "https") {
             bail!("base_url must use http or https");
+        }
+        if let Some(models_url) = &self.models_url {
+            let url = Url::parse(models_url).context("models_url is not a valid URL")?;
+            if !matches!(url.scheme(), "http" | "https") {
+                bail!("models_url must use http or https");
+            }
         }
         if self.default_model.trim().is_empty() {
             bail!("default_model cannot be empty");
@@ -739,6 +748,7 @@ mod tests {
             name: "Local gateway".into(),
             enabled: true,
             base_url: "http://127.0.0.1:18080".into(),
+            models_url: None,
             api_format: ApiFormat::Anthropic,
             credential: Credential::Bearer {
                 value: "secret-token".into(),

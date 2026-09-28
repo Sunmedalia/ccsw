@@ -74,6 +74,7 @@ pub fn detect() -> Result<Option<ImportCandidate>> {
             name: "Imported Claude settings".into(),
             enabled: true,
             base_url,
+            models_url: None,
             api_format: crate::config::ApiFormat::Anthropic,
             credential,
             default_model,
@@ -132,6 +133,7 @@ mod tests {
                 name: "x".into(),
                 enabled: true,
                 base_url: "http://localhost".into(),
+                models_url: None,
                 api_format: crate::config::ApiFormat::Anthropic,
                 credential: Credential::Bearer {
                     value: "top-secret-token".into(),

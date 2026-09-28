@@ -58,7 +58,7 @@ impl App {
                 FooterControl::DeleteProfile => {
                     !self.home_all_selected && self.selected_profile().is_some()
                 }
-                FooterControl::Proxy => !self.pi_enabled && !self.grok_enabled,
+                FooterControl::Proxy => !self.grok_enabled,
                 _ => true,
             })
             .collect();
@@ -88,9 +88,7 @@ impl App {
                 *control != FooterControl::DeleteProfile
                     || (!self.home_all_selected && self.selected_profile().is_some())
             })
-            .filter(|(control, _)| {
-                !(self.pi_enabled || self.grok_enabled) || *control != FooterControl::Proxy
-            })
+            .filter(|(control, _)| !self.grok_enabled || *control != FooterControl::Proxy)
             .map(|(control, _)| {
                 let (label, _) = self.footer_control_style(
                     control,
@@ -196,6 +194,65 @@ impl App {
         }
     }
     pub(super) fn sync_pi_after_edit(&mut self) {
-        // Pi mutations already save directly to the native files.
+        if self.pi_enabled
+            && let Err(error) = proxy::prune_pi_routes(&self.paths, &self.pi_home)
+        {
+            self.set_error(format!("Pi saved, but proxy cleanup failed: {error:#}"));
+        }
+    }
+
+    pub(super) fn toggle_pi_proxy(&mut self) {
+        let selected = (self.view_mode == ViewMode::AllEnabled)
+            .then(|| self.all_managed_models().get(self.model_idx).cloned())
+            .flatten();
+        let Some(id) = selected
+            .as_ref()
+            .map(|entry| entry.profile_id.clone())
+            .or_else(|| self.selected_profile_id())
+        else {
+            self.set_error("Select a Pi provider to toggle its proxy API");
+            return;
+        };
+        let model = selected
+            .map(|entry| entry.model.id)
+            .or_else(|| self.selected_model().map(|model| model.id.clone()))
+            .or_else(|| {
+                self.config
+                    .profiles
+                    .get(&id)
+                    .map(|profile| profile.default_model.clone())
+            })
+            .unwrap_or_default();
+        let result = (|| -> Result<Option<String>> {
+            if crate::pi::native::proxy_endpoint(&self.pi_home, &id)?.is_some() {
+                crate::pi::native::set_proxy(&self.pi_home, &id, &model, None)?;
+                proxy::remove_pi_route(&self.paths, &self.pi_home, &id)?;
+                return Ok(None);
+            }
+            let (plan, url, token) = proxy::prepare_pi_route(&self.paths, &self.pi_home, &id)?;
+            proxy::apply_pi_route(&self.paths, &plan)?;
+            if let Err(error) =
+                crate::pi::native::set_proxy(&self.pi_home, &id, &model, Some((&url, &token)))
+            {
+                proxy::restore_pi_route(&self.paths, &plan)
+                    .context("Pi proxy setup failed and route rollback failed")?;
+                return Err(error);
+            }
+            Ok(Some(url))
+        })();
+        match result {
+            Ok(endpoint) => {
+                if let Ok(config) = self.load_client_config() {
+                    self.config = config;
+                    self.refresh_editor_preserving_selection();
+                }
+                self.status_error = false;
+                self.status = match endpoint {
+                    Some(url) => format!("Pi proxy API enabled · {url} · open /model in Pi"),
+                    None => "Pi proxy API disabled · direct provider restored".into(),
+                };
+            }
+            Err(error) => self.set_error(format!("Could not toggle Pi proxy API: {error:#}")),
+        }
     }
 }

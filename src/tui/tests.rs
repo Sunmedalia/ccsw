@@ -336,7 +336,7 @@ fn template_picker_mouse_selection_and_custom_form_work() {
 }
 
 #[test]
-fn provider_catalog_mouse_selects_then_uses_model_in_target_field() {
+fn provider_catalog_mouse_click_fills_target_field() {
     for screen in [Rect::new(0, 0, 120, 30), Rect::new(0, 0, 48, 18)] {
         let mut app = interactive_test_app();
         let mut form = ProfileForm::new();
@@ -365,12 +365,6 @@ fn provider_catalog_mouse_selects_then_uses_model_in_target_field() {
         };
         app.handle_modal_mouse(click, screen).unwrap();
         let Some(Modal::Profile(form)) = &app.modal else {
-            panic!("closed on first click");
-        };
-        assert!(form.picker.is_some());
-        assert!(form.fields[8].value.is_empty());
-        app.handle_modal_mouse(click, screen).unwrap();
-        let Some(Modal::Profile(form)) = &app.modal else {
             panic!("draft lost");
         };
         assert!(form.picker.is_none());
@@ -384,12 +378,99 @@ fn provider_discovery_uses_unsaved_connection_without_requiring_default() {
     let mut form = ProfileForm::new();
     form.fields[3].value = "https://example.com/gateway/messages".into();
     form.fields[5].value = "draft-key".into();
+    form.fields[13].value = "https://example.com/custom/models?scope=all".into();
     assert!(form.to_profile().is_err());
     let profile = form.discovery_profile().unwrap();
     assert_eq!(profile.base_url, form.fields[3].value);
+    assert_eq!(
+        profile.models_url.as_deref(),
+        Some(form.fields[13].value.as_str())
+    );
     assert_eq!(profile.credential.value(), Some("draft-key"));
     assert!(form.fields[6].value.is_empty());
     assert!(form.fields[0].value.is_empty());
+    form.fields[13].value = "not a URL".into();
+    assert!(form.discovery_profile().is_err());
+}
+
+#[test]
+fn provider_form_shows_fetch_models_url_at_bottom() {
+    let mut app = interactive_test_app();
+    let mut form = ProfileForm::new();
+    form.selected = 13;
+    app.modal = Some(Modal::Profile(Box::new(form)));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(rendered.contains("Fetch models URL"));
+}
+
+#[test]
+fn other_client_provider_forms_save_fetch_models_url() {
+    let (_temp, mut app) = persisted_app();
+    for (client, id) in [
+        (ClientTab::Codex, "codex-catalog"),
+        (ClientTab::Pi, "pi-catalog"),
+        (ClientTab::Grok, "grok-catalog"),
+    ] {
+        app.select_client_tab(client);
+        app.new_profile();
+        app.use_provider_template(0);
+        let Some(Modal::Profile(form)) = &mut app.modal else {
+            panic!("missing provider form for {client:?}");
+        };
+        assert_eq!(form.fields.len(), 8);
+        assert_eq!(form.fields[7].label, "Fetch models URL");
+        form.fields[0].value = id.into();
+        form.fields[1].value = id.into();
+        form.fields[3].value = "https://example.com/v1".into();
+        form.fields[4].value = "none".into();
+        form.fields[6].value = "test-model".into();
+        let url = format!("https://example.com/{id}/models?scope=all");
+        form.fields[7].value = url.clone();
+        assert_eq!(
+            form.discovery_profile().unwrap().models_url.as_deref(),
+            Some(url.as_str())
+        );
+        app.handle_modal(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(app.modal.is_none(), "provider save failed: {}", app.status);
+        assert_eq!(
+            app.config.profiles[id].models_url.as_deref(),
+            Some(url.as_str())
+        );
+        let saved_url = if client == ClientTab::Pi {
+            crate::pi::native::load(&app.pi_home).unwrap().profiles[id]
+                .models_url
+                .clone()
+        } else {
+            let saved = config::load(&app.paths.config).unwrap();
+            match client {
+                ClientTab::Codex => saved.codex.profiles[id].models_url.clone(),
+                ClientTab::Grok => saved.grok.profiles[id].models_url.clone(),
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(saved_url.as_deref(), Some(url.as_str()));
+        app.profile_idx = app
+            .profile_ids()
+            .iter()
+            .position(|profile_id| profile_id == id)
+            .unwrap();
+        app.edit_profile();
+        let Some(Modal::Profile(form)) = &app.modal else {
+            panic!("missing edit form for {client:?}");
+        };
+        assert_eq!(form.fields.len(), 8);
+        assert_eq!(form.fields[7].value, url);
+        app.modal = None;
+    }
 }
 
 #[test]
@@ -401,6 +482,37 @@ fn provider_picker_selects_default_without_saving_and_cancel_keeps_draft() {
 fn provider_picker_fills_each_model_field_and_preserves_other_values() {
     for selected in 6..=12 {
         check_provider_picker_target(selected);
+    }
+}
+
+#[test]
+fn provider_default_fills_unset_roles_and_preserves_custom_roles() {
+    let mut form = ProfileForm::new();
+    form.selected = 6;
+    form.fill_selected_model("first");
+    for index in 7..=10 {
+        assert_eq!(form.fields[index].value, "first");
+    }
+    form.fields[7].value = "custom-opus".into();
+    form.fill_selected_model("second");
+    assert_eq!(form.fields[7].value, "custom-opus");
+    for index in 8..=10 {
+        assert_eq!(form.fields[index].value, "second");
+    }
+
+    let mut app = interactive_test_app();
+    let mut form = ProfileForm::new();
+    form.selected = 6;
+    app.modal = Some(Modal::Profile(Box::new(form)));
+    for ch in "typed".chars() {
+        app.handle_modal(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+    let Some(Modal::Profile(form)) = &app.modal else {
+        panic!("draft closed");
+    };
+    for index in 7..=10 {
+        assert_eq!(form.fields[index].value, "typed");
     }
 }
 
@@ -437,7 +549,11 @@ fn check_provider_picker_target(selected: usize) {
     assert_eq!(form.selected, target);
     for (index, original) in original_fields.iter().enumerate() {
         if index != target && index != 5 {
-            assert_eq!(form.fields[index].value, original.value);
+            if target == 6 && (7..=10).contains(&index) {
+                assert_eq!(form.fields[index].value, "chosen-model");
+            } else {
+                assert_eq!(form.fields[index].value, original.value);
+            }
         }
     }
     assert!(form.picker.is_none());
@@ -1768,6 +1884,7 @@ fn interactive_test_app() -> App {
         name: name.into(),
         enabled: true,
         base_url: "https://example.com".into(),
+        models_url: None,
         api_format: ApiFormat::Anthropic,
         credential: Credential::None,
         default_model: "model-a".into(),
@@ -2177,7 +2294,7 @@ fn unicode_input_and_scrolled_form_keep_the_selected_field_visible() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(output.contains("Fallbacks"));
+    assert!(output.contains("Fetch models URL"));
     let area = modal_area_for(app.modal.as_ref().unwrap(), Rect::new(0, 0, 60, 18));
     let inner = panel_inner(area);
     let content = Rect::new(
@@ -2186,7 +2303,7 @@ fn unicode_input_and_scrolled_form_keep_the_selected_field_visible() {
         inner.width,
         inner.height.saturating_sub(4),
     );
-    let (_, offset) = form_viewport(content, 12);
+    let (_, offset) = form_viewport(content, 13);
     app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2888,7 +3005,7 @@ fn codex_space_selects_account_without_applying_or_following_cursor() {
 }
 
 #[test]
-fn pi_uses_provider_layout_without_proxy_controls() {
+fn pi_uses_provider_layout_with_proxy_control() {
     let (_temp, mut app) = persisted_app();
     app.select_client_tab(ClientTab::Pi);
     for (width, height) in [(40, 12), (80, 24), (120, 36)] {
@@ -2904,19 +3021,18 @@ fn pi_uses_provider_layout_without_proxy_controls() {
         assert!(text.contains("Providers · F2 Grok"));
         let area = Rect::new(0, 0, width, height);
         let controls = app.client_footer_controls(app_rows(area)[2], width < 100);
-        assert!(
-            !controls
-                .iter()
-                .any(|(control, _)| *control == FooterControl::Proxy)
-        );
+        if width == 120 {
+            assert!(
+                controls
+                    .iter()
+                    .any(|(control, _)| *control == FooterControl::Proxy)
+            );
+        }
         let gap = controls[1].1.x - controls[0].1.right();
         assert!(gap >= 1);
         for pair in controls.windows(2) {
             assert_eq!(pair[0].1.right() + gap, pair[1].1.x);
         }
-        app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
-            .unwrap();
-        assert!(app.modal.is_none());
         let (_, help) = controls
             .iter()
             .find(|(control, _)| *control == FooterControl::Help)
@@ -2934,6 +3050,43 @@ fn pi_uses_provider_layout_without_proxy_controls() {
         assert!(matches!(app.modal, Some(Modal::Help(_))));
         app.modal = None;
     }
+}
+
+#[test]
+fn pi_proxy_control_removes_local_provider_and_restores_direct_default() {
+    let (_temp, mut app) = persisted_app();
+    crate::pi::native::set_proxy(
+        &app.pi_home,
+        "one",
+        "model-a",
+        Some(("http://127.0.0.1:17321/r/pi-test", "local-token")),
+    )
+    .unwrap();
+    app.select_client_tab(ClientTab::Pi);
+    app.profile_idx = app.profile_ids().iter().position(|id| id == "one").unwrap();
+    app.enter_provider_view();
+    let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("Pi proxy API"));
+    assert!(rendered.contains("CCSW proxy"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.status_error, "{}", app.status);
+    assert_eq!(
+        crate::pi::native::proxy_endpoint(&app.pi_home, "one").unwrap(),
+        None
+    );
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.pi_home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["defaultProvider"], "one");
+    assert!(app.modal.is_none());
 }
 
 #[test]
@@ -3123,7 +3276,7 @@ fn provider_context_controls_toggle_each_role_and_fallbacks() {
         } else {
             ProfileForm::new()
         };
-        for index in 6..form.fields.len() {
+        for index in 6..=12 {
             form.fields[index].value = if index == 12 {
                 "alpha[1m], beta"
             } else {
@@ -3725,7 +3878,7 @@ fn grok_tabs_import_settings_sync_and_client_isolation() {
                 Ok((mut stream, _)) => {
                     let mut request = [0u8; 2048];
                     let _ = stream.read(&mut request);
-                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true}).to_string();
+                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -3959,7 +4112,7 @@ fn grok_oauth_native_default_preserves_providers_and_credentials() {
                 Ok((mut stream, _)) => {
                     let mut request = [0u8; 2048];
                     let _ = stream.read(&mut request);
-                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true}).to_string();
+                    let body = serde_json::json!({"name":"ccsw-proxy","config_version":config::CONFIG_VERSION,"version":env!("CARGO_PKG_VERSION"),"grok_gateway":true,"pi_proxy":true}).to_string();
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
