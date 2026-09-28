@@ -724,7 +724,7 @@ mod tests {
                     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                     terminal.draw(|frame| app.draw(frame)).unwrap();
                     let cells = &terminal.backend().buffer().content;
-                    if (width >= 80 || selected) && (width < 120 || selected) {
+                    if selected || (80..120).contains(&width) {
                         assert!(
                             cells
                                 .iter()
